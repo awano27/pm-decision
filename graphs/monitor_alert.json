@@ -1,0 +1,65 @@
+{
+  "name": "alert-triage",
+  "event": "monitor.alert",
+  "start": "resolved",
+  "nodes": {
+    "resolved": {
+      "kind": "judge",
+      "question": {
+        "type": "noul",
+        "instructions": "Does `condition` indicate the alert has already resolved?",
+        "hints": ["\"condition\": \"resolved\""]
+      },
+      "yes_at": 0.8,
+      "routes": {"yes": "log_resolved", "no": "impact", "unsure": "impact"}
+    },
+    "impact": {
+      "kind": "judge",
+      "question": {
+        "type": "score",
+        "instructions": "Given the alert `rule`, `severity`, `description` and `context`, how large is the customer impact?",
+        "criteria": ["No customer impact", "Internal systems only", "Customers see degraded service", "Customers cannot use the service"],
+        "hints": {"1": ["batch", "internal", "社内"], "2": ["latency", "遅延", "5xx", "error rate"], "3": ["down", "unavailable", "停止", "sev0"]}
+      },
+      "min_conf": 0.45,
+      "routes": {"bands": [[0.5, "noise_check"], [1.5, "task_internal"], [2.5, "bug_p1"], [4, "page"]], "unsure": "page_advice"}
+    },
+    "noise_check": {
+      "kind": "judge",
+      "question": {
+        "type": "noul",
+        "instructions": "Does the alert look like a flapping or threshold-noise alert rather than a real fault?",
+        "hints": ["flapping", "threshold", "閾値"]
+      },
+      "routes": {"yes": "tune_rule", "no": "task_internal", "unsure": "task_internal"}
+    },
+    "page": {
+      "kind": "decide",
+      "actions": [
+        {"type": "oncall.page", "summary": "{event.rule}: {event.description}"},
+        {"type": "teams.post", "channel": "incident", "text": "[障害] {event.rule} ({event.severity}) {event.description}"},
+        {"type": "ado.create", "work_item_type": "Bug", "title": "[Incident] {event.rule}", "priority": "1", "tags": "kimeru;incident"}
+      ],
+      "advice": "顧客影響大。関係者への一次連絡を PM から出すこと"
+    },
+    "bug_p1": {
+      "kind": "decide",
+      "actions": [{"type": "ado.create", "work_item_type": "Bug", "title": "[Alert] {event.rule}", "priority": "1", "description": "{event.description}", "tags": "kimeru;alert"}]
+    },
+    "task_internal": {
+      "kind": "decide",
+      "actions": [{"type": "ado.create", "work_item_type": "Task", "title": "[Alert] {event.rule}", "priority": "3", "tags": "kimeru;alert"}]
+    },
+    "tune_rule": {
+      "kind": "advise",
+      "queue": false,
+      "advice": "ノイズの可能性: ルール {event.rule} の閾値見直しを次回定例で提案"
+    },
+    "log_resolved": {"kind": "decide", "actions": [{"type": "log.only"}]},
+    "page_advice": {
+      "kind": "advise",
+      "queue": true,
+      "advice": "影響度が判定できないアラート {event.rule} ({event.severity}): 5分以内に人が確認"
+    }
+  }
+}

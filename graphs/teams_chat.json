@@ -1,0 +1,62 @@
+{
+  "name": "teams-chat-triage",
+  "event": "teams.chat",
+  "start": "intent",
+  "nodes": {
+    "intent": {
+      "kind": "judge",
+      "question": {
+        "type": "choice",
+        "instructions": "What is the sender of `text` asking the project manager to do?",
+        "criteria": {
+          "decision": "Asks the PM to make or approve a decision (scope, priority, release, budget, staffing)",
+          "status": "Asks about the status, schedule or progress of work",
+          "incident": "Reports that something is broken or failing for users or the team",
+          "fyi": "Shares information or thanks; no response is needed",
+          "none": "None of these"
+        },
+        "hints": {
+          "decision": ["approve", "承認", "判断", "決めて", "どちらに", "ok?", "go/no-go"],
+          "status": ["進捗", "status", "いつ終", "予定", "eta"],
+          "incident": ["落ちて", "エラー", "障害", "down", "broken", "動かない"],
+          "fyi": ["共有", "fyi", "ありがとう", "thanks"]
+        }
+      },
+      "routes": {"decision": "urgency", "status": "reply_status", "incident": "incident_bug", "fyi": "log_fyi", "none": "ask_pm", "unsure": "ask_pm"}
+    },
+    "urgency": {
+      "kind": "judge",
+      "question": {
+        "type": "score",
+        "instructions": "How soon does the decision requested in `text` need to be made?",
+        "criteria": ["No deadline is stated or implied", "Within this week", "By end of today", "Blocking someone right now"],
+        "hints": {"1": ["今週", "this week"], "2": ["今日中", "today", "本日"], "3": ["至急", "urgent", "ブロック", "blocked", "止まって"]}
+      },
+      "routes": {"bands": [[1.5, "decision_later"], [4, "decision_today"]], "unsure": "decision_today"}
+    },
+    "decision_today": {
+      "kind": "decide",
+      "actions": [{"type": "teams.reply", "chat_id": "{event.chat_id}", "text": "受領しました。本日中に判断して返信します。"}],
+      "advice": "本日中に判断が必要: {event.author}「{event.text}」"
+    },
+    "decision_later": {
+      "kind": "decide",
+      "actions": [
+        {"type": "teams.reply", "chat_id": "{event.chat_id}", "text": "受領しました。今週中に判断します。"},
+        {"type": "ado.create", "work_item_type": "Task", "title": "判断: {event.text}", "tags": "kimeru;decision"}
+      ],
+      "advice": "今週の判断リストに追加: {event.author}「{event.text}」"
+    },
+    "reply_status": {
+      "kind": "decide",
+      "actions": [{"type": "teams.reply", "chat_id": "{event.chat_id}", "text": "最新状況はボードをご確認ください（kimeru 自動返信）。不足があれば返信ください。"}]
+    },
+    "incident_bug": {
+      "kind": "decide",
+      "actions": [{"type": "ado.create", "work_item_type": "Bug", "title": "[Teams報告] {event.text}", "tags": "kimeru;from-teams"}],
+      "advice": "障害報告をBug化した。監視アラートと突き合わせること"
+    },
+    "log_fyi": {"kind": "decide", "actions": [{"type": "log.only"}]},
+    "ask_pm": {"kind": "advise", "queue": true, "advice": "意図が判定できないチャット: {event.author}「{event.text}」"}
+  }
+}

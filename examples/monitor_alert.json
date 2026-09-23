@@ -1,0 +1,6 @@
+{"schemaId": "azureMonitorCommonAlertSchema", "data": {"essentials": {
+  "alertId": "/subscriptions/x/alerts/a1", "alertRule": "checkout-api 5xx rate", "severity": "Sev1",
+  "monitorCondition": "Fired", "firedDateTime": "2026-09-23T09:30:00Z",
+  "alertTargetIDs": ["/subscriptions/x/resourceGroups/prod/providers/Microsoft.Web/sites/checkout-api"],
+  "description": "5xx error rate 23% for 10 minutes; customers cannot complete checkout (service down)"},
+ "alertContext": {"condition": {"allOf": [{"metricName": "Http5xx", "metricValue": 23, "threshold": 5}]}}}}

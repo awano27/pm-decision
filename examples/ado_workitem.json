@@ -1,0 +1,5 @@
+{"eventType": "workitem.created", "resource": {"id": 4812, "fields": {
+  "System.WorkItemType": "Bug", "System.Title": "CSVエクスポートで日付がずれる",
+  "System.AreaPath": "Product/Reports", "System.CreatedBy": {"displayName": "Tanaka"},
+  "System.CreatedDate": "2026-09-23T10:00:00Z",
+  "Microsoft.VSTS.TCM.ReproSteps": "<div>本番で顧客から報告。1. レポート画面 2. CSV出力 期待: JST / 実際: UTC</div>"}}}

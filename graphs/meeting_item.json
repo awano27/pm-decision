@@ -1,0 +1,51 @@
+{
+  "name": "minutes-followup",
+  "event": "meeting.item",
+  "start": "item_type",
+  "nodes": {
+    "item_type": {
+      "kind": "judge",
+      "question": {
+        "type": "choice",
+        "instructions": "What kind of meeting-minutes line is `item`?",
+        "criteria": {
+          "decision": "Records a decision that was made",
+          "action": "Assigns a task someone must do",
+          "risk": "Raises a risk, blocker or open concern",
+          "info": "Background information or discussion only"
+        },
+        "hints": {"decision": ["決定", "合意", "decided", "とする"], "action": ["todo", "対応", "までに", "担当", "する。"], "risk": ["リスク", "懸念", "risk", "blocker", "遅れ"]}
+      },
+      "routes": {"decision": "post_decision", "action": "has_owner", "risk": "risk_item", "info": "log_info", "unsure": "check_line"}
+    },
+    "has_owner": {
+      "kind": "judge",
+      "question": {
+        "type": "noul",
+        "instructions": "Does `item` name both a responsible person and a due date?",
+        "hints": ["さん", "担当", "@"]
+      },
+      "routes": {"yes": "create_task", "no": "ask_owner", "unsure": "ask_owner"}
+    },
+    "create_task": {
+      "kind": "decide",
+      "actions": [{"type": "ado.create", "work_item_type": "Task", "title": "{event.item}", "tags": "kimeru;minutes"}]
+    },
+    "ask_owner": {
+      "kind": "decide",
+      "actions": [{"type": "ado.create", "work_item_type": "Task", "title": "{event.item}", "tags": "kimeru;minutes;needs-owner"}],
+      "advice": "担当者か期限が未定のアクション（{event.meeting}）: {event.item}"
+    },
+    "post_decision": {
+      "kind": "decide",
+      "actions": [{"type": "teams.post", "channel": "decision-log", "text": "[決定] {event.meeting}: {event.item}"}]
+    },
+    "risk_item": {
+      "kind": "decide",
+      "actions": [{"type": "ado.create", "work_item_type": "Issue", "title": "[Risk] {event.item}", "tags": "kimeru;risk"}],
+      "advice": "リスク登録済み。次回定例で対策オーナーを決めること: {event.item}"
+    },
+    "log_info": {"kind": "decide", "actions": [{"type": "log.only"}]},
+    "check_line": {"kind": "advise", "queue": true, "advice": "分類できない議事録行（{event.meeting}）: {event.item}"}
+  }
+}

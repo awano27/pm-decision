@@ -1,0 +1,4 @@
+{"id": "1727000000001", "createdDateTime": "2026-09-23T09:12:00Z", "chatId": "19:abc@thread.v2",
+ "from": {"user": {"displayName": "Sato"}},
+ "body": {"contentType": "html", "content": "<p>リリース日を来週火曜にずらしてよいか判断お願いします。QAが止まっていて至急です</p>"},
+ "mentions": [{"id": 0}]}

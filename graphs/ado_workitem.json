@@ -7,40 +7,127 @@
       "kind": "judge",
       "question": {
         "type": "noul",
-        "instructions": "Does the work item contain enough detail to start work: a clear goal plus either acceptance criteria or reproduction steps?",
-        "hints": ["acceptance", "受け入れ", "再現", "repro", "期待", "expected"]
+        "instructions": "Does the work item state acceptance criteria, an expected result, or steps to reproduce a problem?",
+        "hints": [
+          "acceptance",
+          "受け入れ",
+          "再現",
+          "repro",
+          "期待",
+          "expected"
+        ]
       },
-      "routes": {"yes": "priority", "no": "request_info", "unsure": "priority"}
+      "routes": {
+        "yes": "priority",
+        "no": "request_info",
+        "unsure": "priority"
+      }
     },
     "request_info": {
       "kind": "decide",
       "actions": [
-        {"type": "ado.comment", "id": "{event.id}", "text": "着手に必要な情報が不足しています。受け入れ条件（Bugは再現手順と期待結果）を追記してください。— kimeru"},
-        {"type": "ado.update", "id": "{event.id}", "fields": {"System.Tags": "kimeru;needs-info"}}
+        {
+          "type": "ado.comment",
+          "id": "{event.id}",
+          "text": "着手に必要な情報が不足しています。受け入れ条件（Bugは再現手順と期待結果）を追記してください。— kimeru"
+        },
+        {
+          "type": "ado.update",
+          "id": "{event.id}",
+          "fields": {
+            "System.Tags": "kimeru;needs-info"
+          }
+        }
       ]
     },
     "priority": {
       "kind": "judge",
       "question": {
-        "type": "choice",
-        "instructions": "Which priority fits this work item, judged from the user impact and urgency described in `title` and `description`?",
-        "criteria": {
-          "p1": "Blocks customers or a release; must be done this sprint",
-          "p2": "Important; should be planned in the next sprint",
-          "p3": "Nice to have; backlog",
-          "none": "Not enough information to judge"
-        },
-        "hints": {"p1": ["本番", "production", "顧客", "リリース", "blocker"], "p2": ["改善", "improve", "次スプリント"], "p3": ["いつか", "nice to have", "余裕"]}
+        "type": "score",
+        "instructions": "How severe and urgent is this work item for the product?",
+        "criteria": [
+          "Cosmetic, internal or nice to have; no deadline",
+          "Affects customers or a known deadline, but is not blocking anyone today",
+          "Customers, production or an upcoming release are blocked or broken right now"
+        ],
+        "hints": {
+          "2": [
+            "本番",
+            "production",
+            "全ユーザー",
+            "blocker",
+            "ログインできない"
+          ],
+          "1": [
+            "顧客",
+            "リリース",
+            "改善",
+            "improve"
+          ]
+        }
       },
-      "routes": {"p1": "set_p1", "p2": "set_p2", "p3": "set_p3", "none": "triage_pm", "unsure": "triage_pm"}
+      "_comment": "ordinal: adjacent-level splits are expected (min_conf low); splits across non-adjacent levels go to a human",
+      "min_conf": 0.3,
+      "routes": {
+        "bands": [
+          [
+            0.75,
+            "set_p3"
+          ],
+          [
+            1.6,
+            "set_p2"
+          ],
+          [
+            3,
+            "set_p1"
+          ]
+        ],
+        "unsure": "triage_pm"
+      },
+      "adjacent_only": true
     },
     "set_p1": {
       "kind": "decide",
-      "actions": [{"type": "ado.update", "id": "{event.id}", "fields": {"Microsoft.VSTS.Common.Priority": 1}}],
+      "actions": [
+        {
+          "type": "ado.update",
+          "id": "{event.id}",
+          "fields": {
+            "Microsoft.VSTS.Common.Priority": 1
+          }
+        }
+      ],
       "advice": "P1 を今スプリントに入れるか判断: #{event.id} {event.title}"
     },
-    "set_p2": {"kind": "decide", "actions": [{"type": "ado.update", "id": "{event.id}", "fields": {"Microsoft.VSTS.Common.Priority": 2}}]},
-    "set_p3": {"kind": "decide", "actions": [{"type": "ado.update", "id": "{event.id}", "fields": {"Microsoft.VSTS.Common.Priority": 3}}]},
-    "triage_pm": {"kind": "advise", "queue": true, "advice": "優先度を判定できないチケット #{event.id} {event.title}"}
+    "set_p2": {
+      "kind": "decide",
+      "actions": [
+        {
+          "type": "ado.update",
+          "id": "{event.id}",
+          "fields": {
+            "Microsoft.VSTS.Common.Priority": 2
+          }
+        }
+      ]
+    },
+    "set_p3": {
+      "kind": "decide",
+      "actions": [
+        {
+          "type": "ado.update",
+          "id": "{event.id}",
+          "fields": {
+            "Microsoft.VSTS.Common.Priority": 3
+          }
+        }
+      ]
+    },
+    "triage_pm": {
+      "kind": "advise",
+      "queue": true,
+      "advice": "優先度を判定できないチケット #{event.id} {event.title}"
+    }
   }
 }

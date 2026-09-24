@@ -1,0 +1,64 @@
+{
+  "id": "schedule_change",
+  "title": "スケジュール変更の判断",
+  "when": "Decide whether to move a release, milestone or deadline date",
+  "hints": [
+    "リリース日",
+    "延期",
+    "ずらし",
+    "前倒し",
+    "スケジュール",
+    "締め切り",
+    "deadline",
+    "reschedule"
+  ],
+  "steps": [
+    {
+      "id": "blocker_eta",
+      "title": "遅延原因の復旧見込みを担当者に確認",
+      "desc": "Ask the owner of the blocking problem for a recovery estimate",
+      "check": "Does the situation mention a problem that is currently blocking progress?",
+      "hints": [
+        "止まって",
+        "blocked",
+        "ブロック",
+        "down",
+        "障害"
+      ]
+    },
+    {
+      "id": "dependencies",
+      "title": "現行日程に依存するチーム・顧客を確認",
+      "desc": "Check which teams or customers depend on the current date",
+      "check": "Could other teams or customers depend on the date being discussed?",
+      "hints": [
+        "リリース",
+        "顧客",
+        "customer",
+        "連携"
+      ]
+    },
+    {
+      "id": "options",
+      "title": "選択肢（延期・スコープ縮小・現状維持）を比較",
+      "desc": "Compare the options: move the date, cut scope, or keep the date"
+    },
+    {
+      "id": "decide",
+      "title": "日程を決定し記録",
+      "desc": "Make the date decision and record it"
+    },
+    {
+      "id": "notify",
+      "title": "関係者へ変更を通知",
+      "desc": "Notify affected stakeholders of the decision",
+      "check": "Would a change of this date need to be communicated to people outside the immediate team?",
+      "hints": [
+        "顧客",
+        "リリース",
+        "営業",
+        "経営"
+      ]
+    }
+  ]
+}

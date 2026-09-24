@@ -55,7 +55,7 @@ class TestGraph(unittest.TestCase):
         for lst in GRAPHS.values():
             for g in lst:
                 for n in g["nodes"].values():
-                    self.assertIn(n["kind"], ("judge", "decide", "advise"))
+                    self.assertIn(n["kind"], ("judge", "plan", "decide", "advise"))
 
     def test_noul_middle_goes_unsure(self):
         node = GRAPHS["ado.workitem.created"][0]["nodes"]["ready"]
@@ -101,8 +101,9 @@ class TestEndToEnd(unittest.TestCase):
             lines = (out / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(lines), 8)
             nodes = {r["graph"] + ":" + r["node"] for r in res}
-            self.assertIn("teams-chat-triage:decision_today", nodes)
-            self.assertIn("alert-triage:page", nodes)
+            self.assertIn("teams-chat-triage:decision_planned", nodes)
+            self.assertIn("alert-triage:page_planned", nodes)
+            self.assertIn("minutes-followup:risk_planned", nodes)
             self.assertIn("workitem-intake:set_p1", nodes)
             self.assertIn("minutes-followup:post_decision", nodes)
 

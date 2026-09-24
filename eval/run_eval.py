@@ -1,0 +1,124 @@
+"""Question-quality eval for the shipped graphs.
+
+  python eval/run_eval.py dump  > requests.jsonl        # one Jev request per fixture
+  python eval/run_eval.py score answers.jsonl           # answers: {"id", "answers": {...}} per line
+  python eval/run_eval.py live  [--out answers.jsonl]   # call Jev directly (TYPESAFE_API_KEY)
+
+Each fixture labels some judge / plan nodes of its graph. All labeled questions for
+one event go in ONE request (Jev answers them independently).
+Labels: choice -> "opt" or ["opt", ...]; noul -> true/false; score -> [lo, hi];
+plan node -> expected playbook id (or list).
+
+Jev accuracy numbers must not be published (TypeSafe terms); keep answers/results private.
+"""
+import argparse
+import json
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from kimeru import graph, plan  # noqa: E402
+from kimeru.backends import jev_questions  # noqa: E402
+from kimeru.events import state_of  # noqa: E402
+
+PBS = plan.load_playbooks(ROOT / "playbooks")
+GRAPHS = {k: v[0] for k, v in graph.load_dir(ROOT / "graphs", PBS).items()}
+
+
+def fixtures(path=ROOT / "eval" / "fixtures.jsonl"):
+    return [json.loads(l) for l in Path(path).read_text(encoding="utf-8").splitlines() if l.strip()]
+
+
+def plan_question(node):
+    ids = plan.allowed(node, PBS)
+    return {"type": "choice", "instructions": node.get("instructions", "Which playbook fits the work the project manager must do next?"),
+            "criteria": {**{i: PBS[i]["when"] for i in ids}, "none": "None of these playbooks fits"}}
+
+
+def request(fx):
+    g = GRAPHS[fx["event"]["kind"]]
+    qs = {}
+    for nid in fx["expect"]:
+        n = g["nodes"][nid]
+        qs[nid] = plan_question(n) if n["kind"] == "plan" else n["question"]
+    return {"id": fx["id"], "state": state_of(fx["event"]), "questions": jev_questions(qs)}
+
+
+def judge(node, exp, ans):
+    """Return (ok, routed_edge, detail)."""
+    if node["kind"] == "plan":
+        conf, choice = ans.get("confidence", 0), ans.get("choice")
+        edge = "unsure" if conf < node.get("min_conf", 0.6) else choice
+        want = exp if isinstance(exp, list) else [exp]
+        return edge in want, edge, f"{choice} ({conf:.2f})"
+    t = node["question"]["type"]
+    edge, _ = graph.route(node, ans)  # same thresholds/guards as production
+    if t == "noul":
+        return edge == ("yes" if exp else "no"), edge, f"{ans['noul']:.2f}"
+    if t == "choice":
+        want = exp if isinstance(exp, list) else [exp]
+        return edge in want, edge, f"{ans.get('choice')} ({ans.get('confidence', 0):.2f})"
+    s, conf = ans["score"], ans.get("confidence", 0)
+    lo, hi = exp
+    return edge != "unsure" and lo <= s <= hi, edge, f"{s:.2f} ({conf:.2f})"
+
+
+def score(answers_path):
+    ans = {}
+    for l in Path(answers_path).read_text(encoding="utf-8").splitlines():
+        if l.strip():
+            r = json.loads(l)
+            ans[r["id"]] = r["answers"]
+    per_node, misses = {}, []
+    for fx in fixtures():
+        if fx["id"] not in ans:
+            continue
+        g = GRAPHS[fx["event"]["kind"]]
+        for nid, exp in fx["expect"].items():
+            node, a = g["nodes"][nid], ans[fx["id"]].get(nid)
+            want_type = "choice" if node["kind"] == "plan" else node["question"]["type"]
+            if a is None or a.get("type", want_type) != want_type:
+                continue  # answer recorded for an older version of this question
+            ok, edge, detail = judge(node, exp, a)
+            key = f"{g['name']}/{nid}"
+            c = per_node.setdefault(key, [0, 0, 0])
+            c[0] += ok
+            c[1] += 1
+            c[2] += edge == "unsure"
+            if not ok:
+                misses.append(f"{fx['id']:<11} {key:<34} want={exp} got={detail} edge={edge}")
+    print("node                                   ok/n  unsure")
+    for k, (ok, n, un) in sorted(per_node.items()):
+        print(f"{k:<38} {ok}/{n}   {un}")
+    print(f"\nmisses ({len(misses)}):")
+    print("\n".join(misses) or "  none")
+
+
+def live(out):
+    from kimeru.backends import JevBackend
+    be = JevBackend()
+    with open(out, "w", encoding="utf-8") as f:
+        for fx in fixtures():
+            r = request(fx)
+            f.write(json.dumps({"id": r["id"], "answers": be.ask(r["state"], r["questions"])}, ensure_ascii=False) + "\n")
+    score(out)
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("dump")
+    p = sub.add_parser("score")
+    p.add_argument("answers")
+    p = sub.add_parser("live")
+    p.add_argument("--out", default="answers.jsonl")
+    a = ap.parse_args()
+    if a.cmd == "dump":
+        for fx in fixtures():
+            print(json.dumps(request(fx), ensure_ascii=False))
+    elif a.cmd == "score":
+        score(a.answers)
+    else:
+        live(a.out)

@@ -1,0 +1,43 @@
+{
+  "id": "requirement_clarification",
+  "title": "要件の明確化",
+  "when": "Clarify an unclear requirement, question or ambiguous request before work can start",
+  "hints": [
+    "仕様",
+    "わからない",
+    "不明",
+    "確認したい",
+    "どういう意味",
+    "要件",
+    "clarify",
+    "質問"
+  ],
+  "steps": [
+    {
+      "id": "questions",
+      "title": "不明点を質問リストにまとめる",
+      "desc": "Write down the open questions"
+    },
+    {
+      "id": "ask",
+      "title": "依頼元に確認",
+      "desc": "Ask the requester to answer the questions"
+    },
+    {
+      "id": "criteria",
+      "title": "受け入れ条件をチケットに追記",
+      "desc": "Add acceptance criteria to the work item"
+    },
+    {
+      "id": "confirm",
+      "title": "チームと認識合わせ",
+      "desc": "Confirm understanding with the team",
+      "check": "Will more than one team member work on this item?",
+      "hints": [
+        "チーム",
+        "複数",
+        "連携"
+      ]
+    }
+  ]
+}

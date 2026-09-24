@@ -45,6 +45,41 @@ python -m unittest
 入力は各ソースの生ペイロードを自動判別する: Microsoft Graph `chatMessage`、Azure Monitor 共通アラートスキーマ、
 Azure DevOps Service Hook `workitem.created`、議事録 `{title, date, text}`。
 
+## 進め方の型（playbooks）と plan ノード
+
+返信だけでなく「次に何をどの順でやるか」も決める。Jev は計画を書かず、`playbooks/*.json` の型を選び、手順を絞り、並べるだけ。
+
+```json
+{"kind": "plan", "playbooks": ["schedule_change", "scope_change"], "routes": {"ok": "...", "none": "...", "unsure": "..."}}
+```
+
+1. 型を選ぶ（choice、型 + none）
+2. 1 回のバッチで: 各手順が今回必要か（noul）、最初の一手（choice）、各手順の期限（score: 今日 / 今週 / 次スプリント以降）
+3. 後続ノードで `{plan.title}` `{plan.summary}` `{plan.first}`、終端の `per_step` で手順ごとのアクション（例: ADO Task 作成）を使える
+
+同梱の型: スケジュール変更 / 障害対応 / スコープ変更 / 人員調整 / リリース判定 / ステークホルダー対応 / リスク対応 / 要件明確化。
+`none` や低確信度は従来の経路（例: 急ぎ度の判定）へ戻る。
+
+## 取り込み（pull）
+
+アプリ登録も管理者同意も不要。本人の `az login` のトークンで定期取得し、inbox に置く（`watch` が処理）。
+
+```bash
+python -m kimeru pull ado --org <org> --project <project> --inbox inbox
+python -m kimeru pull alerts --subscription <subscription-id> --inbox inbox
+```
+
+- ADO: WIQL で前回以降に作成された作業項目 → Service Hook と同じ形で保存
+- アラート: Alerts Management API の Fired（Closed 以外）→ 共通アラートスキーマで保存
+- 取得済み ID と前回時刻は `out/pull_state.json`。途中で失敗しても、配達済みの分は再配達しない
+- 実テナントでは未検証（API 形状はフィクスチャで試験）
+
+## 朝のまとめ（brief）
+
+`python -m kimeru brief [--post [--send]]` は、未処理の確認待ちと直近の plan の手順（今日・今週）を集め、
+「期限（plan で判定済み）→ 1 日遅れたときの損害（Jev の score、期限ラベルは見せない）」の順で並べ、
+上位 3 件を自分とのチャット向けの 1 投稿にする。`--post` は貼り付けのみ、`--send` で送信。
+
 ## judge ノード
 
 ```json

@@ -4,6 +4,8 @@
   python -m kimeru run FILE... [--backend stub|jev] [--out DIR]
   python -m kimeru watch INBOX [--backend ...] [--interval 5]
   python -m kimeru digest [--out DIR]
+  python -m kimeru notify [--send]      # queue -> Teams self chat
+  python -m kimeru approvals            # OK/NG/保留 replies -> execute approved
 """
 import argparse
 import json
@@ -33,7 +35,8 @@ def process(payload, graphs, backend, out):
     for ev in events.normalize(payload):
         for g in graphs.get(ev["kind"], []):
             res = graph.run(g, ev, backend)
-            res["executed"] = [actions.execute(a, dry_run=True) for a in res["actions"]]
+            # decide runs now; advise actions are only proposed until approved (see notify.collect)
+            res["executed"] = [actions.execute(a, dry_run=True) for a in res["actions"]] if res["outcome"] == "decide" else []
             res["at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
             _append(out / "decisions.jsonl", res)
             if res["needs_human"]:
@@ -68,8 +71,22 @@ def main(argv=None):
     p_w.add_argument("--interval", type=float, default=5)
     p_w.add_argument("--once", action="store_true")
     sub.add_parser("digest")
+    p_n = sub.add_parser("notify", help="post human-queue items to Teams self chat")
+    p_n.add_argument("--send", action="store_true", help="actually press Enter (default: paste only)")
+    sub.add_parser("approvals", help="read OK/NG/保留 replies from Teams self chat")
     a = ap.parse_args(argv)
     out = Path(a.out)
+
+    if a.cmd in ("notify", "approvals"):
+        from . import notify as nt
+        bridge = nt.PowerShellBridge()
+        if a.cmd == "notify":
+            ids = nt.notify(out, bridge, send=a.send)
+            print(f"{'posted' if a.send else 'pasted (not sent)'}: {ids}")
+        else:
+            for ch in nt.collect(out, bridge):
+                print(f"#{ch['id']} -> {ch['status']}" + (f" ({len(ch['executed'])} actions planned)" if "executed" in ch else ""))
+        return 0
 
     if a.cmd == "validate":
         gs = graph.load_dir(a.graphs)

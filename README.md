@@ -23,7 +23,7 @@ event ─► normalize ─► judge(Jev) ─► judge(Jev) ─► decide  … �
 | イベント | グラフ | 判断ポイント（Jev） | 終端 |
 |---|---|---|---|
 | Teams チャット | `teams_chat.json` | 意図(choice) → 判断期限(score) | 受領返信・判断タスク化・Bug 化・人の確認 |
-| 監視アラート | `monitor_alert.json` | 解消済み(noul) → 顧客影響(score) → ノイズ(noul) | page+障害投稿・P1 Bug・内部 Task・閾値見直し助言 |
+| 監視アラート | `monitor_alert.json` | 解消済み(noul) → 将来のリスクか(noul) → 時期(score) / 顧客影響(score) → ノイズ(noul) | 予防 Task（24h 以内 P1・7 日以内 P2・それ以降 P3）・障害対応計画・P1 Bug・内部 Task・閾値見直し助言 |
 | ADO チケット作成 | `ado_workitem.json` | 着手可能か(noul) → 優先度(choice) | 情報不足コメント・優先度設定・人のトリアージ |
 | 議事録 | `meeting_item.json`（箇条書き1行ごとに展開） | 行の種類(choice) → 担当と期限(noul) | 決定ログ投稿・Task 作成・Risk 登録 |
 

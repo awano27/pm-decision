@@ -15,8 +15,8 @@
       "yes_at": 0.8,
       "routes": {
         "yes": "log_resolved",
-        "no": "impact",
-        "unsure": "impact"
+        "no": "future_risk",
+        "unsure": "future_risk"
       }
     },
     "impact": {
@@ -196,6 +196,124 @@
           "tags": "kimeru;incident;plan"
         }
       ]
+    },
+    "future_risk": {
+      "kind": "judge",
+      "question": {
+        "type": "noul",
+        "instructions": "Does the alert warn about a problem expected to happen in the future, rather than a problem happening now?",
+        "hints": [
+          "expires",
+          "expiry",
+          "期限切れ",
+          "will be full",
+          "forecast",
+          "予測",
+          "見込み"
+        ]
+      },
+      "routes": {
+        "yes": "horizon",
+        "no": "impact",
+        "unsure": "impact"
+      }
+    },
+    "horizon": {
+      "kind": "judge",
+      "question": {
+        "type": "score",
+        "instructions": "When is the problem described in the alert expected to happen?",
+        "criteria": [
+          "Within the next 24 hours",
+          "Within the next 7 days",
+          "More than 7 days from now"
+        ],
+        "hints": {
+          "0": [
+            "hours",
+            "時間",
+            "today"
+          ],
+          "1": [
+            "days",
+            "日以内",
+            "this week"
+          ],
+          "2": [
+            "weeks",
+            "months",
+            "週間",
+            "か月"
+          ]
+        }
+      },
+      "routes": {
+        "bands": [
+          [
+            0.5,
+            "prevent_now"
+          ],
+          [
+            1.5,
+            "prevent_week"
+          ],
+          [
+            3,
+            "prevent_backlog"
+          ]
+        ],
+        "unsure": "prevent_advice"
+      }
+    },
+    "prevent_now": {
+      "kind": "decide",
+      "actions": [
+        {
+          "type": "ado.create",
+          "work_item_type": "Task",
+          "title": "[予防] {event.rule}",
+          "priority": "1",
+          "description": "{event.description}",
+          "tags": "kimeru;alert;preventive"
+        },
+        {
+          "type": "teams.post",
+          "channel": "incident",
+          "text": "[予防・24時間以内] {event.rule}: {event.description}"
+        }
+      ],
+      "advice": "24時間以内に起きる見込みの問題: {event.rule}。今日中に担当を決めること"
+    },
+    "prevent_week": {
+      "kind": "decide",
+      "actions": [
+        {
+          "type": "ado.create",
+          "work_item_type": "Task",
+          "title": "[予防] {event.rule}",
+          "priority": "2",
+          "description": "{event.description}",
+          "tags": "kimeru;alert;preventive"
+        }
+      ]
+    },
+    "prevent_backlog": {
+      "kind": "decide",
+      "actions": [
+        {
+          "type": "ado.create",
+          "work_item_type": "Task",
+          "title": "[予防] {event.rule}",
+          "priority": "3",
+          "description": "{event.description}",
+          "tags": "kimeru;alert;preventive"
+        }
+      ]
+    },
+    "prevent_advice": {
+      "kind": "advise",
+      "queue": true,
+      "advice": "将来のリスクと判定したが時期が不明なアラート {event.rule}: 対応時期を決めて"
     }
   }
 }

@@ -75,11 +75,29 @@ class TestGraph(unittest.TestCase):
         g = GRAPHS["monitor.alert"][0]
         ev = events.normalize(ex("monitor_alert.json"))[0]
         be = ReplayBackend({"resolved": {"type": "noul", "noul": 0.02},
+                            "future_risk": {"type": "noul", "noul": 0.05},
                             "impact": {"type": "score", "score": 2.61, "confidence": 0.61,
                                        "probabilities": {"2": 0.39, "3": 0.61}}})
         r = graph.run(g, ev, be)
         self.assertEqual(r["node"], "page")
         self.assertIn("checkout-api 5xx rate", r["actions"][0]["summary"])
+
+    def test_future_risk_branch(self):
+        g = GRAPHS["monitor.alert"][0]
+        ev = {"kind": "monitor.alert", "id": "x", "rule": "cert expiry", "severity": "Sev3",
+              "condition": "Fired", "description": "TLS certificate expires in 14 days"}
+        cases = [({"score": 1.9, "confidence": 0.8}, "prevent_backlog"),
+                 ({"score": 0.9, "confidence": 0.8}, "prevent_week"),
+                 ({"score": 0.1, "confidence": 0.9}, "prevent_now"),
+                 ({"score": 1.0, "confidence": 0.2}, "prevent_advice")]
+        for horizon, want in cases:
+            be = ReplayBackend({"resolved": {"noul": 0.02}, "future_risk": {"noul": 0.92}, "horizon": horizon})
+            r = graph.run(g, ev, be)
+            self.assertEqual(r["node"], want)
+        # unsure future_risk falls back to the impact path
+        be = ReplayBackend({"resolved": {"noul": 0.02}, "future_risk": {"noul": 0.5},
+                            "impact": {"score": 1.0, "confidence": 0.8}})
+        self.assertEqual(graph.run(g, ev, be)["node"], "task_internal")
 
     def test_hints_not_sent_to_jev(self):
         qs = {n: node["question"] for g in sum(GRAPHS.values(), []) for n, node in g["nodes"].items()

@@ -99,6 +99,10 @@ python -m kimeru pull alerts --subscription <subscription-id> --inbox inbox
 - v0.2: Service Hook / Graph change notification を受ける webhook 受信
 - v0.3: 人の確認キューの回答を記録し、閾値（`yes_at` / `min_conf`）を自分のデータで調整
 
+## 会社 PC での動作確認
+
+[docs/company-pc-test.md](docs/company-pc-test.md)（PowerShell のみ → Python → Azure CLI → Jev の順に段階確認、結果シート付き）
+
 ## 注意
 
 Jev の性能数値は TypeSafe の利用規約上、公開しないこと（README・Issue・公開 CI ログを含む）。

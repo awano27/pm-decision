@@ -111,7 +111,7 @@ if ($uia) {
         Write-Host "   ※ 自分宛てのメッセージなので iPhone に通知は来ないことがあります。Teams アプリで自分とのチャットを開いてください" 
         $got = WaitReply $n 'OK'
         $push = Read-Host "   iPhone に通知は届きましたか？ [y/n]"
-        Rec 'T4' 'OK'
+        Rec 'T4' ("OK 送信方法=" + $s1.via)
         $replied = if ($got) { 'y' } else { Read-Host "   iPhone から返信しましたか？ [y/n]" }
         Rec 'T5' ("送信=OK 投稿を画面で確認={0} iPhone通知={1} 返信した={2} 返信読取={3}" -f $(if ($script:PostSeen) { 'あり' } else { 'なし' }), $(if ($push -match '^\s*[yY]') { 'あり' } else { 'なし' }), $(if ($replied -match '^\s*[yY]') { 'はい' } else { 'いいえ' }), $(if ($got) { 'OK' } else { 'NG(タイムアウト)' }))
         $selfOk = $got
@@ -219,15 +219,11 @@ else {
 
 # ---- Level 3: Jev ----
 Say "T11 Jev で判断（架空のサンプルのみ送信）"
-if ($py -and (YesNo "   Jev（社外クラウド）に架空のサンプル1件を送信して判断させますか")) {
-  $sec = Read-Host "   TypeSafe API キー（入力は表示されません。Enter でスキップ）" -AsSecureString
-  $key = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
-  if ($key) {
-    $env:TYPESAFE_API_KEY = $key
-    $j = Py @('-m', 'kimeru', '--backend', 'jev', '--out', (Join-Path $tmp 'jev'), 'run', 'examples\teams_chat.json')
-    Remove-Item Env:TYPESAFE_API_KEY; $key = $null
-    Rec 'T11' $(if ($j -match 'plan:') { 'OK ' + (Short (($j -split "`n") | Where-Object { $_ -match 'path:' } | Select-Object -First 1)) } else { 'NG ' + (Short ($j -replace '[A-Za-z0-9_\-]{24,}', '<redacted>')) })
-  } else { Rec 'T11' 'SKIP' }
+# Only when a key is already in the environment: the key is never asked for or stored here
+if (-not $env:TYPESAFE_API_KEY) { Rec 'T11' 'SKIP（TYPESAFE_API_KEY 未設定。Jev は個人 PC で確認済み）' }
+elseif ($py -and (YesNo "   Jev（社外クラウド）に架空のサンプル1件を送信して判断させますか")) {
+  $j = Py @('-m', 'kimeru', '--backend', 'jev', '--out', (Join-Path $tmp 'jev'), 'run', 'examples	eams_chat.json')
+  Rec 'T11' $(if ($j -match 'plan:') { 'OK ' + (Short (($j -split "`n") | Where-Object { $_ -match 'path:' } | Select-Object -First 1)) } else { 'NG ' + (Short ($j -replace '[A-Za-z0-9_\-]{24,}', '<redacted>')) })
 } else { Rec 'T11' 'SKIP' }
 
 # ---- Result ----

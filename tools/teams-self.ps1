@@ -143,18 +143,37 @@ function Get-BoxText($b) {
   try { return $b.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern).DocumentRange.GetText(4000) }
   catch { try { return $b.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value } catch { return '' } }
 }
+function Test-BoxHasKimeru($w) { (Get-BoxText (Get-Box $w)).Trim().StartsWith('[kimeru') }
+
+function Wait-Sent($w) {
+  for ($i = 0; $i -lt 12; $i++) { Start-Sleep -Milliseconds 250; if (-not (Test-BoxHasKimeru $w)) { return $true } }
+  $false
+}
+
 function Send-Box($w) {
   # send only what kimeru wrote: self chat + compose box starts with [kimeru
   if (-not (Test-SelfTitle (Get-TeamsWindow))) { Fail 'window changed before send; aborted' }
-  $t = (Get-BoxText (Get-Box $w)).Trim()
-  if (-not $t.StartsWith('[kimeru')) { Fail 'compose box does not start with [kimeru; not sending' }
-  Assert-Foreground $w
-  (Get-Box $w).SetFocus(); Start-Sleep -Milliseconds 150
-  Assert-Foreground $w
-  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+  if (-not (Test-BoxHasKimeru $w)) { Fail 'compose box does not start with [kimeru; not sending' }
+  # 1) the Send button: works whether Enter or Ctrl+Enter sends in this user's Teams settings
+  $btn = Find-All $w $CT::Button | Where-Object { $_.Current.Name -match '^(送信|Send)(\s*\(|$)' -and $_.Current.IsEnabled } | Select-Object -First 1
+  if ($btn) {
+    try { $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch {}
+    if (Wait-Sent $w) { return 'button' }
+  }
+  # 2) keys, re-checking the target each time (Enter may only insert a line break)
+  foreach ($k in @('^{ENTER}', '{ENTER}')) {
+    if (-not (Test-SelfTitle (Get-TeamsWindow))) { Fail 'window changed before send; aborted' }
+    if (-not (Test-BoxHasKimeru $w)) { return 'keys' }
+    Assert-Foreground $w
+    (Get-Box $w).SetFocus(); Start-Sleep -Milliseconds 150
+    Assert-Foreground $w
+    [System.Windows.Forms.SendKeys]::SendWait($k)
+    if (Wait-Sent $w) { return "keys:$k" }
+  }
+  Fail 'message was not sent (compose box still holds the text); press Send in Teams by hand'
 }
 
-if ($Action -eq 'send') { Send-Box $w; Out-Json @{ ok = $true; sent = $true }; exit 0 }
+if ($Action -eq 'send') { $how = Send-Box $w; Out-Json @{ ok = $true; sent = $true; via = $how }; exit 0 }
 
 if ($Action -eq 'post') {
   if (-not $Text.StartsWith('[kimeru')) { Fail 'refusing to post text that does not start with [kimeru' }
@@ -170,7 +189,7 @@ if ($Action -eq 'post') {
   if ($saved) { [System.Windows.Forms.Clipboard]::SetText($saved) } else { [System.Windows.Forms.Clipboard]::Clear() }
   $typed = (Get-BoxText $box).Trim().StartsWith('[kimeru')
   $sent = $false
-  if ($Send) { Send-Box $w; $sent = $true }
+  if ($Send) { [void](Send-Box $w); $sent = $true }
   Out-Json @{ ok = $true; typed = $typed; sent = $sent }; exit 0
 }
 

@@ -4,3 +4,5 @@ out/
 inbox/
 __pycache__/
 *.pyc
+kimeru-check-result.txt
+probe-*.txt

@@ -94,16 +94,40 @@ def notify(out, bridge, send=False):
     return posted
 
 
+def fresh_replies(read):
+    """Replies that come after the most recent visible post with the same number.
+
+    Old "OK 1" lines from an earlier run stay in the chat; without this, a new
+    item #1 would be approved by them. With a timeline, a reply counts only if
+    it appears after the last "[kimeru #1]" post; if that post is not visible,
+    freshness cannot be proven and the reply is ignored.
+    """
+    tl = read.get("timeline")
+    if tl is None:  # older bridge without ordering
+        return list(read.get("replies", []))
+    last_post = {}
+    for i, e in enumerate(tl):
+        if e.startswith("P:"):
+            last_post[e[2:]] = i
+    out = []
+    for i, e in enumerate(tl):
+        if e.startswith("R:"):
+            m = REPLY.match(e[2:].strip())
+            if m and i > last_post.get(m.group(2), len(tl)):
+                out.append(e[2:])
+    return out
+
+
 def collect(out, bridge):
     """Read replies from the self chat and apply them. Returns applied changes."""
     ap = Approvals(out)
     changes = []
-    for line in bridge.read().get("replies", []):
+    for line in fresh_replies(bridge.read()):
         m = REPLY.match(line.strip())
         if not m:
             continue
         it = ap.data["items"].get(m.group(2))
-        if not it or it["status"] not in ("pending", "held"):
+        if not it or not it["posted"] or it["status"] not in ("pending", "held"):
             continue
         new = STATUS[m.group(1)]
         if new == it["status"]:

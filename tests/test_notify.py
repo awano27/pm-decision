@@ -69,6 +69,42 @@ class TestNotify(unittest.TestCase):
             self.assertNotIn("executed", ch[0])
 
 
+class TimelineBridge(FakeBridge):
+    def __init__(self, timeline):
+        super().__init__()
+        self.timeline = timeline
+
+    def read(self):
+        return {"ok": True, "timeline": self.timeline}
+
+
+class TestFreshReplies(unittest.TestCase):
+    def test_stale_reply_before_new_post_is_ignored(self):
+        tl = ["P:1", "R:OK 1", "P:1"]  # old run approved #1, then a new #1 was posted
+        self.assertEqual(notify.fresh_replies({"timeline": tl}), [])
+        self.assertEqual(notify.fresh_replies({"timeline": tl + ["R:NG 1"]}), ["NG 1"])
+
+    def test_reply_without_visible_post_is_ignored(self):
+        self.assertEqual(notify.fresh_replies({"timeline": ["R:OK 7"]}), [])
+
+    def test_legacy_bridge_falls_back_to_replies(self):
+        self.assertEqual(notify.fresh_replies({"replies": ["OK 1"]}), ["OK 1"])
+
+    def test_collect_uses_timeline(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_queue(d, REC)
+            notify.notify(d, FakeBridge(), send=True)
+            self.assertEqual(notify.collect(d, TimelineBridge(["P:1", "R:OK 1", "P:1"])), [])
+            ch = notify.collect(d, TimelineBridge(["P:1", "R:OK 1", "P:1", "R:OK 1"]))
+            self.assertEqual([c["status"] for c in ch], ["approved"])
+
+    def test_unposted_item_ignores_replies(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_queue(d, REC)
+            notify.notify(d, FakeBridge(), send=False)  # pasted only
+            self.assertEqual(notify.collect(d, FakeBridge(["OK 1"])), [])
+
+
 class TestAdviseNotExecuted(unittest.TestCase):
     def test_advise_actions_are_not_run_by_process(self):
         from kimeru import graph

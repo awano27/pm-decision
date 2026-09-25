@@ -101,7 +101,8 @@ python -m kimeru pull alerts --subscription <subscription-id> --inbox inbox
 
 ## 会社 PC での動作確認
 
-[docs/company-pc-test.md](docs/company-pc-test.md)（PowerShell のみ → Python → Azure CLI → Jev の順に段階確認、結果シート付き）
+`run-company-check.cmd` をダブルクリックするだけで全段階を自動確認し、結果シートをクリップボードに出す。
+詳細と手動手順: [docs/company-pc-test.md](docs/company-pc-test.md)
 
 ## 注意
 

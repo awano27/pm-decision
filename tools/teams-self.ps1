@@ -123,18 +123,28 @@ if ($Action -eq 'read') {
   $posts = New-Object System.Collections.Generic.List[string]
   $replies = New-Object System.Collections.Generic.List[string]
   $seen = @{}
+  # timeline: posts ("P:N") and replies ("R:OK N") in screen order (oldest first). One message is
+  # exposed by several UIA nodes, so consecutive duplicates are collapsed.
+  $timeline = New-Object System.Collections.Generic.List[string]
   $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
   function Walk($el, $d) {
     if ($d -gt 40) { return }
     foreach ($line in ([string]$el.Current.Name) -split "`n") {
       $l = $line.Trim()
-      if ($seen.ContainsKey($l)) { continue }
-      if ($l -match '^\[kimeru #(\d+)\]') { $seen[$l] = 1; if (-not $posts.Contains($Matches[1])) { $posts.Add($Matches[1]) } }
-      elseif ($l -match '^(OK|NG|保留)\s*#?\d+$') { $seen[$l] = 1; $replies.Add($l) }
+      $entry = $null
+      if ($l -match '^\[kimeru #(\d+)\]') {
+        $entry = "P:" + $Matches[1]
+        if (-not $posts.Contains($Matches[1])) { $posts.Add($Matches[1]) }
+      }
+      elseif ($l -match '^(OK|NG|保留)\s*#?\d+$') {
+        $entry = "R:" + $l
+        if (-not $seen.ContainsKey($l)) { $seen[$l] = 1; $replies.Add($l) }
+      }
+      if ($entry -and ($timeline.Count -eq 0 -or $timeline[$timeline.Count - 1] -ne $entry)) { $timeline.Add($entry) }
     }
     $c = $walker.GetFirstChild($el)
     while ($c) { Walk $c ($d + 1); $c = $walker.GetNextSibling($c) }
   }
   Walk $w 0
-  Out-Json @{ ok = $true; posts = @($posts); replies = @($replies) }; exit 0
+  Out-Json @{ ok = $true; posts = @($posts); replies = @($replies); timeline = @($timeline) }; exit 0
 }

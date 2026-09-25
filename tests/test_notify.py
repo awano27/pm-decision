@@ -105,6 +105,24 @@ class TestFreshReplies(unittest.TestCase):
             self.assertEqual(notify.collect(d, FakeBridge(["OK 1"])), [])
 
 
+class TestPartialSend(unittest.TestCase):
+    def test_failure_on_second_post_keeps_first_marked_sent(self):
+        rec2 = {**REC, "event_id": "4813"}
+
+        class FailSecond(FakeBridge):
+            def post(self, text, send):
+                if len(self.posts) == 1:
+                    raise RuntimeError("compose box not found")
+                return super().post(text, send)
+        with tempfile.TemporaryDirectory() as d:
+            write_queue(d, REC, rec2)
+            with self.assertRaises(RuntimeError):
+                notify.notify(d, FailSecond(), send=True)
+            b = FakeBridge()
+            self.assertEqual(notify.notify(d, b, send=True), [2])  # #1 is not re-sent
+            self.assertEqual(len(b.posts), 1)
+
+
 class TestReplyNormalization(unittest.TestCase):
     def test_phone_variants(self):
         for s in ("OK 3", "ok 3", "Ok3", "ＯＫ　３", "ｏｋ３", "OK #3", " OK 3 "):

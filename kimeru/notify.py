@@ -96,6 +96,7 @@ def notify(out, bridge, send=False):
         bridge.post(format_post(n, it["record"]), send)
         if send:
             it["posted"] = True
+            ap.save()  # a failure on a later item must not forget what was already sent
         posted.append(int(n))
     ap.save()
     return posted

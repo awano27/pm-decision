@@ -125,12 +125,16 @@ def main(argv=None):
     if a.cmd in ("notify", "approvals"):
         from . import notify as nt
         bridge = nt.PowerShellBridge()
-        if a.cmd == "notify":
-            ids = nt.notify(out, bridge, send=a.send)
-            print(f"{'posted' if a.send else 'pasted (not sent)'}: {ids}")
-        else:
-            for ch in nt.collect(out, bridge):
-                print(f"#{ch['id']} -> {ch['status']}" + (f" ({len(ch['executed'])} actions planned)" if "executed" in ch else ""))
+        try:
+            if a.cmd == "notify":
+                ids = nt.notify(out, bridge, send=a.send)
+                print(f"{'posted' if a.send else 'pasted (not sent)'}: {ids}")
+            else:
+                for ch in nt.collect(out, bridge):
+                    print(f"#{ch['id']} -> {ch['status']}" + (f" ({len(ch['executed'])} actions planned)" if "executed" in ch else ""))
+        except Exception as e:  # one readable line instead of a traceback (the check script records it)
+            print(f"{a.cmd} failed: {type(e).__name__}: {e}", file=sys.stderr)
+            return 1
         return 0
 
     pbs = planner.load_playbooks(a.playbooks)

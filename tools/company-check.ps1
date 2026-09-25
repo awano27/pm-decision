@@ -6,7 +6,12 @@
   and writes a result sheet (no message text, names or tokens) to the clipboard and
   kimeru-check-result.txt.
 #>
-param([int]$WaitSec = 180)
+[CmdletBinding(PositionalBinding = $false)]
+param(
+  [int]$WaitSec = 180,
+  # run-company-check.cmd T9  -> only T9 (plus the steps it depends on: T3, T6, T8)
+  [Parameter(ValueFromRemainingArguments = $true)][string[]]$Only = @()
+)
 $ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $env:PYTHONIOENCODING = 'utf-8'
@@ -16,6 +21,14 @@ $Results = [ordered]@{}   # not $R: PowerShell names are case-insensitive ($r is
 $tmp = Join-Path $env:TEMP ("kimeru-check-" + (Get-Random -Minimum 10000 -Maximum 99999))
 New-Item -ItemType Directory -Force $tmp | Out-Null
 
+function Want($t) { -not $Only -or $Only -contains $t }
+function Fails($s) {
+  # prefer our one-line "... failed: ..." message, else the last traceback line
+  $lines = @(([string]$s -split "`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+  $f = $lines | Where-Object { $_ -match 'failed: ' } | Select-Object -Last 1
+  if (-not $f) { $f = $lines | Where-Object { $_ -match '^\w+(Error|Exception)' } | Select-Object -Last 1 }
+  if ($f) { Short ($f -replace '^.*?(\w+ failed: )', '$1') } else { Short $s }
+}
 function Say($t) { Write-Host ""; Write-Host "== $t" -ForegroundColor Cyan }
 function Rec($k, $v) { $Results[$k] = $v; Write-Host ("   {0}: {1}" -f $k, $v) -ForegroundColor Yellow }
 function Short($s) { $x = ([string]$s -replace '\s+', ' ').Trim(); if ($x.Length -gt 160) { $x.Substring(0, 160) } else { $x } }
@@ -71,16 +84,18 @@ if ($uia) {
     Start-Sleep -Seconds 10   # let the chat list render
   }
 
-  Say "T1 チャット画面の読み取り"
-  $p = Probe 'chat'
-  Rec 'T1' $(if ($p.ok) { "OK elements=$($p.elements) $($p.types)" } else { "NG elements=$($p.elements) $($p.error)" })
+  if (Want 'T1') {
+    Say "T1 チャット画面の読み取り"
+    $p = Probe 'chat'
+    Rec 'T1' $(if ($p.ok) { "OK elements=$($p.elements) $($p.types)" } else { "NG elements=$($p.elements) $($p.error)" })
+  }
 
-  Say "T2 Copilot 会議まとめ画面の読み取り"
-  Write-Host "   Teams で Copilot のまとめ（要約）タブを表示してから Enter。無ければ s + Enter でスキップ"
-  if ((Read-Host) -ne 's') {
+  if (Want 'T2') { Say "T2 Copilot 会議まとめ画面の読み取り"
+  Write-Host "   Teams で Copilot のまとめ（要約）タブを表示してから Enter。無ければ s + Enter でスキップ" }
+  if ((Want 'T2') -and (Read-Host) -ne 's') {
     $p = Probe 'recap'
     Rec 'T2' $(if ($p.ok) { "OK elements=$($p.elements) recap系ラベル=$($p.labels)" } else { "NG elements=$($p.elements) $($p.error)" })
-  } else { Rec 'T2' 'SKIP' }
+  } elseif (Want 'T2') { Rec 'T2' 'SKIP' }
 
   Say "T3 自分とのチャット"
   $s = Self 'open'; $r = Self 'read'
@@ -99,7 +114,7 @@ if ($uia) {
     }
   }
 
-  if ($selfOk) {
+  if ($selfOk -and (Want 'T5')) {
     Say "T4/T5 貼り付け・送信・iPhone 返信"
     if (YesNo "   自分とのチャットにテストメッセージを1通送信します（宛先は自分だけ）。よろしいですか") {
       $n = Get-Random -Minimum 100 -Maximum 999
@@ -157,10 +172,13 @@ Rec 'T6' $(if ($py) { (Short $v) + " ($($py -join ' '))" } else { 'NG Python 3.1
 function Py([string[]]$a) { & $py[0] $py[1..9] @a 2>&1 | Out-String }
 
 if ($py) {
+  if (Want 'T7') {
   Say "T7 テストと検証"
   $t = Py @('-m', 'unittest', '-q'); $tOk = $LASTEXITCODE -eq 0
   $v = Py @('-m', 'kimeru', 'validate'); $vOk = $LASTEXITCODE -eq 0
   Rec 'T7' $(if ($tOk -and $vOk) { "OK " + (Short (($t -split "`n") | Where-Object { $_ -match '^Ran ' })) } else { "NG " + (Short (($t + $v) -split "`n" | Select-Object -Last 8)) })
+
+  }
 
   Say "T8 サンプルで判断と朝のまとめ"
   $out = Join-Path $tmp 'out'
@@ -170,12 +188,14 @@ if ($py) {
   $nDec = ([regex]::Matches($o, '(?m)^\[')).Count
   Rec 'T8' $(if ($rOk -and $b -match 'kimeru brief') { "OK 判断=$nDec plan=$(([regex]::Matches($o, 'plan:')).Count)" } else { "NG " + (Short $o) })
 
-  Say "T9 承認の流れ（iPhone から OK / NG）"
-  if ($selfOk -and (YesNo "   確認待ち2件を自分とのチャットに送信します（宛先は自分だけ）。よろしいですか")) {
+  if (Want 'T9') { Say "T9 承認の流れ（iPhone から OK / NG）" }
+  if (-not (Want 'T9')) { }
+  elseif ($selfOk -and (YesNo "   確認待ち2件を自分とのチャットに送信します（宛先は自分だけ）。よろしいですか")) {
     $base = Get-Random -Minimum 100 -Maximum 899
     [IO.File]::WriteAllText((Join-Path $out 'approvals.json'), "{`"next`": $base, `"items`": {}}")
     Write-Host "   数秒間マウス・キーボードに触らないでください"
     $nt = Py @('-m', 'kimeru', '--out', $out, 'notify', '--send')
+    Rec 'T9-notify' $(if ($nt -match 'posted: \[') { 'OK ' + (Short (($nt -split "`n") | Where-Object { $_ -match 'posted:' })) } else { 'NG ' + (Fails $nt) })
     Write-Host ("   iPhone から「OK {0}」と「NG {1}」を別々に返信してください（最大 {2} 秒）" -f $base, ($base + 1), $WaitSec) -ForegroundColor Green
     $acc = ''; $deadline = (Get-Date).AddSeconds($WaitSec)
     while ((Get-Date) -lt $deadline -and -not ($acc -match 'approved' -and $acc -match 'rejected')) {
@@ -183,14 +203,17 @@ if ($py) {
       $acc += Py @('-m', 'kimeru', '--out', $out, 'approvals')
     }
     $again = Py @('-m', 'kimeru', '--out', $out, 'approvals')
-    Rec 'T9' ("{0} approvals={1} 2回目={2}" -f $(if ($acc -match 'approved' -and $acc -match 'rejected') { 'OK' } else { 'NG' }), (Short $acc), $(if ($again.Trim()) { Short $again } else { '（なし＝二重処理なし）' }))
+    $ok9 = $acc -match 'approved' -and $acc -match 'rejected'
+    $shown = if ($acc -match 'failed: |Traceback|Error') { Fails $acc } else { Short $acc }
+    Rec 'T9' ("{0} approvals={1} 2回目={2}" -f $(if ($ok9) { 'OK' } else { 'NG' }), $shown, $(if (-not $again.Trim()) { '（なし＝二重処理なし）' } elseif ($again -match 'failed: |Traceback') { Fails $again } else { Short $again }))
   } else { Rec 'T9' 'SKIP' }
 }
 
 # ---- Level 2: Azure CLI ----
-Say "T10 Azure CLI で取り込み"
+if (Want 'T10') { Say "T10 Azure CLI で取り込み" }
 $az = Get-Command az -ErrorAction SilentlyContinue
-if (-not $az -or -not $py) { Rec 'T10' $(if (-not $az) { 'SKIP az なし' } else { 'SKIP Python なし' }) }
+if (-not (Want 'T10')) { }
+elseif (-not $az -or -not $py) { Rec 'T10' $(if (-not $az) { 'SKIP az なし' } else { 'SKIP Python なし' }) }
 else {
   & az account show -o none 2>$null
   if ($LASTEXITCODE -ne 0 -and (YesNo "   az にサインインしていません。az login を実行しますか（ブラウザが開きます）")) { & az login -o none 2>&1 | Out-Null }
@@ -218,9 +241,10 @@ else {
 }
 
 # ---- Level 3: Jev ----
-Say "T11 Jev で判断（架空のサンプルのみ送信）"
+if (Want 'T11') { Say "T11 Jev で判断（架空のサンプルのみ送信）" }
 # Only when a key is already in the environment: the key is never asked for or stored here
-if (-not $env:TYPESAFE_API_KEY) { Rec 'T11' 'SKIP（TYPESAFE_API_KEY 未設定。Jev は個人 PC で確認済み）' }
+if (-not (Want 'T11')) { }
+elseif (-not $env:TYPESAFE_API_KEY) { Rec 'T11' 'SKIP（TYPESAFE_API_KEY 未設定。Jev は個人 PC で確認済み）' }
 elseif ($py -and (YesNo "   Jev（社外クラウド）に架空のサンプル1件を送信して判断させますか")) {
   $j = Py @('-m', 'kimeru', '--backend', 'jev', '--out', (Join-Path $tmp 'jev'), 'run', 'examples	eams_chat.json')
   Rec 'T11' $(if ($j -match 'plan:') { 'OK ' + (Short (($j -split "`n") | Where-Object { $_ -match 'path:' } | Select-Object -First 1)) } else { 'NG ' + (Short ($j -replace '[A-Za-z0-9_\-]{24,}', '<redacted>')) })

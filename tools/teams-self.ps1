@@ -7,25 +7,31 @@
   post -Text <s>       -> open self chat, paste text into the compose box (NOT sent)
   post -Text <s> -Send -> same, then press Enter after re-verifying the window title
   send                 -> press Enter only if the compose box starts with "[kimeru"
+  diag                 -> JSON with only structure hints for troubleshooting "self chat not found":
+                          window title shape (names masked), chat-list size, parenthesized markers
   read                 -> JSON {posts:[...], replies:[...]} extracted from the self chat only:
                           posts   = ids N of "[kimeru #N]" posts (no other text)
                           replies = "OK 3" / "NG 3" / "保留 3" style lines
   Nothing else from the chat is output.
 
   Safety: every write re-checks that the window title is the self chat
-  ("... (あなた) | Microsoft Teams" or "... (You) | Microsoft Teams"); otherwise it aborts.
+  ("| <name> (あなた|自分|You|Me) |" in the title); otherwise it aborts.
+  Personal Teams shows "(あなた)"; work accounts may show "(自分)". Override with -SelfMarker.
 #>
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('status', 'open', 'post', 'send', 'read')][string]$Action,
+  [Parameter(Mandatory = $true)][ValidateSet('status', 'open', 'post', 'send', 'read', 'diag')][string]$Action,
   [string]$Text = '',
-  [switch]$Send
+  [switch]$Send,
+  [string]$SelfMarker = $env:KIMERU_SELF_MARKER   # e.g. "自分" if your Teams shows another word
 )
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms
 $A = [System.Windows.Automation.AutomationElement]
 $CT = [System.Windows.Automation.ControlType]
-$SELF = '\((あなた|You)\)'
+$markers = @('あなた', '自分', 'You', 'Me')
+if ($SelfMarker) { $markers = @([regex]::Escape($SelfMarker)) + $markers }
+$SELF = '\((' + ($markers -join '|') + ')\)'
 
 Add-Type -Namespace K -Name W -MemberDefinition @'
 [DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
@@ -52,7 +58,7 @@ function Get-TeamsWindow {
     Where-Object { $pids -contains $_.Current.ProcessId -and $_.Current.Name } | Select-Object -First 1
 }
 
-function Test-SelfTitle($w) { $w -and ($w.Current.Name -match "\| [^|]+ $SELF \| Microsoft Teams$") }
+function Test-SelfTitle($w) { $w -and ($w.Current.Name -match "\| [^|]+ $SELF \|") }
 
 function Find-All($root, $type) {
   $root.FindAll('Descendants', (New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, $type)))
@@ -60,8 +66,10 @@ function Find-All($root, $type) {
 
 function Open-SelfChat($w) {
   if (Test-SelfTitle $w) { return $w }
-  # the self chat's list item is the short one whose whole name ends with "(あなた)"/"(You)"
-  $item = Find-All $w $CT::TreeItem | Where-Object { $_.Current.Name -match "^[^:：]{1,60} $SELF$" } | Select-Object -First 1
+  # the self chat's list item starts with "<name> (あなた|自分|...)"; work accounts append the
+  # latest message and time after it, so the marker is not required at the end
+  $item = Find-All $w $CT::TreeItem | Where-Object { $_.Current.Name -match "^[^:：]{1,60}? $SELF" } |
+    Sort-Object { $_.Current.Name.Length } | Select-Object -First 1
   if (-not $item) { Fail 'self chat not found in chat list (open the Chat tab)' }
   try { $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() }
   catch { $item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
@@ -74,6 +82,18 @@ function Open-SelfChat($w) {
 }
 
 $w = Get-TeamsWindow
+if ($Action -eq 'diag') {
+  if (-not $w) { Fail 'Teams window not found' }
+  $title = $w.Current.Name
+  $shape = (($title -split ' \| ') | ForEach-Object { if ($_ -match '\(([^)]{1,8})\)\s*$') { "<name> ($($Matches[1]))" } elseif ($_ -in 'Microsoft Teams', 'チャット', 'Chat') { $_ } else { '<text>' } }) -join ' | '
+  $items = @(Find-All $w $CT::TreeItem)
+  $found = @{}
+  foreach ($i in $items) { foreach ($m in [regex]::Matches($i.Current.Name, '\(([^)]{1,8})\)')) { $found[$m.Groups[1].Value] = 1 + [int]$found[$m.Groups[1].Value] } }
+  $tabs = @(Find-All $w $CT::TabItem | Where-Object { try { $_.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected } catch { $false } } | ForEach-Object { $_.Current.Name } | Where-Object { $_.Length -le 12 })
+  Out-Json @{ ok = $true; titleShape = $shape; chatListItems = $items.Count; parenMarkers = $found; selectedTabs = $tabs
+              selfItemMatched = [bool]($items | Where-Object { $_.Current.Name -match "^[^:：]{1,60}? $SELF" }) }
+  exit 0
+}
 if ($Action -eq 'status') { Out-Json @{ ok = $true; teams = [bool]$w; selfChatOpen = [bool](Test-SelfTitle $w) }; exit 0 }
 if (-not $w) { Fail 'Teams window not found' }
 $w = Open-SelfChat $w

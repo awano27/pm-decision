@@ -101,7 +101,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\teams-self.ps1 -Acti
 | open | `{"ok":true,"selfChatOpen":true}`（Teams が自分とのチャットに切り替わる） |
 | read | `{"ok":true,"posts":[...],"replies":[...]}` |
 
-`self chat not found` が出たら、Teams の**チャット**タブを表示してから open を再実行。
+`self chat not found` が出たら、Teams の**チャット**タブを表示してから open を再実行。それでも出る場合は次を実行して結果を返す（名前は伏せ字で出る）:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .	ools	eams-self.ps1 -Action diag
+```
+
+`parenMarkers` に自分とのチャットの印（例: `自分`）が出ていて見つからない場合は、`-SelfMarker 自分` を付けると試せる。
 
 ### T4 入力欄への貼り付け（送信しない）
 
@@ -141,7 +147,10 @@ python --version
 py --version
 ```
 
-どちらかで 3.10 以上が出れば OK（以降 `python` を出た方に読み替える）。どちらも無ければ**レベル 1 以降は実施不可**として記録（インストール可否は社内ルール次第）。
+どちらかで 3.10 以上が出れば OK（以降 `python` を出た方に読み替える）。
+`Python` とだけ表示される場合は、Windows 標準の「Microsoft Store を開くだけのショートカット」で、Python は入っていない。
+その場合は**かんたん実行**（`run-company-check.cmd`）を使うと、確認のうえ python.org のインストール不要版（zip 展開のみ・管理者権限不要）を
+このフォルダの `.python` に置いて続行できる（手動なら以降の `python` を `.\.python\python.exe` に読み替える）。
 
 ### T7 テストと検証（外部通信なし）
 
@@ -187,8 +196,9 @@ python -m kimeru --out out-test approvals
 ```powershell
 az --version
 az login
-python -m kimeru --out out-test pull ado --org <組織名> --project <プロジェクト名> --inbox inbox-test
-python -m kimeru --out out-test pull alerts --subscription <サブスクリプションID> --inbox inbox-test
+# 例: https://dev.azure.com/contoso/Payments なら組織名 contoso、プロジェクト名 Payments（自分の値に置き換える）
+python -m kimeru --out out-test pull ado --org "contoso" --project "Payments" --inbox inbox-test
+python -m kimeru --out out-test pull alerts --subscription (az account show --query id -o tsv) --inbox inbox-test
 python -m kimeru --out out-test watch inbox-test --once
 ```
 
@@ -204,7 +214,8 @@ python -m kimeru --out out-test watch inbox-test --once
 キーは**この PowerShell セッションだけ**に設定する（ファイルに書かない・チャットに貼らない）:
 
 ```powershell
-$env:TYPESAFE_API_KEY = Read-Host -Prompt "TypeSafe API key"
+$k = Read-Host -Prompt "TypeSafe API key" -AsSecureString
+$env:TYPESAFE_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($k))
 python -m kimeru --backend jev --out out-jev run examples\teams_chat.json
 ```
 

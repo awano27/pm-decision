@@ -85,6 +85,11 @@ if ($uia) {
   $s = Self 'open'; $r = Self 'read'
   $selfOk = [bool]($s.ok -and $r.ok)
   Rec 'T3' $(if ($selfOk) { "OK open/read（timeline=$(@($r.timeline).Count)件）" } else { "NG $($s.error) $($r.error)" })
+  if (-not $selfOk) {
+    # names are masked by diag; this tells us which marker the work account uses
+    $d = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'teams-self.ps1') -Action diag 2>&1 | Out-String
+    Rec 'T3-diag' (Short $d)
+  }
 
   if ($selfOk) {
     Say "T4/T5 貼り付け・送信・iPhone 返信"
@@ -111,6 +116,31 @@ $py = $null
 foreach ($c in @(@('python'), @('py', '-3'))) {
   $v = & $c[0] $c[1..9] --version 2>&1 | Out-String
   if ($v -match 'Python 3\.(\d+)' -and [int]$Matches[1] -ge 10) { $py = $c; break }
+}
+$emb = Join-Path $root '.python\python.exe'
+if (-not $py -and (Test-Path $emb)) { $py = @($emb); $v = & $emb --version 2>&1 | Out-String }
+if (-not $py) {
+  Write-Host "   Python 3.10 以上が見つかりません（'python' が Microsoft Store を開くだけの状態を含む）"
+  if (YesNo "   python.org からインストール不要版 Python 3.12.10（約 11MB の zip、展開するだけ・管理者権限不要）を取得して、このフォルダの .python に置きますか") {
+    $url = 'https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip'
+    $zip = Join-Path $tmp 'python-embed.zip'
+    $dst = Join-Path $root '.python'
+    try {
+      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+      Invoke-WebRequest $url -OutFile $zip -UseBasicParsing
+      Expand-Archive $zip $dst -Force
+      $sig = Get-AuthenticodeSignature $emb
+      if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Python Software Foundation') {
+        Remove-Item -Recurse -Force $dst
+        throw "python.exe の署名を確認できないため削除しました: $($sig.Status)"
+      }
+      # embeddable Python ignores PYTHONPATH and the current folder; add the repo root to its ._pth
+      $pth = Get-ChildItem $dst -Filter 'python*._pth' | Select-Object -First 1
+      Add-Content -Path $pth.FullName -Value '..' -Encoding ASCII
+      $py = @($emb); $v = & $emb --version 2>&1 | Out-String
+      Rec 'T6-dl' 'OK python.org インストール不要版を取得（署名: Python Software Foundation）'
+    } catch { Rec 'T6-dl' ('NG ' + (Short $_.Exception.Message)) }
+  }
 }
 Rec 'T6' $(if ($py) { (Short $v) + " ($($py -join ' '))" } else { 'NG Python 3.10+ なし（Level 1 以降は SKIP）' })
 function Py([string[]]$a) { & $py[0] $py[1..9] @a 2>&1 | Out-String }

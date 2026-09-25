@@ -107,7 +107,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\teams-self.ps1 -Acti
 powershell -NoProfile -ExecutionPolicy Bypass -File .	ools	eams-self.ps1 -Action diag
 ```
 
-`parenMarkers` に自分とのチャットの印（例: `自分`）が出ていて見つからない場合は、`-SelfMarker 自分` を付けると試せる。
+見つからない場合は、Teams で自分とのチャットを**一度だけ手で開いて**から次を実行する（表示名をこの PC のローカルにだけ覚え、以後は自動で開ける）:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .	ools	eams-self.ps1 -Action learn
+```
+
+`parenMarkers` に自分とのチャットの印（例: `自分`）が出ている場合は、`-SelfMarker 自分` を付けても試せる。
 
 ### T4 入力欄への貼り付け（送信しない）
 

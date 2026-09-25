@@ -86,9 +86,16 @@ if ($uia) {
   $selfOk = [bool]($s.ok -and $r.ok)
   Rec 'T3' $(if ($selfOk) { "OK open/read（timeline=$(@($r.timeline).Count)件）" } else { "NG $($s.error) $($r.error)" })
   if (-not $selfOk) {
-    # names are masked by diag; this tells us which marker the work account uses
+    # names are masked by diag; this tells us how the work account labels the self chat
     $d = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'teams-self.ps1') -Action diag 2>&1 | Out-String
-    Rec 'T3-diag' (Short $d)
+    Rec 'T3-diag' (($d -replace '\s+', ' ').Trim())
+    Write-Host "   自分とのチャットを自動で見つけられませんでした。Teams で「自分とのチャット」を手で開いてから Enter（s + Enter でスキップ）" -ForegroundColor Green
+    if ((Read-Host) -ne 's') {
+      $l = Self 'learn'   # remembers your display name locally (%LOCALAPPDATA%\kimeru); not shown here
+      $s = Self 'open'; $r = Self 'read'
+      $selfOk = [bool]($l.ok -and $s.ok -and $r.ok)
+      Rec 'T3-learn' $(if ($selfOk) { "OK 表示名を学習（一覧で発見=$($l.itemFound)）" } else { "NG $($l.error) $($s.error) $($r.error)" })
+    }
   }
 
   if ($selfOk) {

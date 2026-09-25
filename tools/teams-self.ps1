@@ -8,7 +8,10 @@
   post -Text <s> -Send -> same, then press Enter after re-verifying the window title
   send                 -> press Enter only if the compose box starts with "[kimeru"
   diag                 -> JSON with only structure hints for troubleshooting "self chat not found":
-                          window title shape (names masked), chat-list size, parenthesized markers
+                          window title shape and chat-list item shapes (letters masked), markers
+  learn                -> while the self chat is open, remember your display name (read from the
+                          window title) in %LOCALAPPDATA%\kimeru\self-name.txt so `open` can find
+                          the self chat in lists whose items carry no "(自分)" marker. Local only.
   read                 -> JSON {posts:[...], replies:[...]} extracted from the self chat only:
                           posts   = ids N of "[kimeru #N]" posts (no other text)
                           replies = "OK 3" / "NG 3" / "保留 3" style lines
@@ -19,7 +22,7 @@
   Personal Teams shows "(あなた)"; work accounts may show "(自分)". Override with -SelfMarker.
 #>
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('status', 'open', 'post', 'send', 'read', 'diag')][string]$Action,
+  [Parameter(Mandatory = $true)][ValidateSet('status', 'open', 'post', 'send', 'read', 'diag', 'learn')][string]$Action,
   [string]$Text = '',
   [switch]$Send,
   [string]$SelfMarker = $env:KIMERU_SELF_MARKER   # e.g. "自分" if your Teams shows another word
@@ -64,13 +67,34 @@ function Find-All($root, $type) {
   $root.FindAll('Descendants', (New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, $type)))
 }
 
+$NameFile = Join-Path $env:LOCALAPPDATA 'kimeru\self-name.txt'
+function Get-SelfName { if (Test-Path $NameFile) { (Get-Content $NameFile -Encoding UTF8 -TotalCount 1).Trim() } }
+
+function Find-SelfItem($w) {
+  $items = @(Find-All $w $CT::TreeItem)
+  # 1) "<name> (あなた|自分|...)" at the start; work accounts append the latest message and time
+  $hit = $items | Where-Object { $_.Current.Name -match "^[^:：]{1,60}? $SELF" }
+  # 2) learned display name as a whole word near the start (items may carry a type prefix such as
+  #    "チャット "), not a group chat ("<name>, other" / "<name>、")
+  $name = Get-SelfName
+  if (-not $hit -and $name) {
+    $rx = '^[^:：,、]{0,20}?(?<!\S)' + [regex]::Escape($name) + '(?=$|[\s(（:：])'
+    $hit = $items | Where-Object { $_.Current.Name -match $rx }
+  }
+  $hit | Sort-Object { $_.Current.Name.Length } | Select-Object -First 1
+}
+
+function Mask($s) {
+  # keep short parentheticals like "(自分)" and punctuation; letters/digits become x
+  $e = [System.Text.RegularExpressions.MatchEvaluator] { param($m) if ($m.Value.StartsWith('(')) { $m.Value } else { 'x' } }
+  $o = [regex]::Replace([string]$s, '\([^)]{1,8}\)|[\p{L}\p{N}]+', $e)
+  if ($o.Length -gt 60) { $o.Substring(0, 60) } else { $o }
+}
+
 function Open-SelfChat($w) {
   if (Test-SelfTitle $w) { return $w }
-  # the self chat's list item starts with "<name> (あなた|自分|...)"; work accounts append the
-  # latest message and time after it, so the marker is not required at the end
-  $item = Find-All $w $CT::TreeItem | Where-Object { $_.Current.Name -match "^[^:：]{1,60}? $SELF" } |
-    Sort-Object { $_.Current.Name.Length } | Select-Object -First 1
-  if (-not $item) { Fail 'self chat not found in chat list (open the Chat tab)' }
+  $item = Find-SelfItem $w
+  if (-not $item) { Fail 'self chat not found in chat list (open it once by hand and run -Action learn)' }
   try { $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() }
   catch { $item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
   for ($i = 0; $i -lt 20; $i++) {
@@ -90,8 +114,19 @@ if ($Action -eq 'diag') {
   $found = @{}
   foreach ($i in $items) { foreach ($m in [regex]::Matches($i.Current.Name, '\(([^)]{1,8})\)')) { $found[$m.Groups[1].Value] = 1 + [int]$found[$m.Groups[1].Value] } }
   $tabs = @(Find-All $w $CT::TabItem | Where-Object { try { $_.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected } catch { $false } } | ForEach-Object { $_.Current.Name } | Where-Object { $_.Length -le 12 })
-  Out-Json @{ ok = $true; titleShape = $shape; chatListItems = $items.Count; parenMarkers = $found; selectedTabs = $tabs
-              selfItemMatched = [bool]($items | Where-Object { $_.Current.Name -match "^[^:：]{1,60}? $SELF" }) }
+  # most useful fields first: the result sheet truncates long lines
+  Out-Json ([ordered]@{ ok = $true; selfItemFound = [bool](Find-SelfItem $w); learnedName = [bool](Get-SelfName)
+              parenMarkers = $found; titleShape = $shape; chatListItems = $items.Count; selectedTabs = $tabs
+              itemShapes = @($items | Select-Object -First 8 | ForEach-Object { Mask $_.Current.Name }) })
+  exit 0
+}
+if ($Action -eq 'learn') {
+  if (-not $w) { Fail 'Teams window not found' }
+  if ($w.Current.Name -notmatch "\| ([^|]+?) $SELF \|") { Fail 'open your self chat in Teams first, then run learn' }
+  $name = $Matches[1].Trim()
+  New-Item -ItemType Directory -Force (Split-Path $NameFile) | Out-Null
+  [IO.File]::WriteAllText($NameFile, $name, (New-Object Text.UTF8Encoding $false))
+  Out-Json ([ordered]@{ ok = $true; learned = $true; itemFound = [bool](Find-SelfItem $w) })   # the name itself is not printed
   exit 0
 }
 if ($Action -eq 'status') { Out-Json @{ ok = $true; teams = [bool]$w; selfChatOpen = [bool](Test-SelfTitle $w) }; exit 0 }

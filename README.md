@@ -60,7 +60,36 @@ Azure DevOps Service Hook `workitem.created`、議事録 `{title, date, text}`�
 同梱の型: スケジュール変更 / 障害対応 / スコープ変更 / 人員調整 / リリース判定 / ステークホルダー対応 / リスク対応 / 要件明確化。
 `none` や低確信度は従来の経路（例: 急ぎ度の判定）へ戻る。
 
+## ローカル判断モデル（Kev）
+
+社外にデータを出さない場合は、Jev と同じ API のローカルモデル [Kev](https://github.com/jaredpalmer/kev)（Apache-2.0）を使う。
+
+```bash
+# Kev 側（別フォルダ。CPU でも動く。初回に重みを取得）
+uv sync --extra serve
+uv run --extra serve python -m kev.serve --run jaredpalmer/kev-4b --port 8009
+# kimeru 側
+python -m kimeru --backend kev run examples/teams_chat.json    # 接続先: KIMERU_KEV_URL（既定 http://127.0.0.1:8009/v1）
+```
+
+`KIMERU_BACKEND=kev` を設定すると既定のバックエンドになる。閾値は Jev に合わせてあるため、Kev では `python eval/run_eval.py live --backend kev` で自分のデータに対する精度と確信度を確認してから使う。
+
+## 1 日の自動運転（daily）
+
+```bash
+python -m kimeru --backend kev daily --send               # 5 分ごとに回し続ける
+python -m kimeru --backend kev schedule install --minutes 5   # タスクスケジューラに登録（管理者権限不要）
+```
+
+1 サイクル: Teams のチャット一覧を取り込み（1 対 1 とメンション）→ 判断 → 人の確認が必要なものを自分とのチャットへ → iPhone などからの OK/NG を反映 → 朝（既定 8 時以降の最初のサイクル）にまとめを 1 回投稿。どれかの段が失敗しても残りは続き、`out/daily.log.jsonl` に残る。
+
 ## 取り込み（pull）
+
+```bash
+python -m kimeru pull teams --inbox inbox     # 画面のチャット一覧（API・同意なし）。初回は現状を記録するだけ
+```
+
+チャットの種類はチャット ID で判定する（`48:notes` = 自分とのチャット、`…@unq.gbl.spaces` = 1 対 1、`19:meeting_…` = 会議、その他の `…@thread.…` = グループ）。取り込むのは 1 対 1 とメンションされたチャットで、プレビューや時刻が前回から変わったものだけ。
 
 アプリ登録も管理者同意も不要。本人の `az login` のトークンで定期取得し、inbox に置く（`watch` が処理）。
 

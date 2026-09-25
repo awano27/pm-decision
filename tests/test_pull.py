@@ -95,6 +95,50 @@ class TestFailures(unittest.TestCase):
         self.assertNotIn("secret", str(cm.exception))
 
 
+def chat(cid, kind, preview, time="10:00", mention=False, title="Sato"):
+    return {"id": cid, "kind": kind, "title": title, "preview": preview, "time": time, "unread": True, "mention": mention}
+
+
+class TestTeams(unittest.TestCase):
+    ONE = "19:aaa_bbb@unq.gbl.spaces"
+    GRP = "19:ccc@thread.v2"
+
+    def test_first_poll_is_baseline_then_diff(self):
+        sec = {}
+        base = [chat(self.ONE, "oneOnOne", "リリースの件どうしますか"), chat("48:notes", "self", "[kimeru #1] x")]
+        self.assertEqual(pull.teams_events(base, sec), [])
+        self.assertEqual(pull.teams_events(base, sec), [])                     # unchanged
+        evs = pull.teams_events([chat(self.ONE, "oneOnOne", "至急判断お願いします", "10:05")], sec)
+        self.assertEqual(len(evs), 1)
+        ev = evs[0]
+        self.assertEqual((ev["kind"], ev["chat_kind"], ev["author"], ev["text"]), ("teams.chat", "oneOnOne", "Sato", "至急判断お願いします"))
+        self.assertEqual(events.normalize(ev)[0], ev)                          # passes straight into the graphs
+
+    def test_filters(self):
+        sec = {"sigs": {"x": "y"}}  # not first poll
+        evs = pull.teams_events([
+            chat(self.GRP, "group", "雑談です"),                                # group without mention: skip
+            chat(self.GRP + "2", "group", "@粟野 確認お願いします", mention=True),   # mention: keep
+            chat(self.ONE, "oneOnOne", "あなた: 了解です"),                     # my own last message: skip
+            chat("48:notes", "self", "OK 3"),                                  # self chat: skip
+            chat("19:meeting_x@thread.v2", "meeting", "議事録を共有しました"),    # meeting without mention: skip
+        ], sec)
+        self.assertEqual([e["chat_kind"] for e in evs], ["group"])
+        self.assertTrue(evs[0]["mentions_me"])
+
+    def test_include_existing_and_inbox_drop(self):
+        class B:
+            def chats(self):
+                return [chat(TestTeams.ONE, "oneOnOne", "見積もりの承認をお願いします")]
+        with tempfile.TemporaryDirectory() as d:
+            n = pull.pull_teams(Path(d) / "inbox", Path(d) / "out", bridge=B(), include_existing=True)
+            self.assertEqual(n, 1)
+            f = list((Path(d) / "inbox").glob("*.json"))
+            self.assertEqual(len(f), 1)
+            self.assertNotIn(":", f[0].name)
+            self.assertEqual(pull.pull_teams(Path(d) / "inbox", Path(d) / "out", bridge=B()), 0)
+
+
 class TestAlerts(unittest.TestCase):
     def test_payload_maps_to_common_schema(self):
         ev = events.normalize(pull.alert_payload(ALERT))[0]

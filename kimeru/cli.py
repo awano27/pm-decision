@@ -9,9 +9,13 @@
   python -m kimeru brief [--post [--send]]  # today's top 3 (+ pending approvals)
   python -m kimeru pull ado --org O --project P [--inbox inbox]   # uses `az login`
   python -m kimeru pull alerts --subscription S [--inbox inbox]
+  python -m kimeru pull teams [--inbox inbox]      # Teams chat list on screen: 1:1 + mentions
+  python -m kimeru --backend kev daily [--once] [--send]   # the whole day's loop
+  python -m kimeru --backend kev schedule install [--minutes 5]   # every N min, no admin
 """
 import argparse
 import json
+import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -19,14 +23,18 @@ from pathlib import Path
 
 from . import actions, events, graph
 from . import plan as planner
-from .backends import JevBackend, StubBackend
+from .backends import JevBackend, KevBackend, StubBackend
 
 HERE = Path(__file__).resolve().parent.parent
 DEFAULT_PLAYBOOKS = HERE / "playbooks"
 
 
 def _backend(name, model):
-    return JevBackend(model=model) if name == "jev" else StubBackend()
+    if name == "jev":
+        return JevBackend(model=model)
+    if name == "kev":
+        return KevBackend()
+    return StubBackend()
 
 
 def _append(path, rec):
@@ -70,7 +78,7 @@ def main(argv=None):
     ap.add_argument("--graphs", default=str(HERE / "graphs"))
     ap.add_argument("--playbooks", default=str(DEFAULT_PLAYBOOKS))
     ap.add_argument("--out", default="out")
-    ap.add_argument("--backend", choices=["stub", "jev"], default="stub")
+    ap.add_argument("--backend", choices=["stub", "jev", "kev"], default=os.environ.get("KIMERU_BACKEND", "stub"))
     ap.add_argument("--model", default="jev-latest")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("validate")
@@ -88,14 +96,31 @@ def main(argv=None):
     p_b.add_argument("--top", type=int, default=3)
     p_b.add_argument("--post", action="store_true", help="paste into Teams self chat")
     p_b.add_argument("--send", action="store_true", help="with --post: press Enter")
+    p_d = sub.add_parser("daily", help="pull -> judge -> self-chat queue -> approvals -> morning brief")
+    p_d.add_argument("--inbox", default="inbox")
+    p_d.add_argument("--once", action="store_true", help="one cycle and exit (for the scheduler)")
+    p_d.add_argument("--interval", type=int, default=300, help="seconds between cycles when looping")
+    p_d.add_argument("--send", action="store_true", help="actually send self-chat posts (default: paste only)")
+    p_d.add_argument("--ado-org")
+    p_d.add_argument("--ado-project")
+    p_d.add_argument("--subscription")
+    p_d.add_argument("--brief-hour", type=int, default=8)
+    p_s = sub.add_parser("schedule", help="register/remove `daily --once --send` every N minutes (Task Scheduler, no admin)")
+    p_s.add_argument("action", choices=["install", "remove", "status"])
+    p_s.add_argument("--minutes", type=int, default=5)
+    p_s.add_argument("--extra", default="", help="extra args for daily, e.g. \"--ado-org o --ado-project p\"")
     p_p = sub.add_parser("pull", help="poll ADO / Azure Monitor with your az login into an inbox")
-    p_p.add_argument("source", choices=["ado", "alerts"])
+    p_p.add_argument("source", choices=["ado", "alerts", "teams"])
+    p_p.add_argument("--include-existing", action="store_true", help="teams: also emit chats already on screen at the first poll")
     p_p.add_argument("--inbox", default="inbox")
     p_p.add_argument("--org")
     p_p.add_argument("--project")
     p_p.add_argument("--subscription")
     a = ap.parse_args(argv)
     out = Path(a.out)
+
+    if a.cmd == "schedule":
+        return schedule(a)
 
     if a.cmd == "pull":
         from . import pull
@@ -104,8 +129,12 @@ def main(argv=None):
         if a.source == "alerts" and not a.subscription:
             ap.error("pull alerts needs --subscription")
         try:
-            n = (pull.pull_ado(a.org, a.project, a.inbox, out) if a.source == "ado"
-                 else pull.pull_alerts(a.subscription, a.inbox, out))
+            if a.source == "teams":
+                n = pull.pull_teams(a.inbox, out, include_existing=a.include_existing)
+            elif a.source == "ado":
+                n = pull.pull_ado(a.org, a.project, a.inbox, out)
+            else:
+                n = pull.pull_alerts(a.subscription, a.inbox, out)
         except (pull.PullError, RuntimeError) as e:
             print(f"pull {a.source} failed: {e}", file=sys.stderr)
             return 1
@@ -152,6 +181,16 @@ def main(argv=None):
 
     gs = graph.load_dir(a.graphs, pbs)
     be = _backend(a.backend, a.model)
+    if a.cmd == "daily":
+        from . import daily
+        ado = (a.ado_org, a.ado_project) if a.ado_org and a.ado_project else None
+        while True:
+            r = daily.cycle(out, a.inbox, gs, be, pbs, process, send=a.send, ado=ado,
+                            subscription=a.subscription, brief_hour=a.brief_hour)
+            print(datetime.now().strftime("%H:%M"), json.dumps(r, ensure_ascii=False), flush=True)
+            if a.once:
+                return 0
+            time.sleep(a.interval)
     if a.cmd == "run":
         for f in a.files:
             for r in process(json.loads(Path(f).read_text(encoding="utf-8")), gs, be, out, pbs):
@@ -189,3 +228,32 @@ def digest(out):
     for r in q:
         print(f"- [{r['event_kind']} #{r['event_id']}] {r['advice']}")
     return 0
+
+
+TASK = "kimeru-daily"
+
+
+def schedule(a):
+    """Windows Task Scheduler entry that runs one daily cycle every N minutes as the
+    current user (no admin). pythonw avoids a console window flashing each run."""
+    import shutil
+    import subprocess
+    if a.action == "remove":
+        return subprocess.run(["schtasks", "/Delete", "/TN", TASK, "/F"]).returncode
+    if a.action == "status":
+        return subprocess.run(["schtasks", "/Query", "/TN", TASK, "/V", "/FO", "LIST"]).returncode
+    exe = Path(sys.executable)
+    pyw = exe.with_name("pythonw.exe")
+    runner = pyw if pyw.exists() else exe
+    root = HERE
+    out = Path(a.out).resolve()
+    backend = f"--backend {a.backend}" if a.backend != "stub" else ""
+    cmd = (f'cmd /c cd /d "{root}" && "{runner}" -m kimeru --out "{out}" {backend} daily --once --send '
+           f'--inbox "{out / "inbox"}" {a.extra}').strip()
+    if len(cmd) > 261:
+        print("command too long for schtasks /TR; move kimeru to a shorter path", file=sys.stderr)
+        return 1
+    r = subprocess.run(["schtasks", "/Create", "/TN", TASK, "/SC", "MINUTE", "/MO", str(a.minutes),
+                        "/TR", cmd, "/F", "/RL", "LIMITED"])
+    print(("installed: " if r.returncode == 0 else "failed: ") + cmd)
+    return r.returncode

@@ -45,6 +45,9 @@ class PowerShellBridge:
     def read(self):
         return self._run("-Action", "read")
 
+    def chats(self):
+        return self._run("-Action", "chats").get("chats", [])
+
 
 def format_post(n, rec):
     ev = rec.get("event_kind", "")

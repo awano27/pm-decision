@@ -21,6 +21,7 @@ $Results = [ordered]@{}   # not $R: PowerShell names are case-insensitive ($r is
 $tmp = Join-Path $env:TEMP ("kimeru-check-" + (Get-Random -Minimum 10000 -Maximum 99999))
 New-Item -ItemType Directory -Force $tmp | Out-Null
 
+if ($Only -contains 'monday') { $Only = @('T9', 'T12', 'T13') }   # short Monday session (T3/T6/T8 run anyway)
 function Want($t) { -not $Only -or $Only -contains $t }
 function Fails($s) {
   # prefer our one-line "... failed: ..." message, else the last traceback line
@@ -255,6 +256,35 @@ elseif ($py -and (YesNo "   Jev（社外クラウド）に架空のサンプル1
   $j = Py @('-m', 'kimeru', '--backend', 'jev', '--out', (Join-Path $tmp 'jev'), 'run', 'examples	eams_chat.json')
   Rec 'T11' $(if ($j -match 'plan:') { 'OK ' + (Short (($j -split "`n") | Where-Object { $_ -match 'path:' } | Select-Object -First 1)) } else { 'NG ' + (Short ($j -replace '[A-Za-z0-9_\-]{24,}', '<redacted>')) })
 } else { Rec 'T11' 'SKIP' }
+
+# ---- T12: Teams chat list for `kimeru pull teams` (read-only, counts only) ----
+if ($uia -and (Want 'T12')) {
+  Say "T12 チャット一覧の読み取り（pull teams の試運転・読み取りのみ）"
+  $c = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'teams-self.ps1') -Action chats 2>&1 | Out-String
+  try {
+    $cs = @(($c.Trim().TrimStart([char]0xFEFF) | ConvertFrom-Json).chats)
+    $kinds = ($cs | Group-Object kind | ForEach-Object { "$($_.Name)=$($_.Count)" }) -join ' '
+    $withText = @($cs | Where-Object { $_.title -and $_.preview }).Count
+    Rec 'T12' ("OK chats={0} [{1}] title+preview={2} unread={3} mention={4}" -f $cs.Count, $kinds, $withText,
+      @($cs | Where-Object unread).Count, @($cs | Where-Object mention).Count)
+  } catch { Rec 'T12' ('NG ' + (Short $c)) }
+}
+
+# ---- T13: can Kev (local, Jev-compatible model) run here? (no downloads) ----
+if (Want 'T13') {
+  Say "T13 ローカル判断モデル（kev）の事前チェック（ダウンロードなし）"
+  $cs = Get-CimInstance Win32_ComputerSystem; $cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1)
+  $free = [math]::Round((Get-PSDrive C).Free / 1GB)
+  $vc = Test-Path "$env:SystemRoot\System32\vcruntime140.dll"
+  $net = foreach ($u in 'https://pypi.org/simple/', 'https://github.com', 'https://huggingface.co') {
+    try { $null = Invoke-WebRequest $u -Method Head -UseBasicParsing -TimeoutSec 8; ($u -replace 'https://|/.*$', '') + '=OK' }
+    catch { ($u -replace 'https://|/.*$', '') + '=NG' }
+  }
+  $lp = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -ErrorAction SilentlyContinue).LongPathsEnabled
+  Rec 'T13' ("RAM={0}GB CPU={1}C/{2}T free={3}GB VCruntime={4} LongPaths={5} net: {6}" -f
+    [math]::Round($cs.TotalPhysicalMemory / 1GB), $cpu.NumberOfCores, $cpu.NumberOfLogicalProcessors, $free,
+    $(if ($vc) { 'あり' } else { 'なし' }), $(if ($lp -eq 1) { 'on' } else { 'off' }), ($net -join ' '))
+}
 
 # ---- Result ----
 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

@@ -21,30 +21,51 @@ class JevBackend:
     """TypeSafe System One. Key comes from the environment only (never a file)."""
 
     API = "https://api.typesafe.ai/v1"
+    NAME = "Jev"
+    TIMEOUT = 60
 
-    def __init__(self, model="jev-latest", key_env="TYPESAFE_API_KEY", retries=4):
-        self._key = os.environ.get(key_env)
-        if not self._key:
+    def __init__(self, model="jev-latest", key_env="TYPESAFE_API_KEY", retries=4, api=None, key_required=True):
+        self._key = os.environ.get(key_env) or ""
+        if key_required and not self._key:
             raise SystemExit(f"{key_env} is not set")
+        self.api = (api or self.API).rstrip("/")
         self.model, self.retries = model, retries
 
     def ask(self, state, questions):
         body = json.dumps({"state": state, "model": self.model, "questions": jev_questions(questions)}).encode("utf-8")
         delay = 1.0
         for attempt in range(self.retries):
-            req = urllib.request.Request(self.API + "/systemone", data=body, method="POST", headers={
-                "Authorization": "Bearer " + self._key, "Content-Type": "application/json",
-                "User-Agent": "kimeru/0.1"})
+            headers = {"Content-Type": "application/json", "User-Agent": "kimeru/0.1"}
+            if self._key:
+                headers["Authorization"] = "Bearer " + self._key
+            req = urllib.request.Request(self.api + "/systemone", data=body, method="POST", headers=headers)
             try:
-                with urllib.request.urlopen(req, timeout=60) as r:
+                with urllib.request.urlopen(req, timeout=self.TIMEOUT) as r:
                     return json.loads(r.read().decode("utf-8"))["answers"]
             except urllib.error.HTTPError as e:
                 if e.code in (429, 500, 502, 503, 504, 529) and attempt < self.retries - 1:
                     time.sleep(delay)
                     delay *= 2
                     continue
-                msg = e.read().decode("utf-8", "replace")[:300].replace(self._key, "<key>")
-                raise RuntimeError(f"Jev HTTP {e.code}: {msg}") from None
+                msg = e.read().decode("utf-8", "replace")[:300]
+                if self._key:
+                    msg = msg.replace(self._key, "<key>")
+                raise RuntimeError(f"{self.NAME} HTTP {e.code}: {msg}") from None
+            except urllib.error.URLError as e:
+                raise RuntimeError(f"{self.NAME} not reachable at {self.api} ({e.reason})") from None
+
+
+class KevBackend(JevBackend):
+    """Kev (jaredpalmer/kev): a Jev-compatible model served on this PC by `kev.serve`.
+    Same API as Jev; nothing leaves the machine. URL from KIMERU_KEV_URL (default
+    http://127.0.0.1:8009/v1); key only if the server sets KEV_API_KEY."""
+
+    NAME = "Kev"
+    TIMEOUT = 300  # CPU inference is slow on the first request
+
+    def __init__(self, model="kev", retries=2):
+        super().__init__(model=model, key_env="KEV_API_KEY", retries=retries,
+                         api=os.environ.get("KIMERU_KEV_URL", "http://127.0.0.1:8009/v1"), key_required=False)
 
 
 class StubBackend:

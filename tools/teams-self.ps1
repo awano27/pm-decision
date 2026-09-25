@@ -9,6 +9,10 @@
   send                 -> press Enter only if the compose box starts with "[kimeru"
   diag                 -> JSON with only structure hints for troubleshooting "self chat not found":
                           window title shape and chat-list item shapes (letters masked), markers
+  chats                -> JSON list of chat-list entries for `kimeru pull teams` (local use only):
+                          {id, kind: self|oneOnOne|group|meeting|other, title, preview, time, unread, mention}
+                          kind comes from the chat id in the UIA AutomationIds (48:notes = self chat,
+                          *@unq.gbl.spaces = 1:1, 19:meeting_* = meeting, *@thread.* = group)
   learn                -> while the self chat is open, remember your display name (read from the
                           window title) in %LOCALAPPDATA%\kimeru\self-name.txt so `open` can find
                           the self chat in lists whose items carry no "(自分)" marker. Local only.
@@ -22,7 +26,7 @@
   Personal Teams shows "(あなた)"; work accounts may show "(自分)". Override with -SelfMarker.
 #>
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('status', 'open', 'post', 'send', 'read', 'diag', 'learn')][string]$Action,
+  [Parameter(Mandatory = $true)][ValidateSet('status', 'open', 'post', 'send', 'read', 'diag', 'learn', 'chats')][string]$Action,
   [string]$Text = '',
   [switch]$Send,
   [string]$SelfMarker = $env:KIMERU_SELF_MARKER   # e.g. "自分" if your Teams shows another word
@@ -75,8 +79,42 @@ function Get-ChatItems($w) {
   @(Find-All $w $CT::TreeItem) + @(Find-All $w $CT::ListItem)
 }
 
+function Get-Raw($el, $max = 5) {
+  # raw view: the unnamed Groups that carry the chat-list AutomationIds are not in FindAll's view
+  $out = New-Object System.Collections.Generic.List[object]
+  $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+  $stack = New-Object System.Collections.Stack
+  $stack.Push(@($el, 0))
+  while ($stack.Count) {
+    $e, $d = $stack.Pop()
+    if ($d -ge $max) { continue }
+    $k = $walker.GetFirstChild($e)
+    while ($k) { $out.Add($k); $stack.Push(@($k, ($d + 1))); $k = $walker.GetNextSibling($k) }
+  }
+  $out
+}
+
+function Get-ChatId($item) {
+  # chat-list entries contain children with AutomationIds like "title-chat-list-item_<chat id>"
+  foreach ($d in (Get-Raw $item 4)) {
+    if ($d.Current.AutomationId -match '^title-chat-list-item_(.+)$') { return $Matches[1] }
+  }
+  $null
+}
+
+function Get-ChatKind($id) {
+  if ($id -eq '48:notes') { 'self' }
+  elseif ($id -match '@unq\.gbl\.spaces$') { 'oneOnOne' }
+  elseif ($id -match '^19:meeting_') { 'meeting' }
+  elseif ($id -match '@thread\.') { 'group' }
+  else { 'other' }
+}
+
 function Find-SelfItems($w) {
   $items = Get-ChatItems $w
+  # 0) the self chat's id is "48:notes" in current Teams: language independent
+  $byId = @($items | Where-Object { $_.Current.Name.Length -lt 400 -and (Get-ChatId $_) -eq '48:notes' })
+  if ($byId) { return @($byId | Select-Object -First 1) }
   # 1) "<name> (あなた|自分|...)" at the start; work accounts append the latest message and time
   $hit = $items | Where-Object { $_.Current.Name -match "^[^:：]{1,60}? $SELF" }
   # 2) learned display name as a whole word near the start (items may carry a type prefix such as
@@ -127,6 +165,34 @@ if ($Action -eq 'diag') {
   Out-Json ([ordered]@{ ok = $true; selfItemFound = [bool](Find-SelfItem $w); learnedName = [bool](Get-SelfName)
               parenMarkers = $found; titleShape = $shape; treeItems = $tree.Count; listItems = $list.Count; selectedTabs = $tabs
               itemShapes = @($items | Select-Object -First 8 | ForEach-Object { Mask $_.Current.Name }) })
+  exit 0
+}
+if ($Action -eq 'chats') {
+  if (-not $w) { Fail 'Teams window not found' }
+  $name = Get-SelfName
+  $rows = foreach ($it in (Get-ChatItems $w)) {
+    $id = Get-ChatId $it
+    if (-not $id) { continue }
+    $f = @{}
+    foreach ($d in (Get-Raw $it 4)) {
+      $aid = $d.Current.AutomationId
+      foreach ($k in 'title', 'time', 'message-preview') {
+        if ($aid -like "$k-chat-list-item_*") {
+          $txt = (@(Get-Raw $d 3 | ForEach-Object { $_.Current.Name } | Where-Object { $_ }) -join ' ').Trim()
+          if (-not $txt) { $txt = $d.Current.Name }
+          $f[$k] = $txt
+        }
+      }
+    }
+    $full = $it.Current.Name
+    $preview = [string]$f['message-preview']
+    [ordered]@{
+      id = $id; kind = (Get-ChatKind $id); title = [string]$f['title']; preview = $preview; time = [string]$f['time']
+      unread = [bool]($full -match '未読|Unread|新しいメッセージ|New message')
+      mention = [bool]($full -match 'メンション|mentioned' -or ($name -and $preview -match ('@\s*' + [regex]::Escape($name))))
+    }
+  }
+  Out-Json ([ordered]@{ ok = $true; chats = @($rows) })
   exit 0
 }
 if ($Action -eq 'learn') {

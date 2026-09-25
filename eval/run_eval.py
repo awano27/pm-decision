@@ -96,13 +96,20 @@ def score(answers_path):
     print("\n".join(misses) or "  none")
 
 
-def live(out):
-    from kimeru.backends import JevBackend
-    be = JevBackend()
+def live(out, backend="jev"):
+    import time
+    from kimeru.backends import JevBackend, KevBackend
+    be = KevBackend() if backend == "kev" else JevBackend()
+    times = []
     with open(out, "w", encoding="utf-8") as f:
         for fx in fixtures():
             r = request(fx)
-            f.write(json.dumps({"id": r["id"], "answers": be.ask(r["state"], r["questions"])}, ensure_ascii=False) + "\n")
+            t0 = time.time()
+            ans = be.ask(r["state"], r["questions"])
+            times.append(time.time() - t0)
+            f.write(json.dumps({"id": r["id"], "answers": ans}, ensure_ascii=False) + "\n")
+    times.sort()
+    print(f"latency per request: median {times[len(times) // 2]:.2f}s, max {times[-1]:.2f}s ({len(times)} requests)")
     score(out)
 
 
@@ -114,6 +121,7 @@ if __name__ == "__main__":
     p.add_argument("answers")
     p = sub.add_parser("live")
     p.add_argument("--out", default="answers.jsonl")
+    p.add_argument("--backend", choices=["jev", "kev"], default="jev")
     a = ap.parse_args()
     if a.cmd == "dump":
         for fx in fixtures():
@@ -121,4 +129,4 @@ if __name__ == "__main__":
     elif a.cmd == "score":
         score(a.answers)
     else:
-        live(a.out)
+        live(a.out, a.backend)

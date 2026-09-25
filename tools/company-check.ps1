@@ -19,7 +19,7 @@ New-Item -ItemType Directory -Force $tmp | Out-Null
 function Say($t) { Write-Host ""; Write-Host "== $t" -ForegroundColor Cyan }
 function Rec($k, $v) { $Results[$k] = $v; Write-Host ("   {0}: {1}" -f $k, $v) -ForegroundColor Yellow }
 function Short($s) { $x = ([string]$s -replace '\s+', ' ').Trim(); if ($x.Length -gt 160) { $x.Substring(0, 160) } else { $x } }
-function YesNo($q) { (Read-Host "$q [y/N]") -match '^(y|yes|はい)$' }
+function YesNo($q) { (Read-Host "$q [y/N]") -match '^\s*([yYｙＹ]|はい)' }   # tolerate stray keys after y ("y[")
 function Self($action, [string[]]$extra = @()) {
   $out = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'teams-self.ps1') -Action $action @extra 2>&1 | Out-String
   try { return ($out.Trim().TrimStart([char]0xFEFF) | ConvertFrom-Json) } catch { return [pscustomobject]@{ ok = $false; error = (Short $out) } }
@@ -114,6 +114,7 @@ if ($uia) {
 Say "T6 Python"
 $py = $null
 foreach ($c in @(@('python'), @('py', '-3'))) {
+  if (-not (Get-Command $c[0] -ErrorAction SilentlyContinue)) { continue }
   $v = & $c[0] $c[1..9] --version 2>&1 | Out-String
   if ($v -match 'Python 3\.(\d+)' -and [int]$Matches[1] -ge 10) { $py = $c; break }
 }

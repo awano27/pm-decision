@@ -191,9 +191,11 @@ if ($Action -eq 'read') {
         $entry = "P:" + $Matches[1]
         if (-not $posts.Contains($Matches[1])) { $posts.Add($Matches[1]) }
       }
-      elseif ($l -match '^(OK|NG|保留)\s*#?\d+$') {
-        $entry = "R:" + $l
-        if (-not $seen.ContainsKey($l)) { $seen[$l] = 1; $replies.Add($l) }
+      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留)\s*#?(\d+)$') {
+        # phones often send full-width or re-cased text ("ＯＫ　６７５", "Ok 675"): canonicalize
+        $c = '{0} {1}' -f $Matches[1].ToUpper(), $Matches[2]
+        $entry = "R:" + $c
+        if (-not $seen.ContainsKey($c)) { $seen[$c] = 1; $replies.Add($c) }
       }
       if ($entry -and ($timeline.Count -eq 0 -or $timeline[$timeline.Count - 1] -ne $entry)) { $timeline.Add($entry) }
     }

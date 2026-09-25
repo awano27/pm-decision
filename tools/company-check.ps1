@@ -37,13 +37,14 @@ function Probe($label) {
   Remove-Item $f -ErrorAction SilentlyContinue   # may contain names; only counts are kept
   return @{ ok = ($n -ge 100); elements = $n; labels = $labels; types = (Short $types) }
 }
+$script:PostSeen = $false
 function WaitReply($id, $word) {
   $deadline = (Get-Date).AddSeconds($WaitSec)
   while ((Get-Date) -lt $deadline) {
     $r = Self 'read'
     if ($r.ok -and $r.timeline) {
       $tl = @($r.timeline); $last = -1
-      for ($i = 0; $i -lt $tl.Count; $i++) { if ($tl[$i] -eq "P:$id") { $last = $i } }
+      for ($i = 0; $i -lt $tl.Count; $i++) { if ($tl[$i] -eq "P:$id") { $last = $i; $script:PostSeen = $true } }
       for ($i = $last + 1; $last -ge 0 -and $i -lt $tl.Count; $i++) { if ($tl[$i] -eq "R:$word $id") { return $true } }
     }
     Start-Sleep -Seconds 10
@@ -106,11 +107,13 @@ if ($uia) {
       $p1 = Self 'post' @('-Text', "[kimeru #$n] 会社PCテスト\n返信: OK $n")
       $s1 = if ($p1.ok -and $p1.typed) { Self 'send' } else { $p1 }
       if ($s1.ok) {
-        Write-Host "   会社の iPhone の Teams で、自分とのチャットに「OK $n」と返信してください（最大 $WaitSec 秒待ちます）" -ForegroundColor Green
+        Write-Host "   会社の iPhone の Teams で、自分とのチャットに「OK $n」と返信してください（全角でも可。最大 $WaitSec 秒待ちます）" -ForegroundColor Green
+        Write-Host "   ※ 自分宛てのメッセージなので iPhone に通知は来ないことがあります。Teams アプリで自分とのチャットを開いてください" 
         $got = WaitReply $n 'OK'
         $push = Read-Host "   iPhone に通知は届きましたか？ [y/n]"
         Rec 'T4' 'OK'
-        Rec 'T5' ("送信=OK iPhone通知={0} 返信読取={1}" -f $(if ($push -match '^y') { 'あり' } else { 'なし' }), $(if ($got) { 'OK' } else { 'NG(タイムアウト)' }))
+        $replied = if ($got) { 'y' } else { Read-Host "   iPhone から返信しましたか？ [y/n]" }
+        Rec 'T5' ("送信=OK 投稿を画面で確認={0} iPhone通知={1} 返信した={2} 返信読取={3}" -f $(if ($script:PostSeen) { 'あり' } else { 'なし' }), $(if ($push -match '^\s*[yY]') { 'あり' } else { 'なし' }), $(if ($replied -match '^\s*[yY]') { 'はい' } else { 'いいえ' }), $(if ($got) { 'OK' } else { 'NG(タイムアウト)' }))
         $selfOk = $got
       } else { Rec 'T4' "NG $($p1.error)"; Rec 'T5' "NG $($s1.error)"; $selfOk = $false }
     } else { Rec 'T4' 'SKIP'; Rec 'T5' 'SKIP'; $selfOk = $false }

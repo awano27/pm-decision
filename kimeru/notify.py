@@ -8,12 +8,19 @@ Queue items (advise nodes with queue=true) are posted to the self chat as
 import json
 import re
 import subprocess
+import unicodedata
 from pathlib import Path
 
 from . import actions
 
 HERE = Path(__file__).resolve().parent.parent
-REPLY = re.compile(r"^(OK|NG|保留)\s*#?(\d+)$")
+REPLY = re.compile(r"^(OK|NG|保留)\s*#?(\d+)$", re.IGNORECASE)
+
+
+def parse_reply(line):
+    """("OK", "3") for "OK 3", "ok3", "ＯＫ　３", "Ok #3"; None otherwise."""
+    m = REPLY.match(unicodedata.normalize("NFKC", line).strip())
+    return (m.group(1).upper(), m.group(2)) if m else None
 STATUS = {"OK": "approved", "NG": "rejected", "保留": "held"}
 
 
@@ -112,8 +119,8 @@ def fresh_replies(read):
     out = []
     for i, e in enumerate(tl):
         if e.startswith("R:"):
-            m = REPLY.match(e[2:].strip())
-            if m and i > last_post.get(m.group(2), len(tl)):
+            r = parse_reply(e[2:])
+            if r and i > last_post.get(r[1], len(tl)):
                 out.append(e[2:])
     return out
 
@@ -123,17 +130,18 @@ def collect(out, bridge):
     ap = Approvals(out)
     changes = []
     for line in fresh_replies(bridge.read()):
-        m = REPLY.match(line.strip())
-        if not m:
+        r = parse_reply(line)
+        if not r:
             continue
-        it = ap.data["items"].get(m.group(2))
+        word, num = r
+        it = ap.data["items"].get(num)
         if not it or not it["posted"] or it["status"] not in ("pending", "held"):
             continue
-        new = STATUS[m.group(1)]
+        new = STATUS[word]
         if new == it["status"]:
             continue
         it["status"] = new
-        ch = {"id": int(m.group(2)), "status": new}
+        ch = {"id": int(num), "status": new}
         if new == "approved":
             ch["executed"] = [actions.execute(a, dry_run=True) for a in it["record"].get("actions", [])]
         changes.append(ch)

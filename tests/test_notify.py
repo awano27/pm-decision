@@ -105,6 +105,23 @@ class TestFreshReplies(unittest.TestCase):
             self.assertEqual(notify.collect(d, FakeBridge(["OK 1"])), [])
 
 
+class TestReplyNormalization(unittest.TestCase):
+    def test_phone_variants(self):
+        for s in ("OK 3", "ok 3", "Ok3", "ＯＫ　３", "ｏｋ３", "OK #3", " OK 3 "):
+            self.assertEqual(notify.parse_reply(s), ("OK", "3"), s)
+        self.assertEqual(notify.parse_reply("ＮＧ　１２"), ("NG", "12"))
+        self.assertEqual(notify.parse_reply("保留　４"), ("保留", "4"))
+        for s in ("OK", "OK 3 thanks", "返信: OK 3 / NG 3", "OKAY 3"):
+            self.assertIsNone(notify.parse_reply(s), s)
+
+    def test_collect_accepts_full_width_reply(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_queue(d, REC)
+            notify.notify(d, FakeBridge(), send=True)
+            ch = notify.collect(d, TimelineBridge(["P:1", "R:ＯＫ　１"]))
+            self.assertEqual([c["status"] for c in ch], ["approved"])
+
+
 class TestAdviseNotExecuted(unittest.TestCase):
     def test_advise_actions_are_not_run_by_process(self):
         from kimeru import graph

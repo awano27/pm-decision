@@ -70,8 +70,13 @@ function Find-All($root, $type) {
 $NameFile = Join-Path $env:LOCALAPPDATA 'kimeru\self-name.txt'
 function Get-SelfName { if (Test-Path $NameFile) { (Get-Content $NameFile -Encoding UTF8 -TotalCount 1).Trim() } }
 
-function Find-SelfItem($w) {
-  $items = @(Find-All $w $CT::TreeItem)
+function Get-ChatItems($w) {
+  # the chat list is TreeItems in some Teams layouts and ListItems in others
+  @(Find-All $w $CT::TreeItem) + @(Find-All $w $CT::ListItem)
+}
+
+function Find-SelfItems($w) {
+  $items = Get-ChatItems $w
   # 1) "<name> (あなた|自分|...)" at the start; work accounts append the latest message and time
   $hit = $items | Where-Object { $_.Current.Name -match "^[^:：]{1,60}? $SELF" }
   # 2) learned display name as a whole word near the start (items may carry a type prefix such as
@@ -81,8 +86,9 @@ function Find-SelfItem($w) {
     $rx = '^[^:：,、]{0,20}?(?<!\S)' + [regex]::Escape($name) + '(?=$|[\s(（:：])'
     $hit = $items | Where-Object { $_.Current.Name -match $rx }
   }
-  $hit | Sort-Object { $_.Current.Name.Length } | Select-Object -First 1
+  @($hit | Sort-Object { $_.Current.Name.Length } | Select-Object -First 3)
 }
+function Find-SelfItem($w) { Find-SelfItems $w | Select-Object -First 1 }
 
 function Mask($s) {
   # keep short parentheticals like "(自分)" and punctuation; letters/digits become x
@@ -93,14 +99,16 @@ function Mask($s) {
 
 function Open-SelfChat($w) {
   if (Test-SelfTitle $w) { return $w }
-  $item = Find-SelfItem $w
-  if (-not $item) { Fail 'self chat not found in chat list (open it once by hand and run -Action learn)' }
-  try { $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() }
-  catch { $item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
-  for ($i = 0; $i -lt 20; $i++) {
-    Start-Sleep -Milliseconds 250
-    $w = Get-TeamsWindow
-    if (Test-SelfTitle $w) { return $w }
+  $cands = @(Find-SelfItems $w)
+  if (-not $cands) { Fail 'self chat not found in chat list (open it once by hand and run -Action learn)' }
+  foreach ($item in $cands) {   # a candidate may be a message rather than the chat entry: verify by title
+    try { $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() }
+    catch { try { $item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch { continue } }
+    for ($i = 0; $i -lt 12; $i++) {
+      Start-Sleep -Milliseconds 250
+      $w = Get-TeamsWindow
+      if (Test-SelfTitle $w) { return $w }
+    }
   }
   Fail 'self chat did not open'
 }
@@ -110,13 +118,14 @@ if ($Action -eq 'diag') {
   if (-not $w) { Fail 'Teams window not found' }
   $title = $w.Current.Name
   $shape = (($title -split ' \| ') | ForEach-Object { if ($_ -match '\(([^)]{1,8})\)\s*$') { "<name> ($($Matches[1]))" } elseif ($_ -in 'Microsoft Teams', 'チャット', 'Chat') { $_ } else { '<text>' } }) -join ' | '
-  $items = @(Find-All $w $CT::TreeItem)
+  $tree = @(Find-All $w $CT::TreeItem); $list = @(Find-All $w $CT::ListItem)
+  $items = $tree + $list
   $found = @{}
   foreach ($i in $items) { foreach ($m in [regex]::Matches($i.Current.Name, '\(([^)]{1,8})\)')) { $found[$m.Groups[1].Value] = 1 + [int]$found[$m.Groups[1].Value] } }
   $tabs = @(Find-All $w $CT::TabItem | Where-Object { try { $_.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected } catch { $false } } | ForEach-Object { $_.Current.Name } | Where-Object { $_.Length -le 12 })
   # most useful fields first: the result sheet truncates long lines
   Out-Json ([ordered]@{ ok = $true; selfItemFound = [bool](Find-SelfItem $w); learnedName = [bool](Get-SelfName)
-              parenMarkers = $found; titleShape = $shape; chatListItems = $items.Count; selectedTabs = $tabs
+              parenMarkers = $found; titleShape = $shape; treeItems = $tree.Count; listItems = $list.Count; selectedTabs = $tabs
               itemShapes = @($items | Select-Object -First 8 | ForEach-Object { Mask $_.Current.Name }) })
   exit 0
 }

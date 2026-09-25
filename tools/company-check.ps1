@@ -105,9 +105,15 @@ if ($uia) {
     # names are masked by diag; this tells us how the work account labels the self chat
     $d = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'teams-self.ps1') -Action diag 2>&1 | Out-String
     Rec 'T3-diag' (($d -replace '\s+', ' ').Trim())
-    Write-Host "   自分とのチャットを自動で見つけられませんでした。Teams で「自分とのチャット」を手で開いてから Enter（s + Enter でスキップ）" -ForegroundColor Green
-    if ((Read-Host) -ne 's') {
+    Write-Host "   自分とのチャットを自動で見つけられませんでした。" -ForegroundColor Green
+    Write-Host "   Teams で「自分とのチャット」を手で開いてください（最大 90 秒、開いたら自動で検出します。Ctrl+C で中止）" -ForegroundColor Green
+    $l = $null; $deadline = (Get-Date).AddSeconds(90)
+    while ((Get-Date) -lt $deadline) {
       $l = Self 'learn'   # remembers your display name locally (%LOCALAPPDATA%\kimeru); not shown here
+      if ($l.ok) { Write-Host "   検出しました"; break }
+      Start-Sleep -Seconds 3
+    }
+    if ($l) {
       $s = Self 'open'; $r = Self 'read'
       $selfOk = [bool]($l.ok -and $s.ok -and $r.ok)
       Rec 'T3-learn' $(if ($selfOk) { "OK 表示名を学習（一覧で発見=$($l.itemFound)）" } else { "NG $($l.error) $($s.error) $($r.error)" })

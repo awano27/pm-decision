@@ -162,10 +162,13 @@ def run(scenario, graphs, backend, playbooks, process, out, pace=1.5):
             if be.calls > c0:
                 _w(f"    （モデルの判断 {be.calls - c0} 回、{be.seconds - t0:.1f} 秒）", pace / 3)
 
-    auto = sum(1 for r in results if r["outcome"] == "decide" and not any(s["edge"] == "unsure" for s in r["path"]))
-    safe = sum(1 for r in results if r["outcome"] == "decide" and any(s["edge"] == "unsure" for s in r["path"]))
+    kinds = {nid: n["kind"] for lst in graphs.values() for g in lst for nid, n in g["nodes"].items()}
+    by_rule = lambda r: any(kinds.get(s["node"]) == "match" and s["edge"] == "yes" for s in r["path"])
+    low = lambda r: any(s["edge"] == "unsure" for s in r["path"]) and not by_rule(r)
+    auto = sum(1 for r in results if r["outcome"] == "decide" and not low(r))
+    safe = sum(1 for r in results if r["outcome"] == "decide" and low(r))
     human = sum(1 for r in results if r["outcome"] == "advise")
-    rule = sum(1 for r in results if any(s["edge"] == "yes" and s["node"] in ("critical_outage", "critical_bug") for s in r["path"]))
+    rule = sum(1 for r in results if by_rule(r))
     _w("")
     _w("=== まとめ")
     _w(f"    判断 {len(results)} 件: 自動で決定 {auto} / 確信が低く安全側で決定 {safe} / 人の確認 {human}")

@@ -53,6 +53,7 @@ def process(payload, graphs, backend, out, playbooks=None):
             # decide runs now; advise actions are only proposed until approved (see notify.collect)
             res["executed"] = [actions.execute(a, dry_run=True) for a in res["actions"]] if res["outcome"] == "decide" else []
             res["at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            res["summary"] = events.summary(ev)
             _append(out / "decisions.jsonl", res)
             if res["needs_human"]:
                 _append(out / "queue.jsonl", res)
@@ -99,6 +100,8 @@ def main(argv=None):
     p_demo = sub.add_parser("demo", help="replay a scripted PM day (simulated Teams, real judge) for presentations")
     p_demo.add_argument("--scenario", default=str(HERE / "examples" / "demo_day.json"))
     p_demo.add_argument("--pace", type=float, default=1.5, help="seconds between lines (0 = no pauses)")
+    p_rep = sub.add_parser("report", help="HTML page of the decisions in --out")
+    p_rep.add_argument("--html", help="output file (default: <out>/report.html)")
     p_d = sub.add_parser("daily", help="pull -> judge -> self-chat queue -> approvals -> morning brief")
     p_d.add_argument("--inbox", default="inbox")
     p_d.add_argument("--once", action="store_true", help="one cycle and exit (for the scheduler)")
@@ -182,11 +185,21 @@ def main(argv=None):
     if a.cmd == "digest":
         return digest(out)
 
+    if a.cmd == "report":
+        from . import report
+        page = Path(a.html) if a.html else out / "report.html"
+        page.write_text(report.build(out, graph.load_dir(a.graphs, pbs)), encoding="utf-8")
+        print(page)
+        return 0
+
     gs = graph.load_dir(a.graphs, pbs)
     be = _backend(a.backend, a.model)
     if a.cmd == "demo":
-        from . import demo
+        from . import demo, report
         demo.run(a.scenario, gs, be, pbs, process, out, pace=a.pace)
+        page = out / "report.html"
+        page.write_text(report.build(out, gs, "kimeru デモ: PM の 1 日"), encoding="utf-8")
+        print(f"    レポート: {page}")
         return 0
     if a.cmd == "daily":
         from . import daily

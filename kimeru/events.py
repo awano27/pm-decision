@@ -110,5 +110,22 @@ def normalize(p, source=None):
     return NORMALIZERS[source or detect(p)](p)
 
 
+def summary(event, limit=120):
+    """One human-readable line for logs and reports."""
+    k = event.get("kind")
+    if k == "teams.chat":
+        s = f"{event.get('author') or ''}: {event.get('text') or ''}"
+    elif k == "monitor.alert":
+        s = f"{event.get('rule') or ''} ({event.get('severity') or ''}) {event.get('description') or ''}"
+    elif k == "ado.workitem.created":
+        s = f"#{event.get('id')} {event.get('title') or ''}"
+    elif k == "meeting.item":
+        s = f"{event.get('meeting') or ''}: {event.get('item') or ''}"
+    else:
+        s = str(event.get("id"))
+    s = " ".join(s.split())
+    return s if len(s) <= limit else s[:limit - 1] + "…"
+
+
 def state_of(event):
     return {k: v for k, v in event.items() if k != "raw"}

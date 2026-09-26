@@ -86,12 +86,12 @@ class TestBuild(unittest.TestCase):
         self.assertEqual((d["blocker_eta"]["due"], d["blocker_eta"]["due_level"]), ("今日（目安）", 0))
         self.assertEqual(d["decide"]["due"], plan.DUE_UNSURE)
 
-    def test_kev_profile_lowers_thresholds(self):
-        from kimeru.profiles import PROFILES
-
-        class KevLike(Scripted):
-            profile = PROFILES["kev"]
-        # 0.55 < Jev's 0.6 but >= Kev's 0.6 * 0.8 = 0.48
+    def test_profile_scales_plan_thresholds(self):
+        # the mechanism, independent of the tuned values in profiles.py
+        class Lenient(Scripted):
+            profile = {"conf_scale": 0.8, "noul_scale": 1.0}
+        KevLike = Lenient
+        # 0.55 < default 0.6 but >= 0.6 * 0.8 = 0.48
         a = {"choice": "schedule_change", "confidence": 0.55}
         self.assertEqual(plan.build(NODE, EV, Scripted(a, {}), PBS)[0], "unsure")
         self.assertEqual(plan.build(NODE, EV, KevLike(a, {"first": {"choice": "decide", "confidence": 0.9}}), PBS)[0], "ok")

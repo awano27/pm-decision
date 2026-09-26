@@ -21,7 +21,7 @@ $Results = [ordered]@{}   # not $R: PowerShell names are case-insensitive ($r is
 $tmp = Join-Path $env:TEMP ("kimeru-check-" + (Get-Random -Minimum 10000 -Maximum 99999))
 New-Item -ItemType Directory -Force $tmp | Out-Null
 
-if ($Only -contains 'monday') { $Only = @('T9', 'T12', 'T13', 'T14') }   # short Monday session (T3/T6/T8 run anyway)
+if ($Only -contains 'monday') { $Only = @('T2', 'T9', 'T12', 'T13', 'T14') }   # short Monday session (T3/T6/T8 run anyway)
 function Want($t) { -not $Only -or $Only -contains $t }
 function Fails($s) {
   # prefer our one-line "... failed: ..." message, else the last traceback line
@@ -40,11 +40,22 @@ function Self($action, [string[]]$extra = @()) {
   $out = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'teams-self.ps1') -Action $action @extra 2>&1 | Out-String
   try { return ($out.Trim().TrimStart([char]0xFEFF) | ConvertFrom-Json) } catch { return [pscustomobject]@{ ok = $false; error = (Short $out) } }
 }
-function Probe($label) {
+function Probe($label, $keepAs = $null) {
   $o = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'probe-teams.ps1') -Label $label 2>&1 | Out-String
   $f = Join-Path $root "probe-$label.txt"
   if (-not (Test-Path $f)) { return @{ ok = $false; error = (Short $o) } }
   $lines = Get-Content $f -Encoding UTF8
+  if ($keepAs) {
+    # keep the structure for building the recap parser; mask every control name except known UI words
+    $ui = 'Copilot|要約|まとめ|Recap|Summary|アクション|Action|決定|Decision|メモ|Notes|トランスクリプト|Transcript|チャット|Chat|ファイル|Files|詳細|Details|表示|Show|More|その他'
+    $masked = foreach ($l in $lines) {
+      if ($l -match '^(\s*)(Button|TabItem|MenuItem|ToolBar|Hyperlink|  Button|  TabItem|  MenuItem|  ToolBar|  Hyperlink)(?:\s*\|)?\s(.+)$' -and $Matches[3] -notmatch '^len=') {
+        $pre = $l.Substring(0, $l.Length - $Matches[3].Length); $name = $Matches[3]
+        $pre + [regex]::Replace($name, '[\p{L}\p{N}]+', { param($m) if ($m.Value -match "^($ui)$") { $m.Value } else { 'x' } })
+      } else { $l }
+    }
+    $masked | Out-File -Encoding utf8 (Join-Path $root $keepAs)
+  }
   $n = if ($lines[0] -match 'elements=(\d+)') { [int]$Matches[1] } else { 0 }
   $i = [array]::IndexOf($lines, 'copilot/recap-like UI labels:')
   $labels = 0
@@ -96,8 +107,8 @@ if ($uia) {
   if (Want 'T2') { Say "T2 Copilot 会議まとめ画面の読み取り"
   Write-Host "   Teams で Copilot のまとめ（要約）タブを表示してから Enter。無ければ s + Enter でスキップ" }
   if ((Want 'T2') -and (Read-Host) -ne 's') {
-    $p = Probe 'recap'
-    Rec 'T2' $(if ($p.ok) { "OK elements=$($p.elements) recap系ラベル=$($p.labels)" } else { "NG elements=$($p.elements) $($p.error)" })
+    $p = Probe 'recap' 'kimeru-recap-structure.txt'
+    Rec 'T2' $(if ($p.ok) { "OK elements=$($p.elements) recap系ラベル=$($p.labels) 構造=kimeru-recap-structure.txt（名前は伏せ字。中身を確認してから共有）" } else { "NG elements=$($p.elements) $($p.error)" })
   } elseif (Want 'T2') { Rec 'T2' 'SKIP' }
 
   Say "T3 自分とのチャット"

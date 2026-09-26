@@ -2,18 +2,19 @@
 
 PM の毎日の判断ポイントを、イベント駆動の**判断グラフ**で回す OSS。
 Teams チャット・監視アラート・Azure DevOps のチケット作成・会議議事録が届くたびに、
-グラフのノードで Jev（TypeSafe System One）に型付きの質問を投げ、確信度で分岐し、
-すべての経路を **決定（decide）** か **アドバイス（advise）** で終わらせる。
+グラフのノードで判断モデル（TypeSafe の Jev、または社外にデータを出さないローカルの Kev）に
+型付きの質問を投げ、確信度で分岐し、すべての経路を **決定（decide）** か **アドバイス（advise）** で終わらせる。
 
 ```
-event ─► normalize ─► judge(Jev) ─► judge(Jev) ─► decide  … 自動実行（v0.1 は dry-run）
-                          │ unsure
-                          └──────────────────────► advise  … PM へ。queue=true は人の確認待ち
+event ─► normalize ─► match(規則) ─► judge(Jev/Kev) ─► plan(進め方) ─► decide  … 自動実行（現在は dry-run）
+                          │ 重大                │ unsure
+                          └─► 当番呼び出し/P1    └────────────────► advise  … PM へ（自分とのチャットで OK/NG）
 ```
 
 ## 設計原則
 
 - **人が入るのは確信度が低い枝だけ**。judge ノードは `unsure` ルートが必須（検証で強制）。
+- **重大事象はモデルに任せない**。「顧客が支払えない」「全ユーザーがログインできない」などは `match` ノード（規則）で先に判定し、モデルの評価が低くても当番呼び出し・P1 にする。
 - **Jev は判断だけ、文章は書かない**。返信文・チケット本文はテンプレート（`{event.x}` `{answers.node.choice}`）。
 - **グラフはデータ**。`graphs/*.json` を足すだけで判断ポイントを増やせる。閉路・到達不能ノード・ルート漏れは `validate` で弾く。
 - **外部への書き込みは既定で dry-run**。`decisions.jsonl` に計画だけ記録する。
@@ -22,10 +23,10 @@ event ─► normalize ─► judge(Jev) ─► judge(Jev) ─► decide  … �
 
 | イベント | グラフ | 判断ポイント（Jev） | 終端 |
 |---|---|---|---|
-| Teams チャット | `teams_chat.json` | 意図(choice) → 判断期限(score) | 受領返信・判断タスク化・Bug 化・人の確認 |
-| 監視アラート | `monitor_alert.json` | 解消済み(noul) → 将来のリスクか(noul) → 時期(score) / 顧客影響(score) → ノイズ(noul) | 予防 Task（24h 以内 P1・7 日以内 P2・それ以降 P3）・障害対応計画・P1 Bug・内部 Task・閾値見直し助言 |
-| ADO チケット作成 | `ado_workitem.json` | 着手可能か(noul) → 優先度(choice) | 情報不足コメント・優先度設定・人のトリアージ |
-| 議事録 | `meeting_item.json`（箇条書き1行ごとに展開） | 行の種類(choice) → 担当と期限(noul) | 決定ログ投稿・Task 作成・Risk 登録 |
+| Teams チャット | `teams_chat.json` | 意図(choice) → 進め方(plan) / 判断期限(score) | 受領返信＋手順ごとの Task・Bug 化・人の確認 |
+| 監視アラート | `monitor_alert.json` | 解消済み(noul) → **重大障害(match)** → 将来のリスクか(noul) → 時期(score) / 顧客影響(score) → ノイズ(noul) | 当番呼び出し＋障害対応の進め方・予防 Task（24h 以内 P1・7 日以内 P2・それ以降 P3）・P1 Bug・内部 Task・閾値見直し助言 |
+| ADO チケット作成 | `ado_workitem.json` | **重大バグ(match)** → 着手可能か(noul) → 優先度(score) | P1 固定・情報不足コメント・優先度設定・人のトリアージ |
+| 議事録 | `meeting_item.json`（箇条書き1行ごとに展開） | 行の種類(choice) → 担当(noul) → 期限(noul) / リスクの進め方(plan) | 決定ログ投稿・Task 作成・Risk 登録＋対策手順 |
 
 ## 使い方
 
@@ -72,7 +73,17 @@ uv run --extra serve python -m kev.serve --run jaredpalmer/kev-4b --port 8009
 python -m kimeru --backend kev run examples/teams_chat.json    # 接続先: KIMERU_KEV_URL（既定 http://127.0.0.1:8009/v1）
 ```
 
-`KIMERU_BACKEND=kev` を設定すると既定のバックエンドになる。閾値は Jev に合わせてあるため、Kev では `python eval/run_eval.py live --backend kev` で自分のデータに対する精度と確信度を確認してから使う。
+`KIMERU_BACKEND=kev` を設定すると既定のバックエンドになる。Kev 用のしきい値は `kimeru/profiles.py`。
+
+会社 PC 向けには、Python・torch(CPU)・Kev-4B・土台モデルを 1 フォルダ（約 11GB）にまとめ、`start-kev.cmd` だけでオフライン起動できる持ち込み用フォルダを使う（bf16 でメモリ約 10GB）。
+
+**Kev-4B の評価**（架空の PM イベント 99 件、CPU、`eval/e2e.py` で最終的な行動を採点）:
+
+| 正しい行動 | 人の確認へ | 安全側の代替行動 | 誤った行動 | 重大な取りこぼし |
+|---|---|---|---|---|
+| 52 | 41 | 6 | 0 | 0 |
+
+誤った行動は出ないが、およそ 4 件に 1 件以上を人に回す（特に Teams）。1 件の判断は CPU で中央値 3.6 秒。実データで `eval/run_eval.py tune` による再調整を推奨。
 
 ## 1 日の自動運転（daily）
 
@@ -122,6 +133,24 @@ python -m kimeru pull alerts --subscription <subscription-id> --inbox inbox
 - score: `bands: [[上限(未満), node], ...]` + `unsure`。`min_conf`（既定 0.5）
 - `hints` はオフライン用スタブ専用。Jev には送られない
 
+## match ノード（規則の安全網）
+
+```json
+{"kind": "match", "fields": ["title", "description"], "patterns": ["..."], "exclude": ["テスト環境"], "routes": {"yes": "...", "no": "..."}}
+```
+
+モデルを呼ばずに正規表現で判定する（NFKC 正規化・大文字小文字無視）。`exclude` に当たれば一致しない。
+
+## 評価
+
+```bash
+python eval/run_eval.py live --backend kev --out answers.jsonl   # 判断ポイントごとの正誤
+python eval/e2e.py --backend kev                                  # 最終的な行動の正誤・重大な取りこぼし
+python eval/compare.py jev=answers_jev.jsonl kev=answers_kev.jsonl
+```
+
+詳細は [eval/README.md](eval/README.md)。
+
 ## ロードマップ
 
 - v0.2: ライブ実行器（Teams / ADO / on-call）を action 種別ごとに opt-in で解放
@@ -130,9 +159,14 @@ python -m kimeru pull alerts --subscription <subscription-id> --inbox inbox
 
 ## 会社 PC での動作確認
 
-`run-company-check.cmd` をダブルクリックするだけで全段階を自動確認し、結果シートをクリップボードに出す。
+`run-company-check.cmd` をダブルクリックするだけで全段階を自動確認し、結果シートをクリップボードに出す（`run-company-check.cmd monday` で短縮版）。
+確認後は `setup-company.cmd install` で Kev の自動起動と 5 分ごとの自動運転を登録する（管理者権限不要、`remove` で元に戻す）。
 詳細と手動手順: [docs/company-pc-test.md](docs/company-pc-test.md)
 
 ## 注意
 
-Jev の性能数値は TypeSafe の利用規約上、公開しないこと（README・Issue・公開 CI ログを含む）。
+Jev の性能数値は TypeSafe の利用規約上、公開しないこと（README・Issue・公開 CI ログを含む）。Kev の数値は公開してよい。
+
+## ライセンス
+
+MIT（[LICENSE](LICENSE)）。Kev と Qwen3.5 のモデルはそれぞれ Apache-2.0。

@@ -28,10 +28,22 @@ ADO_FIELDS = ["System.Id", "System.WorkItemType", "System.Title", "System.AreaPa
               "Microsoft.VSTS.Common.AcceptanceCriteria", "Microsoft.VSTS.Common.Priority"]
 
 
+AZ_FALLBACKS = (r"C:\az\bin\az.cmd",)   # the official no-install ZIP unpacked to C:\az
+
+
+def find_az():
+    """KIMERU_AZ, then az on PATH (az.cmd on Windows), then the ZIP location."""
+    import os
+    for cand in (os.environ.get("KIMERU_AZ"), shutil.which("az"), *AZ_FALLBACKS):
+        if cand and Path(cand).exists():
+            return cand
+    return None
+
+
 def az_token(resource):
-    az = shutil.which("az")  # az.cmd on Windows
+    az = find_az()
     if not az:
-        raise RuntimeError("Azure CLI (az) not found; install it and run `az login`")
+        raise RuntimeError("Azure CLI (az) not found: unpack the ZIP to C:\\az or set KIMERU_AZ, then run `az login`")
     r = subprocess.run([az, "account", "get-access-token", "--resource", resource, "--query", "accessToken", "-o", "tsv"],
                        capture_output=True, text=True, timeout=60)
     if r.returncode != 0:

@@ -31,6 +31,15 @@
 目安（開発 PC: Ryzen 9 7940HS の CPU のみ、既定の bf16）: メモリ約 10GB、1 件の判断に中央値 2.5 秒・最大 6 秒。
 bf16 命令のない CPU で遅い場合は、`set KEV_DTYPE=fp32` してから `start-kev.cmd` を実行する（メモリ約 14GB）。
 
+### Azure DevOps のチケットを取り込む場合（az のインストール不要版）
+
+1. 開発 PC の `C:\develop\az-bundle\az` を会社 PC の `C:\az` にコピーする（約 260MB、Microsoft 公式の ZIP 版を展開したもの）
+2. `C:\az\bin\az.cmd login` でサインイン（Azure portal と同じ会社アカウント）
+3. `.\run-company-check.cmd monday` の T10 で、組織名・プロジェクト名を入れるとチケットの取り込みと判断まで確認できる
+4. 常用するなら `.\setup-company.cmd install -AdoOrg <組織> -AdoProject <プロジェクト>`
+
+`C:\az` 以外に置いた場合は、環境変数 `KIMERU_AZ` に `az.cmd` のパスを入れる。
+
 ### 毎日動く状態にする（確認が OK だったら）
 
 ```powershell

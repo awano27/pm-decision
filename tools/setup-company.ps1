@@ -15,7 +15,9 @@
 param(
   [Parameter(Position = 0)][ValidateSet('install', 'remove', 'status')][string]$Action = 'status',
   [string]$KevDir = 'C:\kev',
-  [int]$Minutes = 5
+  [int]$Minutes = 5,
+  [string]$AdoOrg = '',       # with -AdoProject: the daily loop also pulls new ADO work items (needs az, e.g. C:\az)
+  [string]$AdoProject = ''
 )
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
@@ -82,7 +84,8 @@ switch ($Action) {
     # 3) daily cycle every N minutes, hidden, data in %LOCALAPPDATA%\kimeru
     New-Item -ItemType Directory -Force $data | Out-Null
     Push-Location $root
-    try { & $py -m kimeru --backend kev --out $data schedule install --minutes $Minutes; if ($LASTEXITCODE -ne 0) { throw 'schedule install failed' } }
+    $extra = if ($AdoOrg -and $AdoProject) { "--ado-org `"$AdoOrg`" --ado-project `"$AdoProject`"" } else { '' }
+    try { & $py -m kimeru --backend kev --out $data schedule install --minutes $Minutes --extra $extra; if ($LASTEXITCODE -ne 0) { throw 'schedule install failed' } }
     finally { Pop-Location }
     Write-Host "3) 自動運転: $Minutes 分ごと（データ: $data）"
 

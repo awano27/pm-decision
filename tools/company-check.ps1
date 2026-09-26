@@ -21,7 +21,7 @@ $Results = [ordered]@{}   # not $R: PowerShell names are case-insensitive ($r is
 $tmp = Join-Path $env:TEMP ("kimeru-check-" + (Get-Random -Minimum 10000 -Maximum 99999))
 New-Item -ItemType Directory -Force $tmp | Out-Null
 
-if ($Only -contains 'monday') { $Only = @('T2', 'T9', 'T12', 'T13', 'T14') }   # short Monday session (T3/T6/T8 run anyway)
+if ($Only -contains 'monday') { $Only = @('T2', 'T9', 'T10', 'T12', 'T13', 'T14') }   # short Monday session (T3/T6/T8 run anyway)
 function Want($t) { -not $Only -or $Only -contains $t }
 function Fails($s) {
   # prefer our one-line "... failed: ..." message, else the last traceback line
@@ -231,13 +231,16 @@ if ($py) {
 
 # ---- Level 2: Azure CLI ----
 if (Want 'T10') { Say "T10 Azure CLI で取り込み" }
-$az = Get-Command az -ErrorAction SilentlyContinue
+# az: KIMERU_AZ, then PATH, then the official no-install ZIP unpacked to C:\az (same order as kimeru/pull.py)
+$az = @($env:KIMERU_AZ, (Get-Command az -ErrorAction SilentlyContinue).Source, 'C:\az\bin\az.cmd') |
+  Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+if ($az) { $env:KIMERU_AZ = $az }
 if (-not (Want 'T10')) { }
-elseif (-not $az -or -not $py) { Rec 'T10' $(if (-not $az) { 'SKIP az なし' } else { 'SKIP Python なし' }) }
+elseif (-not $az -or -not $py) { Rec 'T10' $(if (-not $az) { 'SKIP az なし（C:\az に ZIP 版を展開）' } else { 'SKIP Python なし' }) }
 else {
-  & az account show -o none 2>$null
-  if ($LASTEXITCODE -ne 0 -and (YesNo "   az にサインインしていません。az login を実行しますか（ブラウザが開きます）")) { & az login -o none 2>&1 | Out-Null }
-  & az account show -o none 2>$null
+  & $az account show -o none 2>$null
+  if ($LASTEXITCODE -ne 0 -and (YesNo "   az にサインインしていません。az login を実行しますか（ブラウザが開きます）")) { & $az login -o none 2>&1 | Out-Null }
+  & $az account show -o none 2>$null
   if ($LASTEXITCODE -ne 0) { Rec 'T10' 'NG az login できず（条件付きアクセス等）' }
   else {
     $inbox = Join-Path $tmp 'inbox'; $res = @()
@@ -247,7 +250,7 @@ else {
       $a = Py @('-m', 'kimeru', '--out', $out, 'pull', 'ado', '--org', $org, '--project', $proj, '--inbox', $inbox)
       $res += "ado=" + (Short $a)
     }
-    $sub = (& az account show --query id -o tsv 2>$null)
+    $sub = (& $az account show --query id -o tsv 2>$null)
     if ($sub -and (YesNo "   現在のサブスクリプションの発報中アラートを読み取りますか（読み取りのみ）")) {
       $a = Py @('-m', 'kimeru', '--out', $out, 'pull', 'alerts', '--subscription', $sub, '--inbox', $inbox)
       $res += "alerts=" + (Short $a)

@@ -60,6 +60,29 @@ class TestAdo(unittest.TestCase):
             self.assertEqual(sum(1 for c in http.calls if "/workitems?" in c[1]), 3)
 
 
+class TestFindAz(unittest.TestCase):
+    def test_order_env_then_path_then_zip(self):
+        import os
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            env_az, zip_az = Path(d) / "env" / "az.cmd", Path(d) / "zip" / "az.cmd"
+            for p in (env_az, zip_az):
+                p.parent.mkdir()
+                p.write_text("@echo off", encoding="ascii")
+            with mock.patch.object(pull, "AZ_FALLBACKS", (str(zip_az),)), mock.patch("shutil.which", return_value=None):
+                with mock.patch.dict(os.environ, {"KIMERU_AZ": str(env_az)}):
+                    self.assertEqual(pull.find_az(), str(env_az))
+                with mock.patch.dict(os.environ, {"KIMERU_AZ": ""}):
+                    self.assertEqual(pull.find_az(), str(zip_az))          # no PATH az: the ZIP location
+                with mock.patch.dict(os.environ, {"KIMERU_AZ": str(Path(d) / "missing.cmd")}):
+                    self.assertEqual(pull.find_az(), str(zip_az))          # a stale KIMERU_AZ is skipped
+            with mock.patch.object(pull, "AZ_FALLBACKS", ()), mock.patch("shutil.which", return_value=None), \
+                    mock.patch.dict(os.environ, {"KIMERU_AZ": ""}):
+                self.assertIsNone(pull.find_az())
+                with self.assertRaises(RuntimeError):
+                    pull.az_token(pull.ADO_RESOURCE)
+
+
 class TestFailures(unittest.TestCase):
     def test_failed_later_chunk_does_not_redeliver_earlier(self):
         calls = {"n": 0}

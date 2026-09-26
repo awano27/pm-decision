@@ -54,10 +54,53 @@ class Timed:
             self.calls += 1
 
 
-def _w(s="", pace=0.0):
+_REC = None   # when recording: list of [line, pause] with pause in "pace units" (1.0 = --pace)
+_PACE = 0.0
+
+
+def _w(s="", units=0.0):
+    """Print a line, then pause `units` x the --pace seconds (recorded in units, so a
+    run made with --pace 0 still replays with pauses)."""
     print(s, flush=True)
-    if pace:
-        time.sleep(pace)
+    if _REC is not None:
+        _REC.append([s, units])
+    if units and _PACE:
+        time.sleep(units * _PACE)
+
+
+def record_to(path, results_fn):
+    """Run `results_fn()` while capturing every demo line, then save them to `path`."""
+    global _REC
+    _REC = []
+    try:
+        return results_fn()
+    finally:
+        lines, _REC = _REC, None
+        Path(path).write_text(json.dumps({"v": 1, "lines": lines}, ensure_ascii=False), encoding="utf-8")
+
+
+_STEP = False   # presenter mode: wait for Enter before each event of the day
+
+
+def _wait():
+    if _STEP:
+        try:
+            input("    （Enter で次へ）")
+        except EOFError:
+            pass
+
+
+def replay(path, pace=1.5, step=False):
+    """Print a recorded demo with the same line-by-line pacing, without any model."""
+    global _STEP
+    _STEP = step
+    rec = json.loads(Path(path).read_text(encoding="utf-8"))
+    for line, units in rec["lines"]:
+        if line.startswith("[") or line.startswith("=== まとめ"):
+            _wait()
+        print(line, flush=True)
+        if pace and units:
+            time.sleep(units * pace)
 
 
 def _action(a):
@@ -101,7 +144,10 @@ def show_result(r, graphs, pace):
             _w(f"      PM へのメモ: {r['advice']}", pace / 3)
 
 
-def run(scenario, graphs, backend, playbooks, process, out, pace=1.5):
+def run(scenario, graphs, backend, playbooks, process, out, pace=1.5, step=False):
+    global _PACE, _STEP
+    _STEP = step
+    _PACE, pace = pace, 1.0   # below, `pace` is one pause unit; _w converts units to seconds
     sc = json.loads(Path(scenario).read_text(encoding="utf-8"))
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -113,6 +159,7 @@ def run(scenario, graphs, backend, playbooks, process, out, pace=1.5):
     _w(f"=== {sc['title']}  （判断: {getattr(backend, 'NAME', type(backend).__name__)}、Teams はデモ用の模擬）", pace)
     for st in sc["steps"]:
         _w("")
+        _wait()
         _w(f"[{st['time']}] {st['label']}", pace / 2)
         src = st["source"]
         if src == "teams":
@@ -170,6 +217,7 @@ def run(scenario, graphs, backend, playbooks, process, out, pace=1.5):
     human = sum(1 for r in results if r["outcome"] == "advise")
     rule = sum(1 for r in results if by_rule(r))
     _w("")
+    _wait()
     _w("=== まとめ")
     _w(f"    判断 {len(results)} 件: 自動で決定 {auto} / 確信が低く安全側で決定 {safe} / 人の確認 {human}")
     _w(f"    うち規則（安全網）で即決定 {rule} 件、モデルの判断 {be.calls} 回・合計 {be.seconds:.1f} 秒")

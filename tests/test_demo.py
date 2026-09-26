@@ -30,6 +30,20 @@ class TestDemo(unittest.TestCase):
             self.assertTrue(nodes & {"page", "page_planned"})
             self.assertTrue((Path(d) / "decisions.jsonl").exists())
 
+    def test_record_then_replay_prints_the_same_lines(self):
+        with tempfile.TemporaryDirectory() as d:
+            rec = Path(d) / "rec.json"
+            live = io.StringIO()
+            with contextlib.redirect_stdout(live):
+                demo.record_to(rec, lambda: demo.run(ROOT / "examples" / "demo_day.json", GRAPHS, StubBackend(),
+                                                     PBS, process, Path(d) / "out", pace=0))
+            data = json.loads(rec.read_text(encoding="utf-8"))
+            self.assertTrue(any(units > 0 for _, units in data["lines"]))    # pauses survive --pace 0
+            again = io.StringIO()
+            with contextlib.redirect_stdout(again):
+                demo.replay(rec, pace=0)
+            self.assertEqual(again.getvalue(), live.getvalue())
+
     def test_every_queued_advise_proposes_an_action(self):
         for lst in GRAPHS.values():
             for g in lst:

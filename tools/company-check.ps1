@@ -259,7 +259,8 @@ else {
       $w = Py @('-m', 'kimeru', '--out', $out, 'watch', $inbox, '--once')
       $res += "判断=" + ([regex]::Matches($w, '(?m)^\[')).Count
     }
-    Rec 'T10' ('az=ログイン済み / ' + $(if ($res) { $res -join ' / ' } else { '取り込み対象の指定なし' }))
+    $azv = (& $az version --query '\"azure-cli\"' -o tsv 2>$null)
+    Rec 'T10' ("az=$azv ログイン済み ($az) / " + $(if ($res) { $res -join ' / ' } else { '取り込み対象の指定なし' }))
   }
 }
 

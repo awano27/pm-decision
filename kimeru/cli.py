@@ -100,6 +100,9 @@ def main(argv=None):
     p_demo = sub.add_parser("demo", help="replay a scripted PM day (simulated Teams, real judge) for presentations")
     p_demo.add_argument("--scenario", default=str(HERE / "examples" / "demo_day.json"))
     p_demo.add_argument("--pace", type=float, default=1.5, help="seconds between lines (0 = no pauses)")
+    p_demo.add_argument("--record", help="also save the run (lines + report) to this file, for --replay")
+    p_demo.add_argument("--replay", help="print a recorded run with the same pacing; no model needed")
+    p_demo.add_argument("--step", action="store_true", help="presenter mode: wait for Enter before each event")
     p_rep = sub.add_parser("report", help="HTML page of the decisions in --out")
     p_rep.add_argument("--html", help="output file (default: <out>/report.html)")
     p_d = sub.add_parser("daily", help="pull -> judge -> self-chat queue -> approvals -> morning brief")
@@ -196,10 +199,24 @@ def main(argv=None):
     be = _backend(a.backend, a.model)
     if a.cmd == "demo":
         from . import demo, report
-        demo.run(a.scenario, gs, be, pbs, process, out, pace=a.pace)
         page = out / "report.html"
+        if a.replay:   # fallback for a live talk: same output, no model
+            rec = json.loads(Path(a.replay).read_text(encoding="utf-8"))
+            demo.replay(a.replay, pace=a.pace, step=a.step)
+            if rec.get("report_html"):
+                out.mkdir(parents=True, exist_ok=True)
+                page.write_text(rec["report_html"], encoding="utf-8")
+                print(f"    レポート: {page}")
+            return 0
+        run = lambda: demo.run(a.scenario, gs, be, pbs, process, out, pace=a.pace, step=a.step)
+        demo.record_to(a.record, run) if a.record else run()
         page.write_text(report.build(out, gs, "kimeru デモ: PM の 1 日"), encoding="utf-8")
         print(f"    レポート: {page}")
+        if a.record:   # keep the report with the recording so a replay can show it too
+            rec = json.loads(Path(a.record).read_text(encoding="utf-8"))
+            rec["report_html"] = page.read_text(encoding="utf-8")
+            Path(a.record).write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
+            print(f"    記録: {a.record}（当日は --replay {a.record} で再生）")
         return 0
     if a.cmd == "daily":
         from . import daily

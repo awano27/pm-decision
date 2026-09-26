@@ -17,8 +17,10 @@ Jev の性能数値は利用規約により出さない。数値は Kev のも�
 ## 前日までの準備（開発用 PC）
 
 1. `C:\develop\kev-bundle\start-kev.cmd` で Kev を起動しておく（起動に数分、メモリ約 10GB）
-2. リハーサル: `python -m kimeru --backend kev --out demo-out demo --pace 1.5`（約 3〜4 分）
-3. 録画を 1 本撮っておく（Kev が落ちたときの代替）。`--pace 0` の出力と `demo-out\report.html` のスクリーンショットも保存
+2. リハーサル兼記録: `python -m kimeru --backend kev --out demo-out demo --step --record demo\demo-recording.json`
+   （`--step` は各イベントの前で Enter 待ち。話す速さに合わせられる。記録ファイルは `demo\`、リポジトリには入らない）
+3. 代替の確認: `python -m kimeru --out demo-out demo --step --replay demo\demo-recording.json`
+   （モデルなしで同じ表示とレポートを再生。Kev が落ちたら当日はこれを使う）。念のため画面の録画も 1 本
 4. ターミナルの文字を大きく（画面共有で読める 20pt 以上）、ウィンドウ幅は 120 桁程度
 5. 通知を切る（Teams・メール）。画面共有は「ウィンドウ」単位で、ターミナルとブラウザだけ
 
@@ -26,8 +28,10 @@ Jev の性能数値は利用規約により出さない。数値は Kev のも�
 
 ```powershell
 cd C:\develop\新ビジネス\kimeru
-python -m kimeru --backend kev --out demo-out demo --pace 1.5
+python -m kimeru --backend kev --out demo-out demo --step
 ```
+
+Enter を押すたびに次のイベントへ進む。下の表の内容を話してから Enter。
 
 | 表示 | 話すこと |
 |---|---|
@@ -44,8 +48,8 @@ python -m kimeru --backend kev --out demo-out demo --pace 1.5
 最後に `demo-out\report.html` をブラウザで開き、1 画面で全体を見せる（色: 赤 = 規則、青 = モデル、紫 = 進め方）。
 
 **うまくいかないとき**
-- Kev が応答しない（`not reachable`）→ `--backend stub`（キーワード判定）で流れだけ見せ、「本番は Kev」と説明
-- 途中で止まった → Ctrl+C して録画に切り替え
+- Kev が応答しない（`not reachable`）→ Ctrl+C して `demo --step --replay demo\demo-recording.json`（前日の Kev の実行を再生）
+- 途中で止まった → 同じく記録の再生に切り替え（最後の手段は画面の録画）
 - 判断の結果がリハーサルと違う → 「モデルなので確信度は毎回少し揺れる。だから確信が低いときは人へ」と説明に使う
 
 ## 想定問答

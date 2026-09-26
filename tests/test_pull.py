@@ -163,6 +163,21 @@ class TestTeams(unittest.TestCase):
 
 
 class TestAlerts(unittest.TestCase):
+    def test_rule_arm_id_becomes_readable_name(self):
+        live_shape = json.loads(json.dumps(ALERT))
+        live_shape.pop("name")
+        live_shape["properties"]["essentials"]["alertRule"] = (
+            "/subscriptions/s1/resourceGroups/rg/providers/microsoft.alertsmanagement/smartdetectoralertrules/Failure Anomalies - app1")
+        ev = events.normalize(pull.alert_payload(live_shape))[0]
+        self.assertEqual(ev["rule"], "Failure Anomalies - app1")
+
+    def test_resolved_is_decided_by_rule_without_a_model(self):
+        g = graph.load_dir(ROOT / "graphs")["monitor.alert"][0]
+        ev = {"kind": "monitor.alert", "id": "r", "rule": "x", "severity": "Sev3", "condition": "Resolved", "description": "back to normal"}
+        from kimeru.backends import ReplayBackend
+        r = graph.run(g, ev, ReplayBackend({}))       # would raise if any model question were asked
+        self.assertEqual(r["node"], "log_resolved")
+
     def test_payload_maps_to_common_schema(self):
         ev = events.normalize(pull.alert_payload(ALERT))[0]
         self.assertEqual(ev["kind"], "monitor.alert")

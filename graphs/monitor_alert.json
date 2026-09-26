@@ -4,19 +4,17 @@
   "start": "resolved",
   "nodes": {
     "resolved": {
-      "kind": "judge",
-      "question": {
-        "type": "noul",
-        "instructions": "Does `condition` indicate the alert has already resolved?",
-        "hints": [
-          "\"condition\": \"resolved\""
-        ]
-      },
-      "yes_at": 0.8,
+      "kind": "match",
+      "_comment": "structured field (Azure Monitor monitorCondition): decided by rule, never by a model. Kev left a real 'Resolved' alert unsure.",
+      "fields": [
+        "condition"
+      ],
+      "patterns": [
+        "^resolved$"
+      ],
       "routes": {
         "yes": "log_resolved",
-        "no": "critical_outage",
-        "unsure": "critical_outage"
+        "no": "critical_outage"
       }
     },
     "impact": {

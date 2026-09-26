@@ -21,8 +21,7 @@ class TestFixtures(unittest.TestCase):
 
     def test_requests_are_jev_shaped(self):
         for fx in run_eval.fixtures():
-            r = run_eval.request(fx)
-            self.assertTrue(r["questions"])
+            r = run_eval.request(fx)   # may be empty when only rule-decided behaviour is exercised (e2e)
             for q in r["questions"].values():
                 self.assertTrue(set(q) <= {"type", "instructions", "criteria"})
 

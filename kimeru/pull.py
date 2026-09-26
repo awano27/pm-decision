@@ -138,7 +138,8 @@ def alert_payload(a):
     ess = (a.get("properties") or {}).get("essentials") or {}
     return {"schemaId": "azureMonitorCommonAlertSchema", "data": {"essentials": {
         "alertId": a.get("id"),
-        "alertRule": ess.get("alertRule") or a.get("name"),
+        # the API gives the rule as a full ARM id ("/subscriptions/.../alertrules/<name>"); keep the readable name
+        "alertRule": a.get("name") or str(ess.get("alertRule") or "").rstrip("/").rsplit("/", 1)[-1],
         "severity": ess.get("severity"),
         "monitorCondition": ess.get("monitorCondition"),
         "firedDateTime": ess.get("startDateTime"),

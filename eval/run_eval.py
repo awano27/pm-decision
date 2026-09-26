@@ -155,6 +155,8 @@ def live(out, backend="jev"):
     with open(out, "w", encoding="utf-8") as f:
         for fx in fixtures():
             r = request(fx)
+            if not r["questions"]:
+                continue   # only rule-decided nodes labeled: nothing to ask a model
             t0 = time.time()
             ans = be.ask(r["state"], r["questions"])
             times.append(time.time() - t0)
@@ -179,7 +181,9 @@ if __name__ == "__main__":
     a = ap.parse_args()
     if a.cmd == "dump":
         for fx in fixtures():
-            print(json.dumps(request(fx), ensure_ascii=False))
+            r = request(fx)
+            if r["questions"]:
+                print(json.dumps(r, ensure_ascii=False))
     elif a.cmd == "score":
         from kimeru.profiles import PROFILES
         score(a.answers, PROFILES[a.profile])

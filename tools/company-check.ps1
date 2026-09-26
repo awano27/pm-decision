@@ -21,7 +21,7 @@ $Results = [ordered]@{}   # not $R: PowerShell names are case-insensitive ($r is
 $tmp = Join-Path $env:TEMP ("kimeru-check-" + (Get-Random -Minimum 10000 -Maximum 99999))
 New-Item -ItemType Directory -Force $tmp | Out-Null
 
-if ($Only -contains 'monday') { $Only = @('T9', 'T12', 'T13') }   # short Monday session (T3/T6/T8 run anyway)
+if ($Only -contains 'monday') { $Only = @('T9', 'T12', 'T13', 'T14') }   # short Monday session (T3/T6/T8 run anyway)
 function Want($t) { -not $Only -or $Only -contains $t }
 function Fails($s) {
   # prefer our one-line "... failed: ..." message, else the last traceback line
@@ -284,6 +284,20 @@ if (Want 'T13') {
   Rec 'T13' ("RAM={0}GB CPU={1}C/{2}T free={3}GB VCruntime={4} LongPaths={5} net: {6}" -f
     [math]::Round($cs.TotalPhysicalMemory / 1GB), $cpu.NumberOfCores, $cpu.NumberOfLogicalProcessors, $free,
     $(if ($vc) { 'あり' } else { 'なし' }), $(if ($lp -eq 1) { 'on' } else { 'off' }), ($net -join ' '))
+}
+
+# ---- T14: local Kev server (start-kev.cmd from the kev bundle) ----
+if ($py -and (Want 'T14')) {
+  Say "T14 ローカル判断モデル（kev）で判断"
+  $up = $false
+  try { $null = Invoke-WebRequest 'http://127.0.0.1:8009/v1/models' -UseBasicParsing -TimeoutSec 5; $up = $true } catch {}
+  if (-not $up) { Rec 'T14' 'SKIP（kev 未起動: C:\kev\start-kev.cmd を先に実行）' }
+  else {
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $k = Py @('-m', 'kimeru', '--backend', 'kev', '--out', (Join-Path $tmp 'kev'), 'run', 'examples	eams_chat.json')
+    $sw.Stop()
+    Rec 'T14' $(if ($k -match 'plan:|path:') { ("OK {0}s " -f [math]::Round($sw.Elapsed.TotalSeconds)) + (Short (($k -split "`n") | Where-Object { $_ -match 'path:' } | Select-Object -First 1)) } else { 'NG ' + (Fails $k) })
+  }
 }
 
 # ---- Result ----

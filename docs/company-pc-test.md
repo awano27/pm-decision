@@ -17,6 +17,9 @@
 
 特定の確認だけやり直す場合は、PowerShell で `.\run-company-check.cmd T9` のように番号を付けて実行する（依存する T3・T6・T8 は自動で実行される。複数指定可: `T5 T9`）。
 
+**月曜の準備**: コピー（`C:\kev`・`C:\az`・kimeru と `.python`）の後、まず `.\prepare-company.cmd`。
+置き場所・空きメモリを確認し、Kev の起動（最小化ウィンドウ）と az のサインインまで行う。「準備 OK」と出たら次へ。
+
 **月曜の短時間チェック**: `.\run-company-check.cmd monday`（T3・T9・T12 チャット一覧の読み取り・T13 kev の事前チェック。10 分以内）
 
 ### ローカル判断モデル（kev）を使う場合

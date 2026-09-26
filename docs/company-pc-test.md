@@ -31,6 +31,18 @@
 目安（開発 PC: Ryzen 9 7940HS の CPU のみ、既定の bf16）: メモリ約 10GB、1 件の判断に中央値 2.5 秒・最大 6 秒。
 bf16 命令のない CPU で遅い場合は、`set KEV_DTYPE=fp32` してから `start-kev.cmd` を実行する（メモリ約 14GB）。
 
+### 毎日動く状態にする（確認が OK だったら）
+
+```powershell
+.\setup-company.cmd install          # Kev の自動起動・KIMERU_BACKEND=kev・5 分ごとの自動運転（管理者権限不要）
+.\setup-company.cmd status           # 状態の確認（Kev の応答・最後のサイクル）
+.\setup-company.cmd remove           # 元に戻す（データは %LOCALAPPDATA%\kimeru に残る）
+```
+
+- 自動運転は画面を出さずに動き、記録は `%LOCALAPPDATA%\kimeru` に置く（ZIP を取り直しても消えない）
+- Kev が起動する前に届いたイベントは受信箱に残り、Kev の起動後に判断される
+- Kev の場所が `C:\kev` 以外なら `-KevDir <場所>`、間隔を変えるなら `-Minutes 10`
+
 以下は同じ内容を手動で 1 つずつ行う場合の手順（かんたん実行が途中で止まったときの切り分け用）。
 
 ## 手動手順

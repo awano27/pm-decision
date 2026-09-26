@@ -235,25 +235,27 @@ TASK = "kimeru-daily"
 
 def schedule(a):
     """Windows Task Scheduler entry that runs one daily cycle every N minutes as the
-    current user (no admin). pythonw avoids a console window flashing each run."""
-    import shutil
+    current user (no admin). The task calls a tiny hidden VBS runner in the data folder,
+    so no console window flashes and the /TR command stays short whatever the repo path."""
     import subprocess
     if a.action == "remove":
         return subprocess.run(["schtasks", "/Delete", "/TN", TASK, "/F"]).returncode
     if a.action == "status":
-        return subprocess.run(["schtasks", "/Query", "/TN", TASK, "/V", "/FO", "LIST"]).returncode
+        return subprocess.run(["schtasks", "/Query", "/TN", TASK, "/FO", "LIST"]).returncode
     exe = Path(sys.executable)
     pyw = exe.with_name("pythonw.exe")
     runner = pyw if pyw.exists() else exe
-    root = HERE
     out = Path(a.out).resolve()
+    out.mkdir(parents=True, exist_ok=True)
     backend = f"--backend {a.backend}" if a.backend != "stub" else ""
-    cmd = (f'cmd /c cd /d "{root}" && "{runner}" -m kimeru --out "{out}" {backend} daily --once --send '
-           f'--inbox "{out / "inbox"}" {a.extra}').strip()
-    if len(cmd) > 261:
-        print("command too long for schtasks /TR; move kimeru to a shorter path", file=sys.stderr)
-        return 1
+    line = (f'cmd /c cd /d "{HERE}" && "{runner}" -m kimeru --out "{out}" {backend} daily --once --send '
+            f'--inbox "{out / "inbox"}" {a.extra}').strip()
+    vbs = out / "run-daily.vbs"
+    # VBS string literal: double every quote; window style 0 = hidden, wait for completion
+    vbs.write_text('CreateObject("WScript.Shell").Run "' + line.replace('"', '""') + '", 0, True\n', encoding="utf-16")  # WSH reads UTF-8 as ANSI: Japanese paths break
+    tr = f'wscript.exe "{vbs}"'
     r = subprocess.run(["schtasks", "/Create", "/TN", TASK, "/SC", "MINUTE", "/MO", str(a.minutes),
-                        "/TR", cmd, "/F", "/RL", "LIMITED"])
-    print(("installed: " if r.returncode == 0 else "failed: ") + cmd)
+                        "/TR", tr, "/F", "/RL", "LIMITED"])
+    print(("installed: " if r.returncode == 0 else "failed: ") + tr)
+    print("runs: " + line)
     return r.returncode

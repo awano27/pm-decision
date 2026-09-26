@@ -37,6 +37,12 @@ def process_inbox(inbox, out, graphs, backend, playbooks, process):
         try:
             n += len(process(json.loads(f.read_text(encoding="utf-8")), graphs, backend, Path(out), playbooks))
             f.replace(done / f.name)
+        except RuntimeError as e:
+            if "not reachable" in str(e):   # judge backend (e.g. local Kev) not up yet: keep files for the next cycle
+                _log(out, {"step": "judge", "waiting": str(e)})
+                break
+            _log(out, {"step": "judge", "file": f.name, "error": f"{type(e).__name__}: {e}"})
+            f.replace(done / (f.name + ".error"))
         except Exception as e:
             _log(out, {"step": "judge", "file": f.name, "error": f"{type(e).__name__}: {e}"})
             f.replace(done / (f.name + ".error"))

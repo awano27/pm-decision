@@ -96,6 +96,9 @@ def main(argv=None):
     p_b.add_argument("--top", type=int, default=3)
     p_b.add_argument("--post", action="store_true", help="paste into Teams self chat")
     p_b.add_argument("--send", action="store_true", help="with --post: press Enter")
+    p_demo = sub.add_parser("demo", help="replay a scripted PM day (simulated Teams, real judge) for presentations")
+    p_demo.add_argument("--scenario", default=str(HERE / "examples" / "demo_day.json"))
+    p_demo.add_argument("--pace", type=float, default=1.5, help="seconds between lines (0 = no pauses)")
     p_d = sub.add_parser("daily", help="pull -> judge -> self-chat queue -> approvals -> morning brief")
     p_d.add_argument("--inbox", default="inbox")
     p_d.add_argument("--once", action="store_true", help="one cycle and exit (for the scheduler)")
@@ -181,6 +184,10 @@ def main(argv=None):
 
     gs = graph.load_dir(a.graphs, pbs)
     be = _backend(a.backend, a.model)
+    if a.cmd == "demo":
+        from . import demo
+        demo.run(a.scenario, gs, be, pbs, process, out, pace=a.pace)
+        return 0
     if a.cmd == "daily":
         from . import daily
         ado = (a.ado_org, a.ado_project) if a.ado_org and a.ado_project else None

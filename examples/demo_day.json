@@ -1,0 +1,132 @@
+{
+  "title": "PM の 1 日（デモ）",
+  "steps": [
+    {
+      "time": "08:30",
+      "source": "teams",
+      "label": "QA リーダーから 1 対 1 チャット",
+      "chat": {
+        "id": "19:sato_pm@unq.gbl.spaces",
+        "kind": "oneOnOne",
+        "title": "佐藤（QA）",
+        "preview": "リリース日を来週火曜にずらしてよいか判断お願いします。QA 環境が止まっていて至急です",
+        "time": "8:30",
+        "unread": true,
+        "mention": false
+      }
+    },
+    {
+      "time": "09:10",
+      "source": "alert",
+      "label": "監視アラート（決済 API）",
+      "payload": {
+        "schemaId": "azureMonitorCommonAlertSchema",
+        "data": {
+          "essentials": {
+            "alertId": "demo-a1",
+            "alertRule": "checkout-api 5xx rate",
+            "severity": "Sev1",
+            "monitorCondition": "Fired",
+            "firedDateTime": "2026-10-09T09:10:00Z",
+            "alertTargetIDs": [
+              "checkout-api"
+            ],
+            "description": "5xx error rate 23% for 10 minutes; customers cannot pay"
+          },
+          "alertContext": {}
+        }
+      }
+    },
+    {
+      "time": "09:40",
+      "source": "alert",
+      "label": "監視アラート（証明書の期限）",
+      "payload": {
+        "schemaId": "azureMonitorCommonAlertSchema",
+        "data": {
+          "essentials": {
+            "alertId": "demo-a2",
+            "alertRule": "ssl cert expiry shop.example.com",
+            "severity": "Sev3",
+            "monitorCondition": "Fired",
+            "firedDateTime": "2026-10-09T09:40:00Z",
+            "alertTargetIDs": [
+              "shop"
+            ],
+            "description": "shop.example.com の証明書が 45 日後に失効します"
+          },
+          "alertContext": {}
+        }
+      }
+    },
+    {
+      "time": "10:15",
+      "source": "ado",
+      "label": "Azure DevOps にバグ起票",
+      "payload": {
+        "eventType": "workitem.created",
+        "resource": {
+          "id": 7001,
+          "fields": {
+            "System.WorkItemType": "Bug",
+            "System.Title": "本番で全ユーザーがログインできない",
+            "System.CreatedBy": {
+              "displayName": "田中"
+            },
+            "System.CreatedDate": "2026-10-09T10:15:00Z",
+            "Microsoft.VSTS.TCM.ReproSteps": "10:02 以降、ログイン画面で ID/PW を入れると 500 エラー"
+          }
+        }
+      }
+    },
+    {
+      "time": "10:30",
+      "source": "ado",
+      "label": "Azure DevOps にタスク起票",
+      "payload": {
+        "eventType": "workitem.created",
+        "resource": {
+          "id": 7002,
+          "fields": {
+            "System.WorkItemType": "Bug",
+            "System.Title": "なんかおかしい",
+            "System.CreatedBy": {
+              "displayName": "鈴木"
+            },
+            "System.CreatedDate": "2026-10-09T10:30:00Z"
+          }
+        }
+      }
+    },
+    {
+      "time": "11:00",
+      "source": "minutes",
+      "label": "週次定例の議事録",
+      "payload": {
+        "title": "週次定例",
+        "date": "2026-10-09",
+        "text": "- 決定: v2.3 のリリースは 10/20 とする\n- 山田さん: 10/14 までに負荷試験の結果を共有する\n- 外部ベンダーの納品が 2 週間遅れる見込みで、結合テストに影響する懸念\n- ログ基盤を見直す"
+      }
+    },
+    {
+      "time": "11:05",
+      "source": "notify",
+      "label": "人の確認が必要なものを自分とのチャットへ"
+    },
+    {
+      "time": "11:08",
+      "source": "reply",
+      "label": "iPhone から返信（2 件 OK、1 件は保留）",
+      "replies": [
+        "OK",
+        "保留",
+        "OK"
+      ]
+    },
+    {
+      "time": "翌 08:00",
+      "source": "brief",
+      "label": "朝のまとめ"
+    }
+  ]
+}

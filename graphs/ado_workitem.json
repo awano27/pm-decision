@@ -127,7 +127,17 @@
     "triage_pm": {
       "kind": "advise",
       "queue": true,
-      "advice": "優先度を判定できないチケット #{event.id} {event.title}"
+      "advice": "優先度を判定できないチケット #{event.id} {event.title}",
+      "actions": [
+        {
+          "type": "ado.update",
+          "id": "{event.id}",
+          "fields": {
+            "Microsoft.VSTS.Common.Priority": 2,
+            "System.Tags": "kimeru;triaged"
+          }
+        }
+      ]
     },
     "critical_bug": {
       "kind": "match",

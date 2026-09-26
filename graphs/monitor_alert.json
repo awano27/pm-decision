@@ -153,7 +153,20 @@
     "page_advice": {
       "kind": "advise",
       "queue": true,
-      "advice": "影響度が判定できないアラート {event.rule} ({event.severity}): 5分以内に人が確認"
+      "advice": "影響度が判定できないアラート {event.rule} ({event.severity}): 5分以内に人が確認",
+      "actions": [
+        {
+          "type": "oncall.page",
+          "summary": "{event.rule}: {event.description}"
+        },
+        {
+          "type": "ado.create",
+          "work_item_type": "Bug",
+          "title": "[Alert] {event.rule}",
+          "priority": "1",
+          "tags": "kimeru;alert"
+        }
+      ]
     },
     "plan_incident": {
       "kind": "plan",
@@ -313,7 +326,17 @@
     "prevent_advice": {
       "kind": "advise",
       "queue": true,
-      "advice": "将来のリスクと判定したが時期が不明なアラート {event.rule}: 対応時期を決めて"
+      "advice": "将来のリスクと判定したが時期が不明なアラート {event.rule}: 対応時期を決めて",
+      "actions": [
+        {
+          "type": "ado.create",
+          "work_item_type": "Task",
+          "title": "[予防] {event.rule}",
+          "priority": "2",
+          "description": "{event.description}",
+          "tags": "kimeru;alert;preventive"
+        }
+      ]
     },
     "critical_outage": {
       "kind": "match",

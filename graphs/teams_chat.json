@@ -162,7 +162,21 @@
     "ask_pm": {
       "kind": "advise",
       "queue": true,
-      "advice": "意図が判定できないチャット: {event.author}「{event.text}」"
+      "advice": "意図が判定できないチャット: {event.author}「{event.text}」",
+      "actions": [
+        {
+          "type": "teams.reply",
+          "chat_id": "{event.chat_id}",
+          "text": "受領しました。内容を確認して返信します。"
+        },
+        {
+          "type": "ado.create",
+          "work_item_type": "Task",
+          "title": "対応: {event.author}さんからの依頼",
+          "description": "{event.text}",
+          "tags": "kimeru;from-teams"
+        }
+      ]
     },
     "plan_decision": {
       "kind": "plan",

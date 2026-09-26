@@ -118,7 +118,15 @@
     "check_line": {
       "kind": "advise",
       "queue": true,
-      "advice": "分類できない議事録行（{event.meeting}）: {event.item}"
+      "advice": "分類できない議事録行（{event.meeting}）: {event.item}",
+      "actions": [
+        {
+          "type": "ado.create",
+          "work_item_type": "Task",
+          "title": "{event.item}",
+          "tags": "kimeru;minutes;triaged"
+        }
+      ]
     },
     "plan_risk": {
       "kind": "plan",

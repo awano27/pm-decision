@@ -25,10 +25,10 @@
         "type": "score",
         "instructions": "Given the alert `rule`, `severity`, `description` and `context`, how large is the customer impact?",
         "criteria": [
-          "No customer impact",
-          "Internal systems only",
-          "Customers see degraded service",
-          "Customers cannot use the service"
+          "Nobody is affected (no users, no systems in use)",
+          "Only internal staff or internal systems are affected; customers are not",
+          "Customers can still use the service but it is degraded or slow",
+          "Customers cannot use the service or a core function (pay, sign in, check out)"
         ],
         "hints": {
           "1": [

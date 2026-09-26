@@ -16,9 +16,11 @@ Tune with: python eval/run_eval.py tune answers.jsonl
 PROFILES = {
     "jev": {"conf_scale": 1.0, "noul_scale": 1.0},
     "stub": {"conf_scale": 1.0, "noul_scale": 1.0},
-    # tuned on eval/fixtures.jsonl with Kev-4B (bf16 and fp32 agree): correct 52 -> 59 of 81,
-    # to-human 26 -> 19, confidently wrong unchanged at 3. Lower values add wrong decisions.
-    "kev": {"conf_scale": 0.8, "noul_scale": 0.75},
+    # Kev-4B on 99 labeled events (197 questions). 0.8/0.75 tuned on the first 39 events
+    # added confidently-wrong decisions on 60 held-out ones (3 -> 7), so it was dropped.
+    # After making the alert impact levels mutually exclusive, the best setting that adds
+    # no confidently-wrong decision is 1.0/0.95 (correct 124 -> 126). Retune on real data.
+    "kev": {"conf_scale": 1.0, "noul_scale": 0.95},
 }
 
 DEFAULT = PROFILES["jev"]

@@ -26,8 +26,10 @@ python eval/run_eval.py tune answers_kev.jsonl           # grid search, never ad
 python eval/run_eval.py score answers_kev.jsonl --profile kev
 ```
 
-Kev-4B (local, published numbers are fine for Kev): untuned 52/81 decided correctly, 26 sent to a human,
-3 confidently wrong; with the `kev` profile (0.8 / 0.75) 59 / 19 / 3.
+Kev-4B (local; publishing Kev numbers is fine), 99 events / 197 questions: 124 decided correctly, 70 sent
+to a human, 3 confidently wrong with Jev's thresholds; 126 / 68 / 3 with the `kev` profile (1.0 / 0.95).
+Lesson: a profile tuned on the first 39 events (0.8 / 0.75) looked better there but added confidently-wrong
+decisions on 60 held-out events (3 -> 7). Always check a tuned profile on events it was not tuned on.
 
 ## Question-writing rules learned from this eval
 

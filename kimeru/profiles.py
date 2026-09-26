@@ -21,6 +21,8 @@ PROFILES = {
     # After making the alert impact levels mutually exclusive, the best setting that adds
     # no confidently-wrong decision is 1.0/0.95 (correct 124 -> 126). Retune on real data.
     "kev": {"conf_scale": 1.0, "noul_scale": 0.95},
+    # CLM (experimental): Jev's thresholds until tuned on eval data
+    "clm": {"conf_scale": 1.0, "noul_scale": 1.0},
 }
 
 DEFAULT = PROFILES["jev"]

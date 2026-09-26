@@ -72,6 +72,20 @@ class KevBackend(JevBackend):
                          api=os.environ.get("KIMERU_KEV_URL", "http://127.0.0.1:8009/v1"), key_required=False)
 
 
+class ClmBackend(JevBackend):
+    """CLM (Contrastive-LM/CLM): a TypeSafe-compatible contrastive model served locally by
+    `clm-serve` over a Qwen3-8B embedding server. URL from KIMERU_CLM_URL
+    (default http://127.0.0.1:8700/v1)."""
+
+    NAME = "CLM"
+    PROFILE = "clm"
+    TIMEOUT = 900  # on CPU every question embeds state+question with an 8B encoder
+
+    def __init__(self, model="clm-latest", retries=2):
+        super().__init__(model=model, key_env="CLM_API_KEY", retries=retries,
+                         api=os.environ.get("KIMERU_CLM_URL", "http://127.0.0.1:8700/v1"), key_required=False)
+
+
 class StubBackend:
     """Offline keyword backend for demos and tests. Uses each question's `hints`.
 

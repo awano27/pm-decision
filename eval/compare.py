@@ -51,7 +51,7 @@ def evaluate(ans, profile):
 
 def main(argv):
     specs = [a.split("=", 1) for a in argv if "=" in a and not a.startswith("--")]
-    prof = {"jev": PROFILES["jev"], "kev": PROFILES["kev"]}
+    prof = {k: PROFILES[k] for k in ("jev", "kev", "clm")}
     res = {name: evaluate(ev.load_answers(path), prof.get(name, PROFILES["jev"])) for name, path in specs}
     names = [n for n, _ in specs]
 

@@ -30,7 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from kimeru import graph, plan  # noqa: E402
-from kimeru.backends import JevBackend, KevBackend  # noqa: E402
+from kimeru.backends import ClmBackend, JevBackend, KevBackend  # noqa: E402
 
 SEVERE = {"page", "page_planned", "set_p1", "set_p1_critical", "prevent_now"}
 PBS = plan.load_playbooks(ROOT / "playbooks")
@@ -113,10 +113,10 @@ def run_one(fx, backend):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--backend", choices=["jev", "kev"], required=True)
+    ap.add_argument("--backend", choices=["jev", "kev", "clm"], required=True)
     ap.add_argument("--out")
     a = ap.parse_args()
-    be = KevBackend() if a.backend == "kev" else JevBackend()
+    be = {"kev": KevBackend, "clm": ClmBackend}.get(a.backend, JevBackend)()
     rows, t0 = [], time.time()
     for fx in fixtures():
         rows.append(run_one(fx, be))

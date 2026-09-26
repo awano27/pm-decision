@@ -9,11 +9,11 @@
         "type": "choice",
         "instructions": "What is the sender of `text` asking the project manager to do?",
         "criteria": {
-          "decision": "Asks the PM to make or approve a decision (scope, priority, release, budget, staffing)",
-          "status": "Asks about the status, schedule or progress of work",
-          "incident": "Reports that something is broken or failing for users or the team",
-          "fyi": "Shares information or thanks; no response is needed",
-          "none": "None of these"
+          "decision": "Asks the project manager to decide, approve or choose something (for example whether to move a date, which option to take, go/no-go, a budget, who takes over work)",
+          "status": "Asks about the progress, schedule or current state of some work",
+          "incident": "Reports that something is broken, stopped, slow or failing for users or for the team",
+          "fyi": "Shares information, a greeting or thanks; no reply or decision is needed",
+          "none": "Small talk or a message unrelated to the project work"
         },
         "hints": {
           "decision": [
@@ -55,7 +55,8 @@
         "fyi": "log_fyi",
         "none": "ask_pm",
         "unsure": "ask_pm"
-      }
+      },
+      "_comment": "Kev put 20-45% on a catch-all 'none of these' and left most chats unsure; concrete options plus a specific 'none' fixed it (eval/README.md). Keep a 'none': without it Jev read small talk as a decision request."
     },
     "urgency": {
       "kind": "judge",

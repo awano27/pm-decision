@@ -149,8 +149,8 @@ def score(answers_path, profile=None):
 
 def live(out, backend="jev"):
     import time
-    from kimeru.backends import JevBackend, KevBackend
-    be = KevBackend() if backend == "kev" else JevBackend()
+    from kimeru.backends import ClmBackend, JevBackend, KevBackend
+    be = {"kev": KevBackend, "clm": ClmBackend}.get(backend, JevBackend)()
     times = []
     with open(out, "w", encoding="utf-8") as f:
         for fx in fixtures():
@@ -172,12 +172,12 @@ if __name__ == "__main__":
     sub.add_parser("dump")
     p = sub.add_parser("score")
     p.add_argument("answers")
-    p.add_argument("--profile", choices=["jev", "kev"], default="jev", help="threshold profile (kimeru/profiles.py)")
+    p.add_argument("--profile", choices=["jev", "kev", "clm"], default="jev", help="threshold profile (kimeru/profiles.py)")
     p = sub.add_parser("tune", help="grid-search profile knobs on recorded answers")
     p.add_argument("answers")
     p = sub.add_parser("live")
     p.add_argument("--out", default="answers.jsonl")
-    p.add_argument("--backend", choices=["jev", "kev"], default="jev")
+    p.add_argument("--backend", choices=["jev", "kev", "clm"], default="jev")
     a = ap.parse_args()
     if a.cmd == "dump":
         for fx in fixtures():

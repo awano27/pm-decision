@@ -1,0 +1,36 @@
+{"id": "teams-c01", "event": {"kind": "teams.chat", "id": "tc1", "author": "Ishii", "mentions_me": true, "text": "来週の顧客デモ、画面 A と B どちらを見せるか決めてもらえますか"}, "expect": {"intent": "decision"}}
+{"id": "teams-c02", "event": {"kind": "teams.chat", "id": "tc2", "author": "Ogawa", "mentions_me": true, "text": "結合テストの進み具合を教えてください"}, "expect": {"intent": "status"}}
+{"id": "teams-c03", "event": {"kind": "teams.chat", "id": "tc3", "author": "Fujita", "mentions_me": true, "text": "本番の管理画面が開けなくなっています。500 エラーです"}, "expect": {"intent": "incident"}}
+{"id": "teams-c04", "event": {"kind": "teams.chat", "id": "tc4", "author": "Okada", "mentions_me": true, "text": "来月の休暇予定を共有フォルダに入れておきました"}, "expect": {"intent": "fyi"}}
+{"id": "teams-c05", "event": {"kind": "teams.chat", "id": "tc5", "author": "Goto", "mentions_me": true, "text": "リリース前の性能試験を省略してよいか判断をお願いします"}, "expect": {"intent": "decision"}}
+{"id": "teams-c06", "event": {"kind": "teams.chat", "id": "tc6", "author": "Hasegawa", "mentions_me": true, "text": "バッチ処理が今朝から止まっていて、請求データが作られていません"}, "expect": {"intent": "incident"}}
+{"id": "teams-c07", "event": {"kind": "teams.chat", "id": "tc7", "author": "Murakami", "mentions_me": true, "text": "今週の見積もり、いつ頃出せそうですか？"}, "expect": {"intent": "status"}}
+{"id": "teams-c08", "event": {"kind": "teams.chat", "id": "tc8", "author": "Kondo", "mentions_me": true, "text": "外注の追加費用 30 万円、承認いただけますか"}, "expect": {"intent": "decision"}}
+{"id": "teams-c09", "event": {"kind": "teams.chat", "id": "tc9", "author": "Ishikawa", "mentions_me": true, "text": "おはようございます、今日もよろしくお願いします"}, "expect": {"intent": ["fyi", "none"]}}
+{"id": "teams-c10", "event": {"kind": "teams.chat", "id": "tc10", "author": "Maeda", "mentions_me": true, "text": "新人の山本さんをどのチームに入れるか決めたいです"}, "expect": {"intent": "decision"}}
+{"id": "teams-c11", "event": {"kind": "teams.chat", "id": "tc11", "author": "Fujii", "mentions_me": true, "text": "メール送信が遅れていて、パスワード再設定のメールが届かないと問い合わせが来ています"}, "expect": {"intent": "incident"}}
+{"id": "teams-c12", "event": {"kind": "teams.chat", "id": "tc12", "author": "Okamoto", "mentions_me": true, "text": "昨日の定例の録画を置きました。見られなかった方はどうぞ"}, "expect": {"intent": "fyi"}}
+{"id": "teams-c13", "event": {"kind": "teams.chat", "id": "tc13", "author": "Matsuda", "mentions_me": true, "text": "要件の優先順位、ログ出力と通知機能のどちらを先にしますか"}, "expect": {"intent": "decision"}}
+{"id": "teams-c14", "event": {"kind": "teams.chat", "id": "tc14", "author": "Nakajima", "mentions_me": true, "text": "リリースノートはもう完成していますか"}, "expect": {"intent": "status"}}
+{"id": "teams-c15", "event": {"kind": "teams.chat", "id": "tc15", "author": "Harada", "mentions_me": true, "text": "開発環境の VPN につながらず、作業が止まっています"}, "expect": {"intent": "incident"}}
+{"id": "teams-c16", "event": {"kind": "teams.chat", "id": "tc16", "author": "Ono", "mentions_me": true, "text": "顧客から仕様追加の要望があり、受けるかどうか相談させてください"}, "expect": {"intent": "decision"}}
+{"id": "teams-c17", "event": {"kind": "teams.chat", "id": "tc17", "author": "Tamura", "mentions_me": true, "text": "Could you share where we are on the migration?"}, "expect": {"intent": "status"}}
+{"id": "teams-c18", "event": {"kind": "teams.chat", "id": "tc18", "author": "Takeuchi", "mentions_me": true, "text": "ありがとうございます、助かりました！"}, "expect": {"intent": ["fyi", "none"]}}
+{"id": "teams-c19", "event": {"kind": "teams.chat", "id": "tc19", "author": "Kaneko", "mentions_me": true, "text": "検証環境のデータが消えています。誰か操作しましたか"}, "expect": {"intent": "incident"}}
+{"id": "teams-c20", "event": {"kind": "teams.chat", "id": "tc20", "author": "Wada", "mentions_me": true, "text": "来期の体制案、2 案作ったので選んでください"}, "expect": {"intent": "decision"}}
+{"id": "ado-c01", "event": {"kind": "ado.workitem.created", "id": "8001", "type": "Bug", "title": "検索結果が 2 ページ目以降表示されない", "description": "再現: 検索して 2 ページ目を押す。期待: 次の 20 件 / 実際: 空", "acceptance_criteria": ""}, "expect": {"ready": true}}
+{"id": "ado-c02", "event": {"kind": "ado.workitem.created", "id": "8002", "type": "Task", "title": "調査", "description": "", "acceptance_criteria": ""}, "expect": {"ready": false}}
+{"id": "ado-c03", "event": {"kind": "ado.workitem.created", "id": "8003", "type": "User Story", "title": "通知設定の画面", "description": "利用者として、通知の種類ごとにオン・オフを切り替えたい", "acceptance_criteria": "・メール / アプリ内の 2 種類\n・設定は即時反映"}, "expect": {"ready": true}}
+{"id": "ado-c04", "event": {"kind": "ado.workitem.created", "id": "8004", "type": "Bug", "title": "遅い", "description": "たまに遅い気がする", "acceptance_criteria": ""}, "expect": {"ready": false}}
+{"id": "ado-c05", "event": {"kind": "ado.workitem.created", "id": "8005", "type": "Bug", "title": "CSV の文字化け", "description": "Excel で開くと日本語が文字化けする。再現: 出力した CSV を Excel で開く。期待: 正しく表示", "acceptance_criteria": ""}, "expect": {"ready": true}}
+{"id": "ado-c06", "event": {"kind": "ado.workitem.created", "id": "8006", "type": "User Story", "title": "UI を良くする", "description": "もっと使いやすく", "acceptance_criteria": ""}, "expect": {"ready": false}}
+{"id": "ado-c07", "event": {"kind": "ado.workitem.created", "id": "8007", "type": "Task", "title": "API のタイムアウトを 30 秒に変更", "description": "現在 10 秒。外部連携が遅いため 30 秒にする", "acceptance_criteria": "・設定値が 30 秒\n・既存テストが通る"}, "expect": {"ready": true}}
+{"id": "ado-c08", "event": {"kind": "ado.workitem.created", "id": "8008", "type": "Bug", "title": "エラーになる", "description": "エラーです", "acceptance_criteria": ""}, "expect": {"ready": false}}
+{"id": "minutes-c01", "event": {"kind": "meeting.item", "id": "mc1", "meeting": "定例", "item": "決定: 次回のデモは顧客先で行う"}, "expect": {"item_type": "decision"}}
+{"id": "minutes-c02", "event": {"kind": "meeting.item", "id": "mc2", "meeting": "定例", "item": "木村さん: 10/20 までに移行手順書を作成"}, "expect": {"item_type": "action", "has_owner": true, "has_due": true}}
+{"id": "minutes-c03", "event": {"kind": "meeting.item", "id": "mc3", "meeting": "定例", "item": "認証基盤の更新が間に合わない可能性がある"}, "expect": {"item_type": "risk"}}
+{"id": "minutes-c04", "event": {"kind": "meeting.item", "id": "mc4", "meeting": "定例", "item": "先週の障害の経緯を説明した"}, "expect": {"item_type": "info"}}
+{"id": "minutes-c05", "event": {"kind": "meeting.item", "id": "mc5", "meeting": "定例", "item": "テスト観点を洗い出す"}, "expect": {"item_type": "action", "has_owner": false}}
+{"id": "minutes-c06", "event": {"kind": "meeting.item", "id": "mc6", "meeting": "定例", "item": "ベンダー選定は B 社に決定"}, "expect": {"item_type": "decision"}}
+{"id": "minutes-c07", "event": {"kind": "meeting.item", "id": "mc7", "meeting": "定例", "item": "@中村 来週中に顧客へ見積もりを送付"}, "expect": {"item_type": "action", "has_owner": true, "has_due": true}}
+{"id": "minutes-c08", "event": {"kind": "meeting.item", "id": "mc8", "meeting": "定例", "item": "キーパーソンの退職により、仕様確認が遅れる懸念"}, "expect": {"item_type": "risk"}}

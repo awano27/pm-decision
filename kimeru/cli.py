@@ -23,7 +23,7 @@ from pathlib import Path
 
 from . import actions, events, graph
 from . import plan as planner
-from .backends import JevBackend, KevBackend, StubBackend
+from .backends import ClmBackend, JevBackend, KevBackend, StubBackend
 
 HERE = Path(__file__).resolve().parent.parent
 DEFAULT_PLAYBOOKS = HERE / "playbooks"
@@ -34,6 +34,8 @@ def _backend(name, model):
         return JevBackend(model=model)
     if name == "kev":
         return KevBackend()
+    if name == "clm":
+        return ClmBackend()
     return StubBackend()
 
 
@@ -79,7 +81,7 @@ def main(argv=None):
     ap.add_argument("--graphs", default=str(HERE / "graphs"))
     ap.add_argument("--playbooks", default=str(DEFAULT_PLAYBOOKS))
     ap.add_argument("--out", default="out")
-    ap.add_argument("--backend", choices=["stub", "jev", "kev"], default=os.environ.get("KIMERU_BACKEND", "stub"))
+    ap.add_argument("--backend", choices=["stub", "jev", "kev", "clm"], default=os.environ.get("KIMERU_BACKEND", "stub"))
     ap.add_argument("--model", default="jev-latest")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("validate")

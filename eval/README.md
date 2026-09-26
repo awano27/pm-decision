@@ -14,6 +14,21 @@ The report lists per-node `ok/n` and how many routed to `unsure` (a safe miss: t
 **Do not publish Jev results.** TypeSafe's terms forbid publishing Jev benchmark/performance data;
 keep `answers*.jsonl` and scores out of this repository, issues and public CI logs.
 
+## Per-backend thresholds
+
+Node thresholds were tuned on Jev. A backend with a different confidence scale gets a profile in
+`kimeru/profiles.py` (two global knobs: `conf_scale`, `noul_scale`). Tune on recorded answers — no
+new model calls:
+
+```bash
+python eval/run_eval.py live --backend kev --out answers_kev.jsonl
+python eval/run_eval.py tune answers_kev.jsonl           # grid search, never adds confidently-wrong decisions
+python eval/run_eval.py score answers_kev.jsonl --profile kev
+```
+
+Kev-4B (local, published numbers are fine for Kev): untuned 52/81 decided correctly, 26 sent to a human,
+3 confidently wrong; with the `kev` profile (0.8 / 0.75) 59 / 19 / 3.
+
 ## Question-writing rules learned from this eval
 
 - One condition per `noul`. "A and (B or C)" questions under-fire; split them into chained nodes.

@@ -58,6 +58,15 @@ def allowed(node, playbooks):
     return list(playbooks) if ids == "*" else ids
 
 
+def _earlier_adjacent(probs, at=0.3):
+    """Earliest level if the probability mass sits on one level or two neighbouring levels
+    (each >= `at`); None when it is spread across non-neighbouring levels."""
+    heavy = sorted(int(k) for k, p in probs.items() if str(k).isdigit() and p >= at)
+    if not heavy or heavy[-1] - heavy[0] > 1:
+        return None
+    return heavy[0]
+
+
 def build(node, state, backend, playbooks):
     """Return (edge, plan_or_None, answers). edge is 'ok', 'none' or 'unsure'."""
     ids = allowed(node, playbooks)
@@ -65,9 +74,11 @@ def build(node, state, backend, playbooks):
           "instructions": node.get("instructions", "Which playbook fits the work the project manager must do next?"),
           "criteria": {**{i: playbooks[i]["when"] for i in ids}, "none": "None of these playbooks fits"},
           "hints": {i: playbooks[i].get("hints", []) for i in ids}}
+    from .profiles import conf
+    prof = getattr(backend, "profile", None)
     a1 = backend.ask(state, {"playbook": q1})["playbook"]
     answers = {"playbook": a1}
-    if a1.get("confidence", 0) < node.get("min_conf", 0.6):
+    if a1.get("confidence", 0) < conf(node, "min_conf", 0.6, prof):
         return "unsure", None, answers
     if a1["choice"] == "none":
         return "none", None, answers
@@ -87,7 +98,7 @@ def build(node, state, backend, playbooks):
     answers.update(a2)
 
     need_at = node.get("need_at", 0.5)
-    due_min_conf = node.get("due_min_conf", 0.4)
+    due_min_conf = conf(node, "due_min_conf", 0.4, prof)
     chosen = []
     for s in steps:
         p = a2[f"need_{s['id']}"]["noul"] if s.get("check") else 1.0
@@ -96,13 +107,17 @@ def build(node, state, backend, playbooks):
             if d.get("confidence", 0) >= due_min_conf:
                 due = min(len(DUE_LEVELS) - 1, max(0, round(d["score"])))
                 label = DUE_LABELS[due]
+            elif (early := _earlier_adjacent(d.get("probabilities") or {})) is not None:
+                # split between neighbouring levels (e.g. today 0.45 / this week 0.44): take the
+                # earlier one, the safer mistake for a PM, and mark it as an estimate
+                due, label = early, DUE_LABELS[early] + "（目安）"
             else:  # unsure: don't pretend; rank as "this week" and flag it for the PM
                 due, label = 1, DUE_UNSURE
             chosen.append({"id": s["id"], "title": s["title"], "need": round(p, 2), "due": label, "due_level": due})
     if not chosen:
         return "unsure", None, answers
     first = a2["first"]
-    if first.get("confidence", 0) >= node.get("first_min_conf", 0.5):
+    if first.get("confidence", 0) >= conf(node, "first_min_conf", 0.5, prof):
         chosen.sort(key=lambda s: s["id"] != first["choice"])  # stable: first step, then playbook order
     plan = {"playbook": pb["id"], "title": pb["title"], "steps": chosen,
             "first": chosen[0]["title"],

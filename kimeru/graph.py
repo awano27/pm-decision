@@ -105,17 +105,20 @@ def _split_non_adjacent(probs, at):
     return len(heavy) >= 2 and heavy[-1] - heavy[0] > 1
 
 
-def route(node, ans):
-    """Return (edge_label, next_node_id) for a judge answer."""
+def route(node, ans, profile=None):
+    """Return (edge_label, next_node_id) for a judge answer. `profile` adjusts thresholds
+    for the backend that produced the answer (see profiles.py)."""
+    from .profiles import conf, noul_band
     q, r = node["question"], node["routes"]
     if q["type"] == "noul":
         p = ans["noul"]
-        if p >= node.get("yes_at", 0.7):
+        yes_at, no_at = noul_band(node, profile)
+        if p >= yes_at:
             return "yes", r["yes"]
-        if p <= node.get("no_at", 0.3):
+        if p <= no_at:
             return "no", r["no"]
         return "unsure", r["unsure"]
-    if ans.get("confidence", 0) < node.get("min_conf", 0.6 if q["type"] == "choice" else 0.5):
+    if ans.get("confidence", 0) < conf(node, "min_conf", 0.6 if q["type"] == "choice" else 0.5, profile):
         return "unsure", r["unsure"]
     if q["type"] == "choice":
         return ans["choice"], r[ans["choice"]]
@@ -180,7 +183,7 @@ def run(g, event, backend, state=None, playbooks=None):
             nid = n["routes"][edge]
             continue
         ans = backend.ask(state, {nid: n["question"]})[nid]
-        edge, nxt = route(n, ans)
+        edge, nxt = route(n, ans, getattr(backend, "profile", None))
         answers[nid] = ans
         trace.append({"node": nid, "answer": {k: v for k, v in ans.items() if k != "type"}, "edge": edge})
         nid = nxt

@@ -74,6 +74,28 @@ class TestBuild(unittest.TestCase):
         d = {s["id"]: s for s in p["steps"]}["decide"]
         self.assertEqual((d["due"], d["due_level"]), (plan.DUE_UNSURE, 1))
 
+    def test_adjacent_due_split_takes_earlier_as_estimate(self):
+        b = Scripted({"choice": "schedule_change", "confidence": 0.95},
+                     {"first": {"choice": "blocker_eta", "confidence": 0.9},
+                      # Kev-style: today 0.45 / this week 0.44 -> low confidence
+                      "due_blocker_eta": {"score": 0.65, "confidence": 0.02, "probabilities": {"0": 0.45, "1": 0.44, "2": 0.11}},
+                      # spread across non-neighbours -> still flagged
+                      "due_decide": {"score": 1.0, "confidence": 0.1, "probabilities": {"0": 0.45, "1": 0.1, "2": 0.45}}})
+        _, p, _ = plan.build(NODE, EV, b, PBS)
+        d = {s["id"]: s for s in p["steps"]}
+        self.assertEqual((d["blocker_eta"]["due"], d["blocker_eta"]["due_level"]), ("今日（目安）", 0))
+        self.assertEqual(d["decide"]["due"], plan.DUE_UNSURE)
+
+    def test_kev_profile_lowers_thresholds(self):
+        from kimeru.profiles import PROFILES
+
+        class KevLike(Scripted):
+            profile = PROFILES["kev"]
+        # 0.55 < Jev's 0.6 but >= Kev's 0.6 * 0.8 = 0.48
+        a = {"choice": "schedule_change", "confidence": 0.55}
+        self.assertEqual(plan.build(NODE, EV, Scripted(a, {}), PBS)[0], "unsure")
+        self.assertEqual(plan.build(NODE, EV, KevLike(a, {"first": {"choice": "decide", "confidence": 0.9}}), PBS)[0], "ok")
+
     def test_low_confidence_first_keeps_playbook_order(self):
         b = Scripted({"choice": "schedule_change", "confidence": 0.95}, {"first": {"choice": "notify", "confidence": 0.3}})
         _, p, _ = plan.build(NODE, EV, b, PBS)

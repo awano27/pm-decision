@@ -23,6 +23,7 @@ class JevBackend:
     API = "https://api.typesafe.ai/v1"
     NAME = "Jev"
     TIMEOUT = 60
+    PROFILE = "jev"
 
     def __init__(self, model="jev-latest", key_env="TYPESAFE_API_KEY", retries=4, api=None, key_required=True):
         self._key = os.environ.get(key_env) or ""
@@ -30,6 +31,8 @@ class JevBackend:
             raise SystemExit(f"{key_env} is not set")
         self.api = (api or self.API).rstrip("/")
         self.model, self.retries = model, retries
+        from .profiles import PROFILES
+        self.profile = PROFILES[self.PROFILE]   # threshold scaling used by graph.route / plan.build
 
     def ask(self, state, questions):
         body = json.dumps({"state": state, "model": self.model, "questions": jev_questions(questions)}).encode("utf-8")
@@ -61,6 +64,7 @@ class KevBackend(JevBackend):
     http://127.0.0.1:8009/v1); key only if the server sets KEV_API_KEY."""
 
     NAME = "Kev"
+    PROFILE = "kev"
     TIMEOUT = 300  # CPU inference is slow on the first request
 
     def __init__(self, model="kev", retries=2):

@@ -155,7 +155,7 @@
       ],
       "routes": {
         "yes": "set_p1_critical",
-        "no": "ready"
+        "no": "has_ac"
       },
       "exclude": [
         "(テスト|検証|開発|ステージング)環境",
@@ -175,6 +175,35 @@
         }
       ],
       "advice": "顧客影響の大きいチケットを P1 にしました（規則による判定）。今スプリントで対応するか判断: #{event.id} {event.title}"
+    },
+    "has_ac": {
+      "kind": "match",
+      "_comment": "structured field: acceptance criteria filled in -> ready (only the 'yes' side is a rule)",
+      "fields": [
+        "acceptance_criteria"
+      ],
+      "patterns": [
+        "\\S"
+      ],
+      "routes": {
+        "yes": "priority",
+        "no": "has_repro"
+      }
+    },
+    "has_repro": {
+      "kind": "match",
+      "_comment": "explicit reproduction steps or expected result -> ready; anything else is asked to the model",
+      "fields": [
+        "description"
+      ],
+      "patterns": [
+        "再現|期待(する|される)?(結果|値|動作)?|実際(の結果)?[:：]",
+        "steps to reproduce|expected( result| behaviou?r)?|actual( result)?\\s*:"
+      ],
+      "routes": {
+        "yes": "priority",
+        "no": "ready"
+      }
     }
   }
 }

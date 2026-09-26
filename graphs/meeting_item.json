@@ -9,10 +9,10 @@
         "type": "choice",
         "instructions": "What kind of meeting-minutes line is `item`?",
         "criteria": {
-          "decision": "Records a decision that was made",
-          "action": "Assigns a task someone must do",
-          "risk": "Raises a risk, blocker or open concern",
-          "info": "Background information or discussion only"
+          "decision": "Records something that was decided or agreed (for example 'decided', 'agreed', '...とする', '...で進める')",
+          "action": "A task someone must do, even if no owner or date is given (for example '...を作成する', '...を見直す', '...を決める', '...を送付')",
+          "risk": "Raises a possible future problem, delay or concern that has not happened yet (for example '...の懸念', '...が遅れる見込み', '...の可能性')",
+          "info": "Only reports background or something already done, with no task, decision or concern (for example '...を共有した', '...を説明した', '...が参加予定')"
         },
         "hints": {
           "decision": [
@@ -43,7 +43,8 @@
         "risk": "plan_risk",
         "info": "log_info",
         "unsure": "check_line"
-      }
+      },
+      "_comment": "concrete, non-overlapping options: Kev put much of its probability on 'info' before (eval/README.md)"
     },
     "has_owner": {
       "kind": "judge",

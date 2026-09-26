@@ -1,7 +1,7 @@
 {
   "name": "minutes-followup",
   "event": "meeting.item",
-  "start": "item_type",
+  "start": "label_decision",
   "nodes": {
     "item_type": {
       "kind": "judge",
@@ -178,6 +178,104 @@
         "yes": "create_task",
         "no": "ask_owner",
         "unsure": "ask_owner"
+      }
+    },
+    "label_decision": {
+      "kind": "match",
+      "_comment": "labeled minutes (docs/minutes-format.md): the PM's own label wins over the model",
+      "fields": [
+        "item"
+      ],
+      "patterns": [
+        "^\\s*[\\[【]?\\s*(決定|決定事項|合意)\\s*([\\]】]\\s*[:：]?|[:：])"
+      ],
+      "routes": {
+        "yes": "post_decision",
+        "no": "label_task"
+      }
+    },
+    "label_task": {
+      "kind": "match",
+      "_comment": "labeled task: owner/due are checked by rule first",
+      "fields": [
+        "item"
+      ],
+      "patterns": [
+        "^\\s*[\\[【]?\\s*(タスク|TODO|ToDo|宿題|アクション)\\s*([\\]】]\\s*[:：]?|[:：])"
+      ],
+      "routes": {
+        "yes": "unset",
+        "no": "label_risk"
+      }
+    },
+    "label_risk": {
+      "kind": "match",
+      "_comment": "labeled risk",
+      "fields": [
+        "item"
+      ],
+      "patterns": [
+        "^\\s*[\\[【]?\\s*(リスク|懸念|課題)\\s*([\\]】]\\s*[:：]?|[:：])"
+      ],
+      "routes": {
+        "yes": "plan_risk",
+        "no": "label_info"
+      }
+    },
+    "label_info": {
+      "kind": "match",
+      "_comment": "labeled info; anything unlabeled is asked to the model",
+      "fields": [
+        "item"
+      ],
+      "patterns": [
+        "^\\s*[\\[【]?\\s*(共有|報告|情報|メモ)\\s*([\\]】]\\s*[:：]?|[:：])"
+      ],
+      "routes": {
+        "yes": "log_info",
+        "no": "item_type"
+      }
+    },
+    "owner_given": {
+      "kind": "match",
+      "_comment": "担当: <name> (not 未定) -> owner known; otherwise ask the model",
+      "fields": [
+        "item"
+      ],
+      "patterns": [
+        "担当(者)?\\s*[:：]\\s*(?!(未定|未確定|TBD|なし|不明)\\s*([/／|｜]|$))\\S"
+      ],
+      "routes": {
+        "yes": "due_given",
+        "no": "has_owner"
+      }
+    },
+    "due_given": {
+      "kind": "match",
+      "_comment": "期限: <date> (not 未定) -> due known; otherwise ask the model",
+      "fields": [
+        "item"
+      ],
+      "patterns": [
+        "(期限|締切|〆切|期日)\\s*[:：]\\s*(?!(未定|未確定|TBD|なし|不明)\\s*([/／|｜]|$))\\S"
+      ],
+      "routes": {
+        "yes": "create_task",
+        "no": "has_due"
+      }
+    },
+    "unset": {
+      "kind": "match",
+      "_comment": "owner or due written as 未定 -> ask for it (no model call)",
+      "fields": [
+        "item"
+      ],
+      "patterns": [
+        "(担当(者)?|期限|締切|〆切|期日)\\s*[:：]\\s*(未定|未確定|TBD|なし|不明)\\s*([/／|｜、,]|$)"
+      ],
+      "routes": {
+        "yes": "ask_owner",
+        "no": "owner_given"
       }
     }
   }

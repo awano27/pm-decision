@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 
-from kimeru import daily, graph, plan
+from kimeru import daily, events, graph, plan
 from kimeru.backends import StubBackend
 from kimeru.cli import process
 
@@ -78,3 +78,21 @@ class TestDaily(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTextMinutes(unittest.TestCase):
+    def test_txt_in_inbox_is_minutes(self):
+        with tempfile.TemporaryDirectory() as d:
+            out, inbox = Path(d) / "out", Path(d) / "inbox"
+            inbox.mkdir()
+            text = "週次定例 2026/9/30\n\n- 決定: v2.3 のリリースは 10/1 とする\n- 担当 田中: 10/3 までに負荷試験の結果を共有する\n"
+            (inbox / "teirei.txt").write_bytes(text.encode("cp932"))
+            n = daily.process_inbox(inbox, out, GRAPHS, StubBackend(), PBS, process)
+            self.assertEqual(n, 2)
+            self.assertTrue((inbox / "done" / "teirei.txt").exists())
+            p = events.read_inbox_file(inbox / "done" / "teirei.txt")
+            self.assertEqual((p["title"], p["date"]), ("週次定例 2026/9/30", "2026-09-30"))
+
+    def test_title_falls_back_to_file_name(self):
+        p = events.minutes_text("- 決定: A とする", "2026-10-02 レビュー")
+        self.assertEqual((p["title"], p["date"]), ("2026-10-02 レビュー", "2026-10-02"))

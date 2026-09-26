@@ -240,9 +240,9 @@ def main(argv=None):
     done = inbox / "done"
     done.mkdir(parents=True, exist_ok=True)
     while True:
-        for f in sorted(inbox.glob("*.json")):
+        for f in events.inbox_files(inbox):
             try:
-                for r in process(json.loads(f.read_text(encoding="utf-8")), gs, be, out, pbs):
+                for r in process(events.read_inbox_file(f), gs, be, out, pbs):
                     print(_fmt(r), flush=True)
                 f.replace(done / f.name)
             except Exception as e:  # keep the loop alive; park the bad file

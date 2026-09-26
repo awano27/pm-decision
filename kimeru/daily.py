@@ -33,9 +33,9 @@ def process_inbox(inbox, out, graphs, backend, playbooks, process):
     done = inbox / "done"
     done.mkdir(parents=True, exist_ok=True)
     n = 0
-    for f in sorted(inbox.glob("*.json")):
+    for f in events.inbox_files(inbox):
         try:
-            n += len(process(json.loads(f.read_text(encoding="utf-8")), graphs, backend, Path(out), playbooks))
+            n += len(process(events.read_inbox_file(f), graphs, backend, Path(out), playbooks))
             f.replace(done / f.name)
         except RuntimeError as e:
             if "not reachable" in str(e):   # judge backend (e.g. local Kev) not up yet: keep files for the next cycle

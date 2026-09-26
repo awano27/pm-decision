@@ -5,7 +5,9 @@ The `state` sent to the judge is the event minus `raw`.
 """
 import hashlib
 import html
+import json
 import re
+from datetime import datetime
 
 KINDS = ("teams.chat", "monitor.alert", "ado.workitem.created", "meeting.item")
 
@@ -81,6 +83,38 @@ def meeting_minutes(p):
         "id": _id(title, date, i), "ts": date,
         "meeting": title, "index": i, "item": it,
     } for i, it in enumerate(items)]
+
+
+_DATE = re.compile(r"(20\d\d)[-/.年](\d{1,2})[-/.月](\d{1,2})")
+INBOX_SUFFIXES = (".json", ".txt", ".md")
+
+
+def minutes_text(text, name="", mtime=None):
+    """Plain-text minutes (e.g. a Copilot recap the PM pasted into Notepad) -> minutes payload.
+
+    Title: first non-bullet line, else the file name. Date: first YYYY-MM-DD in the title or
+    file name, else the file's modified date. Every bullet line becomes one item."""
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    title = next((l.lstrip("#").strip() for l in lines if not _BULLET.match(l)), "") or name
+    m = _DATE.search(title) or _DATE.search(name)
+    date = f"{m[1]}-{int(m[2]):02d}-{int(m[3]):02d}" if m else (mtime.strftime("%Y-%m-%d") if mtime else None)
+    return {"title": title, "date": date, "text": text}
+
+
+def inbox_files(inbox):
+    return sorted(f for f in inbox.iterdir() if f.is_file() and f.suffix.lower() in INBOX_SUFFIXES)
+
+
+def read_inbox_file(f):
+    """Raw payload from an inbox file: JSON as-is, .txt/.md as minutes (UTF-8, or Shift_JIS from old Notepad)."""
+    b = f.read_bytes()
+    try:
+        text = b.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = b.decode("cp932")
+    if f.suffix.lower() == ".json":
+        return json.loads(text)
+    return minutes_text(text, f.stem, datetime.fromtimestamp(f.stat().st_mtime))
 
 
 NORMALIZERS = {

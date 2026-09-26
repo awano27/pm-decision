@@ -21,7 +21,7 @@ $Results = [ordered]@{}   # not $R: PowerShell names are case-insensitive ($r is
 $tmp = Join-Path $env:TEMP ("kimeru-check-" + (Get-Random -Minimum 10000 -Maximum 99999))
 New-Item -ItemType Directory -Force $tmp | Out-Null
 
-if ($Only -contains 'monday') { $Only = @('T2', 'T9', 'T10', 'T12', 'T13', 'T14') }   # short Monday session (T3/T6/T8 run anyway)
+if ($Only -contains 'monday') { $Only = @('T9', 'T10', 'T12', 'T13', 'T14') }   # short Monday session (T3/T6/T8 run anyway); T2 dropped: minutes come as .txt (docs/minutes-format.md)
 function Want($t) { -not $Only -or $Only -contains $t }
 function Fails($s) {
   # prefer our one-line "... failed: ..." message, else the last traceback line

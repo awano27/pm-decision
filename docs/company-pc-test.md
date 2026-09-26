@@ -117,6 +117,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\probe-teams.ps1 -Lab
 
 ### T2 Copilot の会議まとめ画面を読めるか（読み取りのみ）
 
+> 不要になった: 議事録は Copilot の要約を手で `.txt` にして渡す（[minutes-format.md](minutes-format.md)）。月曜のチェックからも外した。
+
 1. Teams で Copilot のまとめ（要約）がある会議を開き、**まとめ（要約）タブ**を表示する
 2. 実行:
 

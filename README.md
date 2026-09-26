@@ -26,7 +26,7 @@ event ─► normalize ─► match(規則) ─► judge(Jev/Kev) ─► plan(�
 | Teams チャット | `teams_chat.json` | 意図(choice) → 進め方(plan) / 判断期限(score) | 受領返信＋手順ごとの Task・Bug 化・人の確認 |
 | 監視アラート | `monitor_alert.json` | 解消済み(noul) → **重大障害(match)** → 将来のリスクか(noul) → 時期(score) / 顧客影響(score) → ノイズ(noul) | 当番呼び出し＋障害対応の進め方・予防 Task（24h 以内 P1・7 日以内 P2・それ以降 P3）・P1 Bug・内部 Task・閾値見直し助言 |
 | ADO チケット作成 | `ado_workitem.json` | **重大バグ(match)** → 着手可能か(noul) → 優先度(score) | P1 固定・情報不足コメント・優先度設定・人のトリアージ |
-| 議事録 | `meeting_item.json`（箇条書き1行ごとに展開） | 行の種類(choice) → 担当(noul) → 期限(noul) / リスクの進め方(plan) | 決定ログ投稿・Task 作成・Risk 登録＋対策手順 |
+| 議事録 | `meeting_item.json`（箇条書き1行ごとに展開） | ラベル（`決定:` `タスク:` など）があればルール、なければ 行の種類(choice) → 担当(noul) → 期限(noul) / リスクの進め方(plan) | 決定ログ投稿・Task 作成・Risk 登録＋対策手順 |
 
 ## 使い方
 
@@ -36,7 +36,7 @@ Python 3.10+、依存なし。
 python -m kimeru validate
 python -m kimeru run examples/*.json            # オフライン（キーワードスタブ）
 python -m kimeru --backend jev run examples/*.json   # TYPESAFE_API_KEY を環境変数に設定
-python -m kimeru watch inbox/                   # inbox/*.json を常駐処理（処理済みは inbox/done/）
+python -m kimeru watch inbox/                   # inbox/*.json と議事録 *.txt を常駐処理（処理済みは inbox/done/）
 python -m kimeru digest                         # 今日の判断件数と人の確認キュー
 python -m unittest
 ```
@@ -44,7 +44,7 @@ python -m unittest
 出力: `out/decisions.jsonl`（全判断の経路と回答）、`out/queue.jsonl`（人の確認待ち）。
 
 入力は各ソースの生ペイロードを自動判別する: Microsoft Graph `chatMessage`、Azure Monitor 共通アラートスキーマ、
-Azure DevOps Service Hook `workitem.created`、議事録 `{title, date, text}`。
+Azure DevOps Service Hook `workitem.created`、議事録 `{title, date, text}`、または箇条書きの `.txt`（Copilot の要約から作る手順は [docs/minutes-format.md](docs/minutes-format.md)）。
 
 ## 進め方の型（playbooks）と plan ノード
 

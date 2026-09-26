@@ -19,6 +19,17 @@
 
 **月曜の短時間チェック**: `.\run-company-check.cmd monday`（T3・T9・T12 チャット一覧の読み取り・T13 kev の事前チェック。10 分以内）
 
+### ローカル判断モデル（kev）を使う場合
+
+社外にデータを出さない判断モデル kev（Kev-4B、Apache-2.0。土台の Qwen3.5-4B-Base も Apache-2.0）を、開発 PC で作った持ち込み用フォルダ（約 11GB）で動かす。インストール・管理者権限・ネット接続は不要。
+
+1. 開発 PC の `C:\develop\kev-bundle` を、リモートデスクトップ経由で会社 PC の `C:\kev` にコピーする
+2. `C:\kev\start-kev.cmd` をダブルクリック。`Uvicorn running on http://127.0.0.1:8009` と出たら準備完了（ウィンドウは開いたまま）
+3. kimeru フォルダで `.\run-company-check.cmd monday`（T14 で kev による判断を確認）
+4. 常用するなら `setx KIMERU_BACKEND kev`（ユーザー環境変数。管理者権限不要）
+
+目安（開発 PC: Ryzen 9 7940HS の CPU のみ）: メモリ約 14GB、1 件の判断に中央値 6 秒・最大 15 秒。
+
 以下は同じ内容を手動で 1 つずつ行う場合の手順（かんたん実行が途中で止まったときの切り分け用）。
 
 ## 手動手順

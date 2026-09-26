@@ -1,7 +1,7 @@
 {
   "name": "workitem-intake",
   "event": "ado.workitem.created",
-  "start": "ready",
+  "start": "critical_bug",
   "nodes": {
     "ready": {
       "kind": "judge",
@@ -128,6 +128,43 @@
       "kind": "advise",
       "queue": true,
       "advice": "優先度を判定できないチケット #{event.id} {event.title}"
+    },
+    "critical_bug": {
+      "kind": "match",
+      "_comment": "safety net: a work item that states customers/production are broken right now is P1 whatever the model scores",
+      "fields": [
+        "title",
+        "description"
+      ],
+      "patterns": [
+        "(本番|全ユーザー|全顧客|多数の顧客|顧客から)[^。]{0,40}(できない|できません|不可|クラッシュ|落ちる|送られない|届かない|0 ?円|表示されない|エラー)",
+        "(ログイン|サインイン|決済|支払|購入)[^。]{0,10}(できない|できません|不可|通らない)",
+        "(crash(es|ed)?|cannot (log ?in|sign in|pay|check ?out)|all users|every user|outage)",
+        "(クラッシュ|強制終了|起動しない|起動できない)",
+        "(多数|大量|複数)の(顧客|ユーザー|お客様)から(の)?(問い合わせ|報告|苦情|クレーム)"
+      ],
+      "routes": {
+        "yes": "set_p1_critical",
+        "no": "ready"
+      },
+      "exclude": [
+        "(テスト|検証|開発|ステージング)環境",
+        "(test|staging|dev) (env|environment)",
+        "ローカル(環境|で)"
+      ]
+    },
+    "set_p1_critical": {
+      "kind": "decide",
+      "actions": [
+        {
+          "type": "ado.update",
+          "id": "{event.id}",
+          "fields": {
+            "Microsoft.VSTS.Common.Priority": 1
+          }
+        }
+      ],
+      "advice": "顧客影響の大きいチケットを P1 にしました（規則による判定）。今スプリントで対応するか判断: #{event.id} {event.title}"
     }
   }
 }

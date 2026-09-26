@@ -104,6 +104,17 @@ class TestGraph(unittest.TestCase):
         self.assertIsNone(graph.match_node({"fields": ["t"], "patterns": ["支払.{0,10}できない"]}, {"t": "支払いは可能"}))
         self.assertTrue(graph.match_node({"fields": ["t"], "patterns": ["支払.{0,10}できない"]}, {"t": "ＡＢＣ支払ができない"}))
 
+    def test_ado_critical_bug_safety_net(self):
+        g = GRAPHS["ado.workitem.created"][0]
+        crit = {"kind": "ado.workitem.created", "id": "9", "type": "Bug", "title": "本番で全ユーザーがログインできない",
+                "description": "", "acceptance_criteria": ""}
+        r = graph.run(g, crit, ReplayBackend({}))              # no model call at all
+        self.assertEqual(r["node"], "set_p1_critical")
+        self.assertEqual(r["actions"][0]["fields"]["Microsoft.VSTS.Common.Priority"], 1)
+        test_env = {**crit, "title": "テスト環境でたまにクラッシュする"}
+        r = graph.run(g, test_env, ReplayBackend({"ready": {"noul": 0.1}}))
+        self.assertEqual(r["node"], "request_info")           # excluded -> normal path
+
     def test_future_risk_branch(self):
         g = GRAPHS["monitor.alert"][0]
         ev = {"kind": "monitor.alert", "id": "x", "rule": "cert expiry", "severity": "Sev3",

@@ -80,7 +80,7 @@ def validate(g, playbooks=None):
                 raise GraphError(f"{nid}: match needs exactly yes/no routes")
             if not n.get("fields") or not n.get("patterns"):
                 raise GraphError(f"{nid}: match needs fields and patterns")
-            for pat in n["patterns"]:
+            for pat in n["patterns"] + n.get("exclude", []):
                 try:
                     re.compile(pat)
                 except re.error as e:
@@ -124,10 +124,13 @@ def _split_non_adjacent(probs, at):
 
 
 def match_node(node, event):
-    """Pattern that matched (for the trace), or None."""
+    """Pattern that matched (for the trace), or None. Optional "exclude" patterns veto a
+    match (e.g. a crash reported only in a test environment)."""
     import unicodedata
-    for f in node["fields"]:
-        text = unicodedata.normalize("NFKC", str(event.get(f) or ""))
+    texts = [unicodedata.normalize("NFKC", str(event.get(f) or "")) for f in node["fields"]]
+    if any(re.search(x, t, re.IGNORECASE) for x in node.get("exclude", []) for t in texts):
+        return None
+    for text in texts:
         for pat in node["patterns"]:
             if re.search(pat, text, re.IGNORECASE):
                 return pat

@@ -55,7 +55,7 @@ class TestGraph(unittest.TestCase):
         for lst in GRAPHS.values():
             for g in lst:
                 for n in g["nodes"].values():
-                    self.assertIn(n["kind"], ("judge", "plan", "decide", "advise"))
+                    self.assertIn(n["kind"], ("judge", "match", "plan", "decide", "advise"))
 
     def test_noul_middle_goes_unsure(self):
         node = GRAPHS["ado.workitem.created"][0]["nodes"]["ready"]
@@ -81,6 +81,28 @@ class TestGraph(unittest.TestCase):
         r = graph.run(g, ev, be)
         self.assertEqual(r["node"], "page")
         self.assertIn("checkout-api 5xx rate", r["actions"][0]["summary"])
+
+    def test_outage_safety_net_pages_even_if_model_underscores(self):
+        g = GRAPHS["monitor.alert"][0]
+        ev = {"kind": "monitor.alert", "id": "p", "rule": "payment-api error rate", "severity": "Sev1",
+              "condition": "Fired", "description": "Payment failures at 18% right now; customers cannot pay"}
+        # the model would have said "degraded" (2.49 -> bug_p1); the match node must not even ask it
+        be = ReplayBackend({"resolved": {"noul": 0.02}})
+        r = graph.run(g, ev, be)
+        self.assertEqual(r["node"], "page")          # plan_incident without playbooks falls back to page
+        self.assertEqual([s["node"] for s in r["path"]][:2], ["resolved", "critical_outage"])
+
+    def test_match_node_validation(self):
+        base = {"name": "x", "event": "monitor.alert", "start": "m", "nodes": {
+            "d": {"kind": "decide", "actions": []}}}
+        bad = [{"kind": "match", "fields": ["x"], "patterns": ["a"], "routes": {"yes": "d"}},
+               {"kind": "match", "fields": [], "patterns": ["a"], "routes": {"yes": "d", "no": "d"}},
+               {"kind": "match", "fields": ["x"], "patterns": ["("], "routes": {"yes": "d", "no": "d"}}]
+        for m in bad:
+            with self.assertRaises(graph.GraphError):
+                graph.validate({**base, "nodes": {**base["nodes"], "m": m}})
+        self.assertIsNone(graph.match_node({"fields": ["t"], "patterns": ["支払.{0,10}できない"]}, {"t": "支払いは可能"}))
+        self.assertTrue(graph.match_node({"fields": ["t"], "patterns": ["支払.{0,10}できない"]}, {"t": "ＡＢＣ支払ができない"}))
 
     def test_future_risk_branch(self):
         g = GRAPHS["monitor.alert"][0]

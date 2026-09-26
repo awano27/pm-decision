@@ -10,6 +10,10 @@ Node kinds
             score : routes {"bands": [[upper_exclusive, node], ...], "unsure": node},
                     optional "min_conf" (0.5); "adjacent_only": true sends splits across
                     non-neighbouring levels (each >= "split_at", 0.2) to unsure
+  match   {"fields": [event fields], "patterns": [regex, ...], "routes": {"yes", "no"}}
+            deterministic guard, no model: "yes" if any pattern matches any field
+            (case-insensitive, NFKC-normalized). For safety nets such as outages that
+            must never be under-scored by a model.
   plan    {"playbooks": "*" | [ids], "routes": {"ok", "none", "unsure"}}   (see plan.py)
             picks a playbook and orders its steps; the result is available to
             later nodes as {plan.title} {plan.summary} {plan.first}
@@ -70,6 +74,20 @@ def validate(g, playbooks=None):
             for t in _targets(n):
                 if t not in nodes:
                     raise GraphError(f"{nid}: route to unknown node {t}")
+        elif k == "match":
+            r = n.get("routes") or {}
+            if set(r) != {"yes", "no"}:
+                raise GraphError(f"{nid}: match needs exactly yes/no routes")
+            if not n.get("fields") or not n.get("patterns"):
+                raise GraphError(f"{nid}: match needs fields and patterns")
+            for pat in n["patterns"]:
+                try:
+                    re.compile(pat)
+                except re.error as e:
+                    raise GraphError(f"{nid}: bad pattern {pat!r}: {e}") from None
+            for t in r.values():
+                if t not in nodes:
+                    raise GraphError(f"{nid}: route to unknown node {t}")
         elif k == "plan":
             r = n.get("routes") or {}
             if set(r) != {"ok", "none", "unsure"}:
@@ -103,6 +121,17 @@ def _split_non_adjacent(probs, at):
     """True if two levels that are not neighbours both hold >= `at` probability."""
     heavy = sorted(int(k) for k, p in probs.items() if str(k).isdigit() and p >= at)
     return len(heavy) >= 2 and heavy[-1] - heavy[0] > 1
+
+
+def match_node(node, event):
+    """Pattern that matched (for the trace), or None."""
+    import unicodedata
+    for f in node["fields"]:
+        text = unicodedata.normalize("NFKC", str(event.get(f) or ""))
+        for pat in node["patterns"]:
+            if re.search(pat, text, re.IGNORECASE):
+                return pat
+    return None
 
 
 def route(node, ans, profile=None):
@@ -169,6 +198,11 @@ def run(g, event, backend, state=None, playbooks=None):
                 out["plan"] = plan
             return {"graph": g["name"], "event_id": event.get("id"), "event_kind": event.get("kind"),
                     "path": trace, **out}
+        if n["kind"] == "match":
+            hit = match_node(n, event)
+            trace.append({"node": nid, "answer": {"matched": hit}, "edge": "yes" if hit else "no"})
+            nid = n["routes"]["yes" if hit else "no"]
+            continue
         if n["kind"] == "plan":
             if not playbooks:  # no playbooks loaded: degrade to the pre-plan path
                 trace.append({"node": nid, "answer": {}, "edge": "unsure"})

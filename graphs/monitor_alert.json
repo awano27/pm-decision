@@ -15,8 +15,8 @@
       "yes_at": 0.8,
       "routes": {
         "yes": "log_resolved",
-        "no": "future_risk",
-        "unsure": "future_risk"
+        "no": "critical_outage",
+        "unsure": "critical_outage"
       }
     },
     "impact": {
@@ -314,6 +314,24 @@
       "kind": "advise",
       "queue": true,
       "advice": "将来のリスクと判定したが時期が不明なアラート {event.rule}: 対応時期を決めて"
+    },
+    "critical_outage": {
+      "kind": "match",
+      "_comment": "safety net: an explicit statement that customers cannot use a core function always pages, whatever the model scores",
+      "fields": [
+        "description",
+        "rule"
+      ],
+      "patterns": [
+        "(customers?|users?)[^.;]{0,40}(cannot|can't|unable to|are unable to)[^.;]{0,20}(pay|check ?out|sign in|log ?in|access|use the service)",
+        "(支払|決済|購入|ログイン|サインイン|ログオン)[^。]{0,10}(できない|できません|不可|通らない|失敗)",
+        "(all|every) regions?|全(リージョン|ユーザー|拠点)",
+        "(完全|全面)?停止中|全停止|サービス停止|service (is )?down|outage"
+      ],
+      "routes": {
+        "yes": "plan_incident",
+        "no": "future_risk"
+      }
     }
   }
 }

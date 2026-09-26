@@ -3,7 +3,8 @@
 Queue items (advise nodes with queue=true) are posted to the self chat as
 "[kimeru #N] ..." and the PM replies from any device (e.g. iPhone) with
 "OK N" / "NG N" / "保留 N". Actions attached to an advise node are only
-*proposed*; they run (dry-run in v0.1) when approved.
+*proposed*; they run (dry-run in v0.1) when approved. A reply drafted by the
+writer (writer.py) is shown in full; "修正 N <指示>" redrafts it and posts it again.
 """
 import json
 import re
@@ -12,15 +13,23 @@ import unicodedata
 from pathlib import Path
 
 from . import actions
+from . import writer as writer_mod
 
 HERE = Path(__file__).resolve().parent.parent
 REPLY = re.compile(r"^(OK|NG|保留)\s*#?(\d+)$", re.IGNORECASE)
+REDRAFT = re.compile(r"^修正\s*#?(\d+)\s*[:：]?\s*(\S.*)$")
 
 
 def parse_reply(line):
     """("OK", "3") for "OK 3", "ok3", "ＯＫ　３", "Ok #3"; None otherwise."""
     m = REPLY.match(unicodedata.normalize("NFKC", line).strip())
     return (m.group(1).upper(), m.group(2)) if m else None
+
+
+def parse_redraft(line):
+    """("3", "もっと短く") for "修正 3 もっと短く"; None otherwise."""
+    m = REDRAFT.match(unicodedata.normalize("NFKC", line).strip())
+    return (m.group(1), m.group(2).strip()) if m else None
 STATUS = {"OK": "approved", "NG": "rejected", "保留": "held"}
 
 
@@ -56,7 +65,10 @@ def format_post(n, rec):
         lines.append(f"内容: {rec['advice']}")
     if rec.get("actions"):
         lines.append("承認で実行: " + ", ".join(a.get("type", "?") for a in rec["actions"]))
-    lines.append(f"返信: OK {n} / NG {n} / 保留 {n}")
+    drafts = [a for a in rec.get("actions", []) if a.get("type") == "teams.reply" and a.get("drafted_by")]
+    for a in drafts:
+        lines.append(f"返信の下書き（{a['drafted_by']}）:\n{a['text']}")
+    lines.append(f"返信: OK {n} / NG {n} / 保留 {n}" + (f" / 修正 {n} <直してほしい点>" if drafts else ""))
     return "\n".join(lines)
 
 
@@ -123,17 +135,37 @@ def fresh_replies(read):
     out = []
     for i, e in enumerate(tl):
         if e.startswith("R:"):
-            r = parse_reply(e[2:])
-            if r and i > last_post.get(r[1], len(tl)):
+            r = parse_reply(e[2:]) or parse_redraft(e[2:])
+            num = r and (r[1] if r[0] in STATUS else r[0])
+            if num and i > last_post.get(num, len(tl)):
                 out.append(e[2:])
     return out
 
 
-def collect(out, bridge):
+def _redraft(it, instruction, writer):
+    rec = it["record"]
+    if writer is None or not rec.get("material_event"):
+        return None
+    if not writer_mod.apply(rec, rec["material_event"], writer, instruction):
+        return None
+    it["posted"], it["status"] = False, "pending"   # next notify posts the new draft under the same number
+    return {"status": "redrafted", "instruction": instruction}
+
+
+def collect(out, bridge, writer=None):
     """Read replies from the self chat and apply them. Returns applied changes."""
     ap = Approvals(out)
+    writer = writer if writer is not None else writer_mod.get_writer()
     changes = []
     for line in fresh_replies(bridge.read()):
+        rd = parse_redraft(line)
+        if rd:
+            it = ap.data["items"].get(rd[0])
+            if it and it["posted"] and it["status"] in ("pending", "held"):
+                ch = _redraft(it, rd[1], writer)
+                if ch:
+                    changes.append({"id": int(rd[0]), **ch})
+            continue
         r = parse_reply(line)
         if not r:
             continue

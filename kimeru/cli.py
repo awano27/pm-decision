@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import actions, events, graph
+from . import writer as writer_mod
 from . import plan as planner
 from .backends import ClmBackend, JevBackend, KevBackend, StubBackend
 
@@ -45,20 +46,29 @@ def _append(path, rec):
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
-def process(payload, graphs, backend, out, playbooks=None):
+def process(payload, graphs, backend, out, playbooks=None, writer=None):
     if playbooks is None:
         playbooks = planner.load_playbooks(DEFAULT_PLAYBOOKS)
+    writer = writer if writer is not None else writer_mod.get_writer()
     results = []
     for ev in events.normalize(payload):
         for g in graphs.get(ev["kind"], []):
             res = graph.run(g, ev, backend, playbooks=playbooks)
+            held = []
+            if writer_mod.apply(res, ev, writer):
+                res["material_event"] = {k: ev.get(k) for k in ("author", "text", "item") if ev.get(k)}
+                # a drafted reply goes out only after the PM approves its exact text
+                held = [a for a in res["actions"] if a.get("type") == "teams.reply"]
             # decide runs now; advise actions are only proposed until approved (see notify.collect)
-            res["executed"] = [actions.execute(a, dry_run=True) for a in res["actions"]] if res["outcome"] == "decide" else []
+            now = [a for a in res["actions"] if a not in held] if res["outcome"] == "decide" else []
+            res["executed"] = [actions.execute(a, dry_run=True) for a in now]
             res["at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
             res["summary"] = events.summary(ev)
+            if held and res["outcome"] == "decide":
+                res["needs_human"] = True
             _append(out / "decisions.jsonl", res)
             if res["needs_human"]:
-                _append(out / "queue.jsonl", res)
+                _append(out / "queue.jsonl", {**res, "actions": held} if held and res["outcome"] == "decide" else res)
             results.append(res)
     return results
 

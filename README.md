@@ -95,6 +95,21 @@ python -m kimeru --backend kev schedule install --minutes 5   # タスクスケ�
 
 1 サイクル: Teams のチャット一覧を取り込み（1 対 1 とメンション）→ 判断 → 人の確認が必要なものを自分とのチャットへ → iPhone などからの OK/NG を反映 → 朝（既定 8 時以降の最初のサイクル）にまとめを 1 回投稿。どれかの段が失敗しても残りは続き、`out/daily.log.jsonl` に残る。
 
+## 文面の下書き（writer）
+
+何をするかは判断モデル（Jev / Kev）が決め、返信文とチケットの説明文だけを文章生成 LLM に書かせる。
+
+```bash
+set KIMERU_WRITER=claude          # Claude Code CLI（`claude -p`、本人のログイン）。未設定なら定型文のまま
+set KIMERU_WRITER_MODEL=sonnet    # 省略可
+python eval/drafts.py --backend kev --writer claude --out drafts.jsonl   # 下書きの点検（作り話の日付・数値など）
+```
+
+- LLM にはツールを一切渡さず、元のメッセージと判断経路・進め方の手順だけを材料にする。材料にない日付・人名・数値を書かないよう指示する。
+- 下書きした返信は自動では送らない。自分とのチャットに全文を出し、`OK N` で送信、`修正 N もっと短く` のように返すと書き直して同じ番号で出し直す。
+- LLM が使えない・失敗したときは定型文に戻り、これまでどおり動く。
+- 社外に出せないデータでは、会社が認めた経路（会社契約の GitHub Copilot など）の LLM だけを使う。
+
 ## 取り込み（pull）
 
 ```bash

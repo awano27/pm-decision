@@ -28,7 +28,8 @@
 3. kimeru フォルダで `.\run-company-check.cmd monday`（T14 で kev による判断を確認）
 4. 常用するなら `setx KIMERU_BACKEND kev`（ユーザー環境変数。管理者権限不要）
 
-目安（開発 PC: Ryzen 9 7940HS の CPU のみ）: メモリ約 14GB、1 件の判断に中央値 6 秒・最大 15 秒。
+目安（開発 PC: Ryzen 9 7940HS の CPU のみ、既定の bf16）: メモリ約 10GB、1 件の判断に中央値 2.5 秒・最大 6 秒。
+bf16 命令のない CPU で遅い場合は、`set KEV_DTYPE=fp32` してから `start-kev.cmd` を実行する（メモリ約 14GB）。
 
 以下は同じ内容を手動で 1 つずつ行う場合の手順（かんたん実行が途中で止まったときの切り分け用）。
 

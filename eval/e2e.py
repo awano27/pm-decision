@@ -37,8 +37,8 @@ PBS = plan.load_playbooks(ROOT / "playbooks")
 GRAPHS = {k: v[0] for k, v in graph.load_dir(ROOT / "graphs", PBS).items()}
 
 
-def fixtures():
-    return [json.loads(l) for l in (ROOT / "eval" / "fixtures.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+def fixtures(name="fixtures.jsonl"):
+    return [json.loads(l) for l in (ROOT / "eval" / name).read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 class Recording:
@@ -115,10 +115,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--backend", choices=["jev", "kev", "clm"], required=True)
     ap.add_argument("--out")
+    ap.add_argument("--fixtures", default="fixtures.jsonl", help="file under eval/ (fixtures_holdout.jsonl: never tuned on)")
     a = ap.parse_args()
     be = {"kev": KevBackend, "clm": ClmBackend}.get(a.backend, JevBackend)()
     rows, t0 = [], time.time()
-    for fx in fixtures():
+    for fx in fixtures(a.fixtures):
         rows.append(run_one(fx, be))
     if a.out:
         Path(a.out).write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")

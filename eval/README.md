@@ -31,6 +31,15 @@ to a human, 3 confidently wrong with Jev's thresholds; 126 / 68 / 3 with the `ke
 Lesson: a profile tuned on the first 39 events (0.8 / 0.75) looked better there but added confidently-wrong
 decisions on 60 held-out events (3 -> 7). Always check a tuned profile on events it was not tuned on.
 
+After rule-first nodes and sharper criteria (e2e, final action): 62 correct / 25 human / 12 fallback / 0 wrong
+on the 99 events, 29 / 6 / 0 / 1 on `fixtures_holdout.jsonl` (36 events never tuned on;
+`python eval/e2e.py --backend kev --fixtures fixtures_holdout.jsonl`).
+
+CLM v0.1-8B (Contrastive-LM, Qwen3-8B Q8_0 embeddings via llama.cpp on CPU, ~1-2 s per question) was tried as
+a backend: 26 / 44 / 14 / 15 wrong (2 severe misses) on the 99 events, 9 / 23 / 3 / 1 on the held-out set;
+top-1 per question 49% vs Kev 85%. Its reference head is trained on coding-agent trajectories, and on these
+Japanese PM questions it collapses score answers to the middle. Not used.
+
 ## Question-writing rules learned from this eval
 
 - One condition per `noul`. "A and (B or C)" questions under-fire; split them into chained nodes.

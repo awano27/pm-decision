@@ -121,13 +121,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\teams-self.ps1 -Acti
 `self chat not found` が出たら、Teams の**チャット**タブを表示してから open を再実行。それでも出る場合は次を実行して結果を返す（名前は伏せ字で出る）:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .	ools	eams-self.ps1 -Action diag
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\teams-self.ps1 -Action diag
 ```
 
 見つからない場合は、Teams で自分とのチャットを**一度だけ手で開いて**から次を実行する（表示名をこの PC のローカルにだけ覚え、以後は自動で開ける）:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .	ools	eams-self.ps1 -Action learn
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\teams-self.ps1 -Action learn
 ```
 
 `parenMarkers` に自分とのチャットの印（例: `自分`）が出ている場合は、`-SelfMarker 自分` を付けても試せる。

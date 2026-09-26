@@ -25,9 +25,11 @@ if ($Only -contains 'monday') { $Only = @('T9', 'T12', 'T13', 'T14') }   # short
 function Want($t) { -not $Only -or $Only -contains $t }
 function Fails($s) {
   # prefer our one-line "... failed: ..." message, else the last traceback line
-  $lines = @(([string]$s -split "`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+  # PowerShell 5.1 prefixes native stderr with "python.exe : " and adds "+ CategoryInfo" noise lines
+  $lines = @(([string]$s -split "`n") | ForEach-Object { ($_ -replace '^\S+\.exe : ', '').Trim() } |
+    Where-Object { $_ -and $_ -notmatch '^(\+ |At .*char:|発生場所)' })
   $f = $lines | Where-Object { $_ -match 'failed: ' } | Select-Object -Last 1
-  if (-not $f) { $f = $lines | Where-Object { $_ -match '^\w+(Error|Exception)' } | Select-Object -Last 1 }
+  if (-not $f) { $f = $lines | Where-Object { $_ -match '^\w+(Error|Exception)\b' } | Select-Object -Last 1 }
   if ($f) { Short ($f -replace '^.*?(\w+ failed: )', '$1') } else { Short $s }
 }
 function Say($t) { Write-Host ""; Write-Host "== $t" -ForegroundColor Cyan }
@@ -253,7 +255,7 @@ if (Want 'T11') { Say "T11 Jev で判断（架空のサンプルのみ送信）"
 if (-not (Want 'T11')) { }
 elseif (-not $env:TYPESAFE_API_KEY) { Rec 'T11' 'SKIP（TYPESAFE_API_KEY 未設定。Jev は個人 PC で確認済み）' }
 elseif ($py -and (YesNo "   Jev（社外クラウド）に架空のサンプル1件を送信して判断させますか")) {
-  $j = Py @('-m', 'kimeru', '--backend', 'jev', '--out', (Join-Path $tmp 'jev'), 'run', 'examples	eams_chat.json')
+  $j = Py @('-m', 'kimeru', '--backend', 'jev', '--out', (Join-Path $tmp 'jev'), 'run', 'examples\teams_chat.json')
   Rec 'T11' $(if ($j -match 'plan:') { 'OK ' + (Short (($j -split "`n") | Where-Object { $_ -match 'path:' } | Select-Object -First 1)) } else { 'NG ' + (Short ($j -replace '[A-Za-z0-9_\-]{24,}', '<redacted>')) })
 } else { Rec 'T11' 'SKIP' }
 
@@ -294,7 +296,7 @@ if ($py -and (Want 'T14')) {
   if (-not $up) { Rec 'T14' 'SKIP（kev 未起動: C:\kev\start-kev.cmd を先に実行）' }
   else {
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    $k = Py @('-m', 'kimeru', '--backend', 'kev', '--out', (Join-Path $tmp 'kev'), 'run', 'examples	eams_chat.json')
+    $k = Py @('-m', 'kimeru', '--backend', 'kev', '--out', (Join-Path $tmp 'kev'), 'run', 'examples\teams_chat.json')
     $sw.Stop()
     Rec 'T14' $(if ($k -match 'plan:|path:') { ("OK {0}s " -f [math]::Round($sw.Elapsed.TotalSeconds)) + (Short (($k -split "`n") | Where-Object { $_ -match 'path:' } | Select-Object -First 1)) } else { 'NG ' + (Fails $k) })
   }

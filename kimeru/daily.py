@@ -64,7 +64,7 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
     today = now.strftime("%Y-%m-%d")
     if now.hour >= brief_hour and st.get("brief_date") != today:
         def do_brief():
-            text, ranked = brief_mod.build(out, backend)
+            text, ranked = brief_mod.build(out, backend, date=today)
             bridge.post(text, send)
             return len(ranked)
         _step(out, "brief", do_brief, r)

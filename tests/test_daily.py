@@ -61,6 +61,7 @@ class TestDaily(unittest.TestCase):
             self.assertEqual(r["approvals"], [f"#{n}:approved"])
             self.assertNotIn("brief", r)                              # once a day
             self.assertEqual(sum(1 for p, _ in t.posts if p.startswith("[kimeru brief")), 1)
+            self.assertTrue(any(p.startswith("[kimeru brief 2026-09-28]") for p, _ in t.posts))  # cycle's date
 
     def test_broken_step_does_not_stop_cycle(self):
         class Broken(FakeTeams):

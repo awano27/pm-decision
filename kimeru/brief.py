@@ -86,8 +86,9 @@ def format_post(ranked, total, pending, date=None):
     return "\n".join(lines)
 
 
-def build(out, backend, top=3, now=None):
+def build(out, backend, top=3, now=None, date=None):
+    """now: aware datetime for the collection window; date: "YYYY-MM-DD" shown in the header."""
     items = collect(out, now=now)
     ranked = rank(items, backend, top)
     pending = sum(1 for i in items if i["kind"] == "approval")
-    return format_post(ranked, len(items), pending), ranked
+    return format_post(ranked, len(items), pending, date), ranked

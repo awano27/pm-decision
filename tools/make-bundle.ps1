@@ -6,7 +6,9 @@
     <Out>\kev      the Kev bundle (start-kev.cmd, Python, torch, model)
     <Out>\az       the no-install Azure CLI ZIP, unpacked
 
-  On the company PC: copy <Out> anywhere, then double-click kimeru\START.cmd.
+    <Out>\START.cmd  the one thing to double-click on the company PC
+
+  On the company PC: copy <Out> (the whole folder) anywhere, then double-click <Out>\START.cmd.
 
   Usage: powershell -ExecutionPolicy Bypass -File tools\make-bundle.ps1 [-Out C:\develop\kimeru-pc]
            [-KevSrc C:\develop\kev-bundle] [-AzSrc C:\develop\az-bundle\az]
@@ -40,7 +42,10 @@ foreach ($pair in @(@($KevSrc, 'kev'), @($AzSrc, 'az'))) {
   if ($LASTEXITCODE -ge 8) { throw "copy failed: $($pair[0])" }
 }
 
+Set-Content -Path (Join-Path $Out 'START.cmd') -Encoding ASCII -Value @(
+  '@echo off', 'rem kimeru: double-click this after copying the whole folder', 'call "%~dp0kimeru\START.cmd"')
+
 $size = [math]::Round(((Get-ChildItem $Out -Recurse -File | Measure-Object Length -Sum).Sum) / 1GB, 1)
 $head = git -C $root rev-parse --short HEAD
 Write-Host "done: $Out (${size}GB, kimeru $head)"
-Write-Host "company PC: copy this folder anywhere, then double-click kimeru\START.cmd"
+Write-Host "company PC: copy this folder anywhere, then double-click START.cmd in it"

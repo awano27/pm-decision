@@ -246,7 +246,7 @@ if ($py) {
 # ---- Level 2: Azure CLI ----
 if (Want 'T10') { Say "T10 Azure CLI で取り込み" }
 # az: KIMERU_AZ, then PATH, then the official no-install ZIP unpacked to C:\az (same order as kimeru/pull.py)
-$az = @($env:KIMERU_AZ, (Get-Command az -ErrorAction SilentlyContinue).Source, (Join-Path (Split-Path -Parent $root) 'az\bin\az.cmd'), 'C:\az\bin\az.cmd') |
+$az = @($env:KIMERU_AZ, (Get-Command az -ErrorAction SilentlyContinue).Source, (Join-Path (Split-Path -Parent $root) 'az\bin\az.cmd'), (Join-Path $root 'az\bin\az.cmd'), 'C:\az\bin\az.cmd') |
   Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 if ($az) { $env:KIMERU_AZ = $az }
 if (-not (Want 'T10')) { }

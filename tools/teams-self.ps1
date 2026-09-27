@@ -66,6 +66,9 @@ function Get-TeamsWindow {
 }
 
 function Test-SelfTitle($w) { $w -and ($w.Current.Name -match "\| [^|]+ $SELF \|") }
+function Test-Selected($item) {
+  try { $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected } catch { $false }
+}
 
 function Find-All($root, $type) {
   $root.FindAll('Descendants', (New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, $type)))
@@ -127,6 +130,13 @@ function Find-SelfItems($w) {
   @($hit | Sort-Object { $_.Current.Name.Length } | Select-Object -First 3)
 }
 function Find-SelfItem($w) { Find-SelfItems $w | Select-Object -First 1 }
+function Get-NotesItem($w) { @(Get-ChatItems $w | Where-Object { $_.Current.Name.Length -lt 400 -and (Get-ChatId $_) -eq '48:notes' }) | Select-Object -First 1 }
+function Test-SelfOpen($w) {
+  if (-not $w) { return $false }
+  $n = Get-NotesItem $w
+  if ($n) { return [bool](Test-Selected $n) }
+  Test-SelfTitle $w
+}
 
 function Mask($s) {
   # keep short parentheticals like "(自分)" and punctuation; letters/digits become x
@@ -136,8 +146,13 @@ function Mask($s) {
 }
 
 function Open-SelfChat($w) {
-  if (Test-SelfTitle $w) { return $w }
+  if (Test-SelfOpen $w) { return $w }
   $cands = @(Find-SelfItems $w)
+  for ($i = 0; -not $cands -and $i -lt 10; $i++) {   # Teams just started: the chat list fills in a few seconds
+    Start-Sleep -Seconds 1
+    $w = Get-TeamsWindow
+    if ($w) { $cands = @(Find-SelfItems $w) }
+  }
   if (-not $cands) { Fail 'self chat not found in chat list (open it once by hand and run -Action learn)' }
   foreach ($item in $cands) {   # a candidate may be a message rather than the chat entry: verify by title
     try { $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() }
@@ -145,6 +160,7 @@ function Open-SelfChat($w) {
     for ($i = 0; $i -lt 12; $i++) {
       Start-Sleep -Milliseconds 250
       $w = Get-TeamsWindow
+      if ((Test-Selected $item) -and (Get-ChatId $item) -eq '48:notes') { return $w }
       if (Test-SelfTitle $w) { return $w }
     }
   }
@@ -204,7 +220,7 @@ if ($Action -eq 'learn') {
   Out-Json ([ordered]@{ ok = $true; learned = $true; itemFound = [bool](Find-SelfItem $w) })   # the name itself is not printed
   exit 0
 }
-if ($Action -eq 'status') { Out-Json @{ ok = $true; teams = [bool]$w; selfChatOpen = [bool](Test-SelfTitle $w) }; exit 0 }
+if ($Action -eq 'status') { Out-Json @{ ok = $true; teams = [bool]$w; selfChatOpen = [bool](Test-SelfOpen $w) }; exit 0 }
 if (-not $w) { Fail 'Teams window not found' }
 $w = Open-SelfChat $w
 if ($Action -eq 'open') { Out-Json @{ ok = $true; selfChatOpen = $true }; exit 0 }
@@ -228,7 +244,7 @@ function Wait-Sent($w) {
 
 function Send-Box($w) {
   # send only what kimeru wrote: self chat + compose box starts with [kimeru
-  if (-not (Test-SelfTitle (Get-TeamsWindow))) { Fail 'window changed before send; aborted' }
+  if (-not (Test-SelfOpen (Get-TeamsWindow))) { Fail 'window changed before send; aborted' }
   if (-not (Test-BoxHasKimeru $w)) { Fail 'compose box does not start with [kimeru; not sending' }
   # 1) the Send button: works whether Enter or Ctrl+Enter sends in this user's Teams settings
   $btn = Find-All $w $CT::Button | Where-Object { $_.Current.Name -match '^(送信|Send)(\s*\(|$)' -and $_.Current.IsEnabled } | Select-Object -First 1
@@ -238,7 +254,7 @@ function Send-Box($w) {
   }
   # 2) keys, re-checking the target each time (Enter may only insert a line break)
   foreach ($k in @('^{ENTER}', '{ENTER}')) {
-    if (-not (Test-SelfTitle (Get-TeamsWindow))) { Fail 'window changed before send; aborted' }
+    if (-not (Test-SelfOpen (Get-TeamsWindow))) { Fail 'window changed before send; aborted' }
     if (-not (Test-BoxHasKimeru $w)) { return 'keys' }
     Assert-Foreground $w
     (Get-Box $w).SetFocus(); Start-Sleep -Milliseconds 150

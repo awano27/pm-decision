@@ -29,6 +29,7 @@ ADO_FIELDS = ["System.Id", "System.WorkItemType", "System.Title", "System.AreaPa
 
 
 AZ_FALLBACKS = (str(Path(__file__).resolve().parents[2] / "az" / "bin" / "az.cmd"),   # one-folder layout: az next to kimeru
+                str(Path(__file__).resolve().parents[1] / "az" / "bin" / "az.cmd"),   # or inside it
                 r"C:\az\bin\az.cmd")                                                   # the official no-install ZIP unpacked to C:\az
 
 

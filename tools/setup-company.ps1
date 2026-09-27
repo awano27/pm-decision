@@ -22,7 +22,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $root = Split-Path -Parent $PSScriptRoot
-if (-not $KevDir) { $KevDir = @((Join-Path (Split-Path -Parent $root) 'kev'), 'C:\kev') | Where-Object { Test-Path (Join-Path $_ 'start-kev.cmd') } | Select-Object -First 1; if (-not $KevDir) { $KevDir = 'C:\kev' } }
+if (-not $KevDir) { $KevDir = @((Join-Path (Split-Path -Parent $root) 'kev'), (Join-Path $root 'kev'), 'C:\kev') | Where-Object { Test-Path (Join-Path $_ 'start-kev.cmd') } | Select-Object -First 1; if (-not $KevDir) { $KevDir = 'C:\kev' } }
 $data = Join-Path $env:LOCALAPPDATA 'kimeru'
 $startup = [Environment]::GetFolderPath('Startup')
 $lnk = Join-Path $startup 'kimeru-kev.lnk'

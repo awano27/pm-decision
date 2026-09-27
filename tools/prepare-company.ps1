@@ -12,8 +12,8 @@ $ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $PSScriptRoot
 # one-folder layout first (kev and az next to this kimeru folder), then the old fixed places
 $parent = Split-Path -Parent $root
-if (-not $KevDir) { $KevDir = @((Join-Path $parent 'kev'), 'C:\kev') | Where-Object { Test-Path (Join-Path $_ 'start-kev.cmd') } | Select-Object -First 1; if (-not $KevDir) { $KevDir = Join-Path $parent 'kev' } }
-if (-not $AzDir) { $AzDir = @((Join-Path $parent 'az'), 'C:\az') | Where-Object { Test-Path (Join-Path $_ 'bin\az.cmd') } | Select-Object -First 1; if (-not $AzDir) { $AzDir = Join-Path $parent 'az' } }
+if (-not $KevDir) { $KevDir = @((Join-Path $parent 'kev'), (Join-Path $root 'kev'), 'C:\kev') | Where-Object { Test-Path (Join-Path $_ 'start-kev.cmd') } | Select-Object -First 1; if (-not $KevDir) { $KevDir = Join-Path $parent 'kev' } }
+if (-not $AzDir) { $AzDir = @((Join-Path $parent 'az'), (Join-Path $root 'az'), 'C:\az') | Where-Object { Test-Path (Join-Path $_ 'bin\az.cmd') } | Select-Object -First 1; if (-not $AzDir) { $AzDir = Join-Path $parent 'az' } }
 if (Test-Path (Join-Path $AzDir 'bin\az.cmd')) { $env:KIMERU_AZ = Join-Path $AzDir 'bin\az.cmd' }   # the check that runs next uses the same az
 $missing = New-Object System.Collections.Generic.List[string]
 

@@ -6,11 +6,12 @@
 
 1. **開発 PC**: `powershell -ExecutionPolicy Bypass -File tools\make-bundle.ps1` で `C:\develop\kimeru-pc` を作る
    （`kimeru`・`kev`・`az` の 3 つが入る。約 11GB。2 回目以降は変わったファイルだけ上書き）
-2. **会社 PC**: リモートデスクトップで `kimeru-pc` フォルダを好きな場所（例: `C:\kimeru-pc`）にコピーする
-3. **会社 PC**: `kimeru-pc\kimeru\START.cmd` をダブルクリック
+2. **会社 PC**: リモートデスクトップで `kimeru-pc` フォルダを**フォルダごと**好きな場所（例: `C:\kimeru-pc`）にコピーする（中身だけを移すと `kev` と `az` が見つからない）
+3. **会社 PC**: `kimeru-pc\START.cmd` をダブルクリック
    - Kev の起動（最小化ウィンドウ。閉じない）→ az のサインイン（聞かれたら `y`、ブラウザで会社アカウント）→ 動作確認、の順に自動で進む
    - 途中で聞かれるのは次だけ。わからなければ Enter（いいえ／スキップ）でよい
-     - Python がないとき: python.org のインストール不要版（約 11MB）を取得してよいか
+     - Python がないとき: python.org のインストール不要版（約 11MB）を取得してよいか → `y`
+     - 自分とのチャットが見つからないとき: Teams で「自分とのチャット」を手で開く（90 秒待つ）
      - 確認待ち 2 件の送信 → iPhone から表示された `OK 番号` と `NG 番号` を返信
      - ADO の組織名・プロジェクト名（任意）
 4. 終わると結果シートが**クリップボードにコピー**される（`kimeru-check-result.txt` にも保存）。そのまま貼り付けて返す

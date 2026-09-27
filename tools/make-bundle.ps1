@@ -11,6 +11,9 @@
 
   On the company PC: copy <Out> (the whole folder) anywhere, then double-click <Out>\START.cmd.
 
+  -Zip also writes <Out>.zip: ONE file is far faster to copy over Remote Desktop than ~45,000 small
+  ones. On the company PC:  tar -xf C:\kimeru-pc.zip -C C:\   (built into Windows, faster than Explorer)
+
   Usage: powershell -ExecutionPolicy Bypass -File tools\make-bundle.ps1 [-Out C:\develop\kimeru-pc]
            [-KevSrc C:\develop\kev-bundle] [-AzSrc C:\develop\az-bundle\az]
 #>
@@ -19,7 +22,8 @@ param(
   [string]$Out = 'C:\develop\kimeru-pc',
   [string]$KevSrc = 'C:\develop\kev-bundle',
   [string]$AzSrc = 'C:\develop\az-bundle\az',
-  [string]$PyZip = 'C:\develop\bundle-cache\python-3.12.10-embed-amd64.zip'   # downloaded once, then reused
+  [string]$PyZip = 'C:\develop\bundle-cache\python-3.12.10-embed-amd64.zip',  # downloaded once, then reused
+  [switch]$Zip
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -55,9 +59,10 @@ if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Python
 $pth = Get-ChildItem $pyDir -Filter 'python*._pth' | Select-Object -First 1
 Add-Content -Path $pth.FullName -Value '..' -Encoding ASCII
 
-# kev and az: mirror (only changed files are copied again on a rebuild)
+# kev and az: mirror (only changed files are copied again on a rebuild). Link-time files
+# (*.lib import libraries, *.pdb debug symbols, ~0.85GB) and bytecode caches are never loaded at run time.
 foreach ($pair in @(@($KevSrc, 'kev'), @($AzSrc, 'az'))) {
-  robocopy $pair[0] (Join-Path $Out $pair[1]) /MIR /NFL /NDL /NJH /NP /R:1 /W:1 | Out-Null
+  robocopy $pair[0] (Join-Path $Out $pair[1]) /MIR /XF *.lib *.pdb /XD __pycache__ /NFL /NDL /NJH /NP /R:1 /W:1 | Out-Null
   if ($LASTEXITCODE -ge 8) { throw "copy failed: $($pair[0])" }
 }
 
@@ -68,3 +73,13 @@ $size = [math]::Round(((Get-ChildItem $Out -Recurse -File | Measure-Object Lengt
 $head = git -C $root rev-parse --short HEAD
 Write-Host "done: $Out (${size}GB, kimeru $head)"
 Write-Host "company PC: copy this folder anywhere, then double-click START.cmd in it"
+
+if ($Zip) {
+  $zipPath = "$Out.zip"
+  if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
+  # built-in bsdtar: zip format, so the company PC needs nothing extra to unpack it
+  tar -a -c -f $zipPath -C (Split-Path -Parent $Out) (Split-Path -Leaf $Out)
+  if ($LASTEXITCODE -ne 0) { throw 'zip failed' }
+  $zs = [math]::Round((Get-Item $zipPath).Length / 1GB, 1)
+  Write-Host "zip:  $zipPath (${zs}GB). company PC: tar -xf <zip> -C C:\  then C:\$(Split-Path -Leaf $Out)\START.cmd"
+}

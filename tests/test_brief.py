@@ -49,6 +49,17 @@ class TestCollect(unittest.TestCase):
             self.assertFalse(any("振り返り" in t or "古い手順" in t for t in texts))
             self.assertTrue(any(t.startswith("確認待ち（未投稿）") for t in texts))
 
+    def test_yesterdays_today_shows_as_overdue(self):
+        with tempfile.TemporaryDirectory() as d:
+            at = datetime(2026, 9, 24, 1, 0, tzinfo=timezone.utc)          # Thu 10:00 JST
+            write(d, "decisions.jsonl", [decision("e1", [step(1, "責任者を指名", 0), step(2, "影響確認", 1)], at=at)])
+            now = at + timedelta(days=1)                                   # Fri
+            texts = {i["text"]: i["due_level"] for i in brief.collect(d, now=now)}
+            due0, due1 = brief.due_date(at.isoformat(), 0), brief.due_date(at.isoformat(), 1)
+            self.assertIn(f"障害対応の取りまとめ: 責任者を指名（{due0.month}/{due0.day} 期限・超過）", texts)
+            self.assertEqual(due1.weekday(), 4)                            # "今週" = that Friday
+            self.assertEqual(texts[f"障害対応の取りまとめ: 影響確認（今日）"], 0)
+
     def test_posted_approvals_replace_queue_rows(self):
         with tempfile.TemporaryDirectory() as d:
             q = {"graph": "workitem-intake", "event_id": "4812", "node": "triage_pm", "advice": "優先度を判定できないチケット"}

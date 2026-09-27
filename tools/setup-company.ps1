@@ -58,6 +58,16 @@ function Show-Status {
   }).GetEnumerator() | ForEach-Object { '{0,-24} {1}' -f $_.Key, $_.Value }
 }
 
+$prevFile = Join-Path $data 'setup-previous.json'
+function Restore-Previous {
+  # puts back KIMERU_BACKEND and the logon shortcut as they were before the first install
+  $prev = if (Test-Path $prevFile) { Get-Content -Raw -Encoding UTF8 $prevFile | ConvertFrom-Json } else { $null }
+  cmd /c "schtasks /Delete /TN $task /F >nul 2>nul"
+  if ((Test-Path $lnk) -and -not ($prev -and $prev.shortcut)) { Remove-Item $lnk -Force }
+  [Environment]::SetEnvironmentVariable('KIMERU_BACKEND', $(if ($prev) { $prev.backend } else { $null }), 'User')
+  if (Test-Path $prevFile) { Remove-Item $prevFile -Force }
+}
+
 switch ($Action) {
   'status' { Show-Status }
 
@@ -67,6 +77,13 @@ switch ($Action) {
     $py = Find-Python
     if (-not $py) { throw 'Python 3.10+ not found. Run run-company-check.cmd once (it can fetch the no-install Python into .python).' }
 
+    # remember what was there before the first install, so remove (or a failed install) can put it back
+    New-Item -ItemType Directory -Force $data | Out-Null
+    if (-not (Test-Path $prevFile)) {
+      @{ backend = [Environment]::GetEnvironmentVariable('KIMERU_BACKEND', 'User'); shortcut = [bool](Test-Path $lnk) } |
+        ConvertTo-Json | Set-Content -Path $prevFile -Encoding UTF8
+    }
+    try {
     # 1) Kev at logon (minimized window)
     $sh = New-Object -ComObject WScript.Shell
     $s = $sh.CreateShortcut($lnk)
@@ -82,12 +99,16 @@ switch ($Action) {
     Write-Host '2) KIMERU_BACKEND=kev（ユーザー環境変数）'
 
     # 3) daily cycle every N minutes, hidden, data in %LOCALAPPDATA%\kimeru
-    New-Item -ItemType Directory -Force $data | Out-Null
     Push-Location $root
     $extra = if ($AdoOrg -and $AdoProject) { "--ado-org `"$AdoOrg`" --ado-project `"$AdoProject`"" } else { '' }
     try { & $py -m kimeru --backend kev --out $data schedule install --minutes $Minutes --extra $extra; if ($LASTEXITCODE -ne 0) { throw 'schedule install failed' } }
     finally { Pop-Location }
     Write-Host "3) 自動運転: $Minutes 分ごと（データ: $data）"
+    } catch {
+      Write-Host "導入に失敗したので元に戻します: $_" -ForegroundColor Yellow
+      Restore-Previous
+      throw
+    }
 
     if (-not (Kev-Up)) {
       Write-Host ''
@@ -100,8 +121,7 @@ switch ($Action) {
 
   'remove' {
     cmd /c "schtasks /Delete /TN $task /F >nul 2>nul"
-    if (Test-Path $lnk) { Remove-Item $lnk -Force }
-    [Environment]::SetEnvironmentVariable('KIMERU_BACKEND', $null, 'User')
-    Write-Host "削除しました（自動運転・Kev 自動起動・KIMERU_BACKEND）。データは残しています: $data"
+    Restore-Previous
+    Write-Host "削除しました（自動運転・Kev 自動起動）。KIMERU_BACKEND は導入前の値に戻しました。データは残しています: $data"
   }
 }

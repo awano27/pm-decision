@@ -33,6 +33,20 @@ function Fails($s) {
   if ($f) { Short ($f -replace '^.*?(\w+ failed: )', '$1') } else { Short $s }
 }
 function Say($t) { Write-Host ""; Write-Host "== $t" -ForegroundColor Cyan }
+function Safe-Error($raw) {
+  # teams-self.ps1 errors are kimeru's own fixed messages; anything else (screen text) is not recorded
+  try { $j = $raw.Trim().TrimStart([char]0xFEFF) | ConvertFrom-Json; if ($j.error) { return 'error=' + (Short $j.error) } } catch {}
+  "出力を解析できず（$(([string]$raw).Length) 文字、内容は記録しない）"
+}
+function Safe-Diag($raw) {
+  # whitelisted fields only: no chat titles, tab names or name-like markers on the result sheet
+  try {
+    $j = $raw.Trim().TrimStart([char]0xFEFF) | ConvertFrom-Json
+    if ($j.error) { return 'error=' + (Short $j.error) }
+    $marks = @($j.parenMarkers.PSObject.Properties).Count
+    return "selfItemFound=$($j.selfItemFound) learnedName=$($j.learnedName) treeItems=$($j.treeItems) listItems=$($j.listItems) 括弧表記の種類=$marks"
+  } catch { return "診断出力を解析できず（$(([string]$raw).Length) 文字、内容は記録しない）" }
+}
 function Rec($k, $v) { $Results[$k] = $v; Write-Host ("   {0}: {1}" -f $k, $v) -ForegroundColor Yellow }
 function Short($s) { $x = ([string]$s -replace '\s+', ' ').Trim(); if ($x.Length -gt 160) { $x.Substring(0, 160) } else { $x } }
 function YesNo($q) { (Read-Host "$q [y/N]") -match '^\s*([yYｙＹ]|はい)' }   # tolerate stray keys after y ("y[")
@@ -118,7 +132,7 @@ if ($uia) {
   if (-not $selfOk) {
     # names are masked by diag; this tells us how the work account labels the self chat
     $d = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'teams-self.ps1') -Action diag 2>&1 | Out-String
-    Rec 'T3-diag' (($d -replace '\s+', ' ').Trim())
+    Rec 'T3-diag' (Safe-Diag $d)
     Write-Host "   自分とのチャットを自動で見つけられませんでした。" -ForegroundColor Green
     Write-Host "   Teams で「自分とのチャット」を手で開いてください（最大 90 秒、開いたら自動で検出します。Ctrl+C で中止）" -ForegroundColor Green
     $l = $null; $deadline = (Get-Date).AddSeconds(90)
@@ -284,7 +298,7 @@ if ($uia -and (Want 'T12')) {
     $withText = @($cs | Where-Object { $_.title -and $_.preview }).Count
     Rec 'T12' ("OK chats={0} [{1}] title+preview={2} unread={3} mention={4}" -f $cs.Count, $kinds, $withText,
       @($cs | Where-Object unread).Count, @($cs | Where-Object mention).Count)
-  } catch { Rec 'T12' ('NG ' + (Short $c)) }
+  } catch { Rec 'T12' ('NG ' + (Safe-Error $c)) }
 }
 
 # ---- T13: can Kev (local, Jev-compatible model) run here? (no downloads) ----

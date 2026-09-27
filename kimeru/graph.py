@@ -60,6 +60,17 @@ def validate(g, playbooks=None):
             q = n.get("question") or {}
             if q.get("type") not in ("noul", "choice", "score"):
                 raise GraphError(f"{nid}: bad question type")
+            if not str(q.get("instructions") or "").strip():
+                raise GraphError(f"{nid}: question needs instructions")
+            crit = q.get("criteria")
+            if q["type"] == "choice" and not (isinstance(crit, dict) and len(crit) >= 2
+                                              and all(str(v).strip() for v in crit.values())):
+                raise GraphError(f"{nid}: choice needs at least 2 described options")
+            if q["type"] == "score" and not (isinstance(crit, list) and len(crit) >= 2 and all(str(v).strip() for v in crit)):
+                raise GraphError(f"{nid}: score needs at least 2 described levels")
+            for kname in [x for x in n if x.endswith("_conf") or x.startswith("noul_")]:
+                if not isinstance(n[kname], (int, float)) or not 0 <= n[kname] <= 1:
+                    raise GraphError(f"{nid}: {kname} must be between 0 and 1")
             r = n.get("routes") or {}
             if "unsure" not in r:
                 raise GraphError(f"{nid}: judge needs an 'unsure' route")
@@ -71,6 +82,11 @@ def validate(g, playbooks=None):
                     raise GraphError(f"{nid}: no route for {sorted(missing)}")
             if q["type"] == "score" and not r.get("bands"):
                 raise GraphError(f"{nid}: score needs bands")
+            if q["type"] == "score":
+                cuts = [b[0] for b in r["bands"]]
+                if any(b >= a for a, b in zip(cuts[1:], cuts)) or cuts[-1] < len(q["criteria"]) - 1:
+                    raise GraphError(f"{nid}: bands must rise and the last must cover the top level "
+                                     f"({len(q['criteria']) - 1})")
             for gd in n.get("guards", []):
                 if q["type"] != "score" or not {"field", "pattern", "below"} <= set(gd):
                     raise GraphError(f"{nid}: guards need a score question and field/pattern/below")

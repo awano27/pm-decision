@@ -22,6 +22,25 @@ def _rows(p):
     return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()] if p.exists() else []
 
 
+def due_date(at, due_level):
+    """Absolute local due date of a plan step decided at `at` (ISO, UTC): 今日 -> that day,
+    今週 -> Friday of that week (the same day if decided on a weekend), later -> None."""
+    d = datetime.fromisoformat(at).astimezone().date()
+    if due_level == 0:
+        return d
+    if due_level == 1:
+        return d + timedelta(days=max(0, 4 - d.weekday()))
+    return None
+
+
+def due_label(due, today):
+    if due < today:
+        return f"{due.month}/{due.day} 期限・超過"
+    if due == today:
+        return "今日"
+    return f"{due.month}/{due.day} まで"
+
+
 def collect(out, now=None, days=2):
     """Return candidate items: [{key, kind, text, subject, due_level}] (deduped, newest first, capped).
     `text` is for humans; `subject` (no due label) is what Jev sees."""
@@ -52,10 +71,14 @@ def collect(out, now=None, days=2):
         if at and datetime.fromisoformat(at) < since:
             continue
         p = rec.get("plan")
+        today = now.astimezone().date()
         for s in (p or {}).get("steps", []):
             if s.get("due_level", 2) <= 1:
+                # "今日" was relative to the decision; re-anchor it so yesterday's "today" shows as overdue
+                due = due_date(at, s["due_level"]) if at else None
+                label, level = (due_label(due, today), 0 if due <= today else 1) if due else (s["due"], s["due_level"])
                 add(f"step:{rec.get('event_id')}:{p['playbook']}:{s['id']}", "step",
-                    f"{p['title']}: {s['title']}（{s['due']}）", f"{p['title']}: {s['title']}", s["due_level"])
+                    f"{p['title']}: {s['title']}（{label}）", f"{p['title']}: {s['title']}", level)
     return items[:MAX_ITEMS]
 
 

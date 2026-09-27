@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 
@@ -48,6 +49,32 @@ class TestCriticalRule(unittest.TestCase):
             "d": {"kind": "decide", "actions": []}}}
         with self.assertRaises(graph.GraphError):
             graph.validate(g)
+
+
+class TestValidate(unittest.TestCase):
+    def judge(self, q, routes, **extra):
+        return {"name": "t", "start": "j", "nodes": {
+            "j": {"kind": "judge", "question": q, "routes": routes, **extra},
+            "d": {"kind": "decide", "actions": []}}}
+
+    def test_rejects_malformed_questions(self):
+        bad = [
+            self.judge({"type": "choice", "instructions": "x", "criteria": {}}, {"unsure": "d"}),
+            self.judge({"type": "choice", "instructions": "x", "criteria": {"a": "A"}}, {"a": "d", "unsure": "d"}),
+            self.judge({"type": "noul", "instructions": ""}, {"yes": "d", "no": "d", "unsure": "d"}),
+            self.judge({"type": "score", "instructions": "x", "criteria": ["a", "b", "c"]},
+                       {"bands": [[1.5, "d"], [1.0, "d"]], "unsure": "d"}),
+            self.judge({"type": "score", "instructions": "x", "criteria": ["a", "b", "c"]},
+                       {"bands": [[1.5, "d"]], "unsure": "d"}),                      # top level 2 not covered
+            self.judge({"type": "noul", "instructions": "x"}, {"yes": "d", "no": "d", "unsure": "d"}, min_conf=1.5),
+        ]
+        for g in bad:
+            with self.assertRaises(graph.GraphError, msg=json.dumps(g["nodes"]["j"], ensure_ascii=False)):
+                graph.validate(g)
+
+    def test_accepts_well_formed(self):
+        graph.validate(self.judge({"type": "score", "instructions": "x", "criteria": ["a", "b", "c"]},
+                                  {"bands": [[0.5, "d"], [2, "d"]], "unsure": "d"}, min_conf=0.4))
 
 
 class TestSeverityGuard(unittest.TestCase):

@@ -76,6 +76,14 @@ def _chip(s, kinds):
     return f'<span class="chip {cls}" title="{_e(s["node"])}">{label}: {_e(v)}</span>'
 
 
+def _io_note(out):
+    """What actually left the PC: only self-chat posts (with --send); ADO, paging, replies are recorded, not run."""
+    ap = Path(out) / "approvals.json"
+    items = json.loads(ap.read_text(encoding="utf-8")).get("items", {}) if ap.exists() else {}
+    posted = sum(1 for it in items.values() if it.get("posted"))
+    return (f"自分とのチャットへの実投稿 {posted} 件 ・ ADO 更新・当番呼び出し・Teams 返信は実行予定として記録のみ（未実行）")
+
+
 def build(out, graphs, title="kimeru 判断レポート"):
     out = Path(out)
     decisions = _rows(out / "decisions.jsonl")
@@ -103,7 +111,7 @@ def build(out, graphs, title="kimeru 判断レポート"):
              (counts["safe"], "確信が低く安全側で決定"), (counts["human"], "人の確認へ")]
     parts = [f"<!doctype html><html lang='ja'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>",
              f"<title>{_e(title)}</title><style>{CSS}</style></head><body><main>",
-             f"<h1>{_e(title)}</h1><p class='sub'>{_e(out)} ・ 外部への書き込みはすべて試し実行（記録のみ）</p>",
+             f"<h1>{_e(title)}</h1><p class='sub'>{_e(out)} ・ {_e(_io_note(out))}</p>",
              "<div class='tiles'>" + "".join(f"<div class='tile'><b>{v}</b><span>{_e(l)}</span></div>" for v, l in tiles) + "</div>",
              "<div class='legend'><span class='chip rule'>規則</span><span class='chip model'>判断（モデル）</span><span class='chip plan'>進め方</span>"
              "<span class='badge ok'>自動</span><span class='badge safe'>安全側</span><span class='badge human'>人の確認</span></div>"]

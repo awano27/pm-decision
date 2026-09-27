@@ -34,13 +34,13 @@ foreach ($p in @(@($KevSrc, 'start-kev.cmd'), @($AzSrc, 'bin\az.cmd'))) {
 New-Item -ItemType Directory -Force $Out | Out-Null
 
 # kimeru: committed files only, so nothing private or half-edited is carried
-$zip = Join-Path $env:TEMP 'kimeru-bundle.zip'
-git -C $root archive --format=zip -o $zip HEAD
+$srcZip = Join-Path $env:TEMP 'kimeru-bundle.zip'
+git -C $root archive --format=zip -o $srcZip HEAD
 if ($LASTEXITCODE -ne 0) { throw 'git archive failed' }
 $dst = Join-Path $Out 'kimeru'
 if (Test-Path $dst) { Remove-Item -Recurse -Force $dst }
-Expand-Archive -Path $zip -DestinationPath $dst
-Remove-Item $zip
+Expand-Archive -Path $srcZip -DestinationPath $dst
+Remove-Item $srcZip
 
 # no-install Python inside kimeru, so the company PC never has to fetch it
 if (-not (Test-Path $PyZip)) {

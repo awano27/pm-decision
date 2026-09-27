@@ -12,7 +12,7 @@
   On the company PC: copy <Out> (the whole folder) anywhere, then double-click <Out>\START.cmd.
 
   -Zip also writes <Out>.zip: ONE file is far faster to copy over Remote Desktop than ~45,000 small
-  ones. On the company PC:  tar -xf C:\kimeru-pc.zip -C C:\   (built into Windows, faster than Explorer)
+  ones. On the company PC:  C:\Windows\System32	ar.exe -xf C:\kimeru-pc.zip -C C:\   (built into Windows, faster than Explorer)
 
   Usage: powershell -ExecutionPolicy Bypass -File tools\make-bundle.ps1 [-Out C:\develop\kimeru-pc]
            [-KevSrc C:\develop\kev-bundle] [-AzSrc C:\develop\az-bundle\az]
@@ -78,8 +78,9 @@ if ($Zip) {
   $zipPath = "$Out.zip"
   if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
   # built-in bsdtar: zip format, so the company PC needs nothing extra to unpack it
-  tar -a -c -f $zipPath -C (Split-Path -Parent $Out) (Split-Path -Leaf $Out)
+  $bsdtar = Join-Path $env:SystemRoot 'System32	ar.exe'   # not Git's GNU tar, which cannot write zip
+  & $bsdtar -a -c -f $zipPath -C (Split-Path -Parent $Out) (Split-Path -Leaf $Out)
   if ($LASTEXITCODE -ne 0) { throw 'zip failed' }
   $zs = [math]::Round((Get-Item $zipPath).Length / 1GB, 1)
-  Write-Host "zip:  $zipPath (${zs}GB). company PC: tar -xf <zip> -C C:\  then C:\$(Split-Path -Leaf $Out)\START.cmd"
+  Write-Host "zip:  $zipPath (${zs}GB). company PC: C:\Windows\System32	ar.exe -xf <zip> -C C:\  then C:\$(Split-Path -Leaf $Out)\START.cmd"
 }

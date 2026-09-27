@@ -5,6 +5,7 @@
     <Out>\kimeru   this repo at HEAD (git archive: committed files only, no private data)
     <Out>\kev      the Kev bundle (start-kev.cmd, Python, torch, model)
     <Out>\az       the no-install Azure CLI ZIP, unpacked
+    <Out>\kimeru\.python  python.org's no-install Python (embeddable, signature checked)
 
     <Out>\START.cmd  the one thing to double-click on the company PC
 
@@ -17,7 +18,8 @@
 param(
   [string]$Out = 'C:\develop\kimeru-pc',
   [string]$KevSrc = 'C:\develop\kev-bundle',
-  [string]$AzSrc = 'C:\develop\az-bundle\az'
+  [string]$AzSrc = 'C:\develop\az-bundle\az',
+  [string]$PyZip = 'C:\develop\bundle-cache\python-3.12.10-embed-amd64.zip'   # downloaded once, then reused
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -35,6 +37,23 @@ $dst = Join-Path $Out 'kimeru'
 if (Test-Path $dst) { Remove-Item -Recurse -Force $dst }
 Expand-Archive -Path $zip -DestinationPath $dst
 Remove-Item $zip
+
+# no-install Python inside kimeru, so the company PC never has to fetch it
+if (-not (Test-Path $PyZip)) {
+  New-Item -ItemType Directory -Force (Split-Path $PyZip) | Out-Null
+  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+  Invoke-WebRequest 'https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip' -OutFile $PyZip -UseBasicParsing
+}
+$pyDir = Join-Path $dst '.python'
+Expand-Archive -Path $PyZip -DestinationPath $pyDir -Force
+$sig = Get-AuthenticodeSignature (Join-Path $pyDir 'python.exe')
+if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Python Software Foundation') {
+  Remove-Item -Recurse -Force $pyDir
+  throw "python.exe signature not valid ($($sig.Status)); removed"
+}
+# embeddable Python ignores PYTHONPATH and the current folder: add the repo root to its ._pth
+$pth = Get-ChildItem $pyDir -Filter 'python*._pth' | Select-Object -First 1
+Add-Content -Path $pth.FullName -Value '..' -Encoding ASCII
 
 # kev and az: mirror (only changed files are copied again on a rebuild)
 foreach ($pair in @(@($KevSrc, 'kev'), @($AzSrc, 'az'))) {

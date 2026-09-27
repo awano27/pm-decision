@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import actions, brief as brief_mod, events, graph, notify, pull
+from .backends import BackendUnavailable
 
 
 def _log(out, rec):
@@ -35,14 +36,13 @@ def process_inbox(inbox, out, graphs, backend, playbooks, process):
     n = 0
     for f in events.inbox_files(inbox):
         try:
-            n += len(process(events.read_inbox_file(f), graphs, backend, Path(out), playbooks))
+            n += len(process(events.read_inbox_file(f), graphs, backend, Path(out), playbooks, dedup=True))
             f.replace(done / f.name)
-        except RuntimeError as e:
-            if "not reachable" in str(e):   # judge backend (e.g. local Kev) not up yet: keep files for the next cycle
-                _log(out, {"step": "judge", "waiting": str(e)})
-                break
-            _log(out, {"step": "judge", "file": f.name, "error": f"{type(e).__name__}: {e}"})
-            f.replace(done / (f.name + ".error"))
+        except BackendUnavailable as e:
+            # judge down or overloaded (Kev not up yet, 429/5xx, timeout): keep the file for the next cycle;
+            # events already decided from it are skipped then (dedup), so a half-done file is safe to retry
+            _log(out, {"step": "judge", "waiting": str(e)})
+            break
         except Exception as e:
             _log(out, {"step": "judge", "file": f.name, "error": f"{type(e).__name__}: {e}"})
             f.replace(done / (f.name + ".error"))

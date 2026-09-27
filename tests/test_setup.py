@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from kimeru import cli, daily
+from kimeru.backends import BackendUnavailable
 
 
 class TestSchedule(unittest.TestCase):
@@ -39,7 +40,7 @@ class TestKevNotUpYet(unittest.TestCase):
             (inbox / "a.json").write_text(json.dumps({"kind": "teams.chat", "id": "1", "text": "x"}), encoding="utf-8")
 
             def down(*a, **k):
-                raise RuntimeError("Kev not reachable at http://127.0.0.1:8009/v1 (refused)")
+                raise BackendUnavailable("Kev not reachable at http://127.0.0.1:8009/v1 (refused)")
             n = daily.process_inbox(inbox, out, {}, None, {}, down)
             self.assertEqual(n, 0)
             self.assertTrue((inbox / "a.json").exists())                 # waits for the next cycle

@@ -53,9 +53,17 @@ class JevBackend:
                 msg = e.read().decode("utf-8", "replace")[:300]
                 if self._key:
                     msg = msg.replace(self._key, "<key>")
-                raise RuntimeError(f"{self.NAME} HTTP {e.code}: {msg}") from None
+                err = BackendUnavailable if e.code in (429, 500, 502, 503, 504, 529) else RuntimeError
+                raise err(f"{self.NAME} HTTP {e.code}: {msg}") from None
             except urllib.error.URLError as e:
-                raise RuntimeError(f"{self.NAME} not reachable at {self.api} ({e.reason})") from None
+                raise BackendUnavailable(f"{self.NAME} not reachable at {self.api} ({e.reason})") from None
+            except TimeoutError:
+                raise BackendUnavailable(f"{self.NAME} timed out after {self.TIMEOUT}s at {self.api}") from None
+
+
+class BackendUnavailable(RuntimeError):
+    """The judge could not be reached or is overloaded (429/5xx/timeout after retries).
+    Inbox files stay in place and are retried on the next cycle."""
 
 
 class KevBackend(JevBackend):

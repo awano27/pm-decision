@@ -148,10 +148,24 @@ def alert_payload(a):
     }, "alertContext": {"signalType": ess.get("signalType"), "alertState": ess.get("alertState")}}}
 
 
-def pull_alerts(subscription, inbox, out, http=http_json, token=None, time_range="1h"):
+ALERT_RANGES = [("1h", 1), ("1d", 24), ("7d", 24 * 7), ("30d", 24 * 30)]   # values the Alerts API accepts
+
+
+def alert_time_range(since, now):
+    """Smallest API window that reaches back to the last successful pull (plus 15 min slack),
+    so a PC that was off for hours does not skip alerts. First run: 1h."""
+    if not since:
+        return "1h"
+    hours = (now - datetime.fromisoformat(since.replace("Z", "+00:00"))).total_seconds() / 3600 + 0.25
+    return next((r for r, h in ALERT_RANGES if h >= hours), ALERT_RANGES[-1][0])
+
+
+def pull_alerts(subscription, inbox, out, http=http_json, token=None, time_range=None, now=None):
     """Return number of new fired alerts dropped into the inbox (each alert id once)."""
     st = State(out)
     sec = st.section(f"alerts:{subscription}")
+    now = now or datetime.now(timezone.utc)
+    time_range = time_range or alert_time_range(sec.get("since"), now)
     token = token or az_token(ARM_RESOURCE)
     url = (f"https://management.azure.com/subscriptions/{urllib.parse.quote(subscription)}/providers/Microsoft.AlertsManagement/alerts"
            f"?api-version=2019-05-05-preview&monitorCondition=Fired&timeRange={time_range}")
@@ -168,6 +182,8 @@ def pull_alerts(subscription, inbox, out, http=http_json, token=None, time_range
         sec["seen"] = sec["seen"][-2000:]
         st.save()  # per page, so a failed later page does not re-deliver earlier alerts
         url = res.get("nextLink")
+    sec["since"] = _iso(now)   # only after every page came back: the next window starts here
+    st.save()
     return n
 
 

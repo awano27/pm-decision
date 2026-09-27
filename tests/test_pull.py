@@ -194,6 +194,21 @@ class TestAlerts(unittest.TestCase):
             self.assertEqual(pull.pull_alerts("s1", Path(d) / "i", Path(d) / "o", http=http, token="t"), 1)
             self.assertEqual(pull.pull_alerts("s1", Path(d) / "i", Path(d) / "o", http=http, token="t"), 0)
 
+    def test_window_reaches_back_to_last_success(self):
+        from datetime import datetime, timedelta, timezone
+        now = datetime(2026, 10, 1, 9, 0, tzinfo=timezone.utc)
+        ago = lambda h: (now - timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.assertEqual(pull.alert_time_range(None, now), "1h")
+        self.assertEqual(pull.alert_time_range(ago(0.1), now), "1h")
+        self.assertEqual(pull.alert_time_range(ago(3), now), "1d")      # PC was off for 3 hours
+        self.assertEqual(pull.alert_time_range(ago(30), now), "7d")
+        self.assertEqual(pull.alert_time_range(ago(24 * 60), now), "30d")
+        http = FakeHttp([("/alerts?", {"value": []})])
+        with tempfile.TemporaryDirectory() as d:
+            pull.pull_alerts("s1", Path(d) / "i", Path(d) / "o", http=http, token="t", now=now)
+            pull.pull_alerts("s1", Path(d) / "i", Path(d) / "o", http=http, token="t", now=now + timedelta(hours=5))
+            self.assertIn("timeRange=1d", http.calls[-1][1])
+
     def test_pulled_alert_runs_through_graph(self):
         pbs_graphs = graph.load_dir(ROOT / "graphs")
         with tempfile.TemporaryDirectory() as d:

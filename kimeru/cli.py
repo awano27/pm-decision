@@ -14,6 +14,7 @@
   python -m kimeru --backend kev schedule install [--minutes 5]   # every N min, no admin
 """
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -24,7 +25,7 @@ from pathlib import Path
 from . import actions, events, graph
 from . import writer as writer_mod
 from . import plan as planner
-from .backends import ClmBackend, JevBackend, KevBackend, StubBackend
+from .backends import BackendUnavailable, ClmBackend, JevBackend, KevBackend, StubBackend
 
 HERE = Path(__file__).resolve().parent.parent
 DEFAULT_PLAYBOOKS = HERE / "playbooks"
@@ -46,13 +47,28 @@ def _append(path, rec):
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
-def process(payload, graphs, backend, out, playbooks=None, writer=None):
+def _graph_version(g):
+    return hashlib.sha1(json.dumps(g, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:8]
+
+
+def _processed(out):
+    p = out / "processed.txt"
+    return set(p.read_text(encoding="utf-8").split()) if p.exists() else set()
+
+
+def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=False):
+    """Judge every event in `payload`. dedup=True (inbox/daily) skips an event already decided
+    by the same graph version, so a retried or re-dropped file does not decide twice."""
     if playbooks is None:
         playbooks = planner.load_playbooks(DEFAULT_PLAYBOOKS)
     writer = writer if writer is not None else writer_mod.get_writer()
+    seen = _processed(out) if dedup else set()
     results = []
     for ev in events.normalize(payload):
         for g in graphs.get(ev["kind"], []):
+            key = f"{g['name']}@{_graph_version(g)}:{ev['kind']}:{ev.get('id')}".replace(" ", "_")
+            if key in seen:
+                continue
             res = graph.run(g, ev, backend, playbooks=playbooks)
             held = []
             if writer_mod.apply(res, ev, writer):
@@ -69,6 +85,10 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None):
             _append(out / "decisions.jsonl", res)
             if res["needs_human"]:
                 _append(out / "queue.jsonl", {**res, "actions": held} if held and res["outcome"] == "decide" else res)
+            if dedup:
+                with (out / "processed.txt").open("a", encoding="utf-8") as f:
+                    f.write(key + "\n")
+                seen.add(key)
             results.append(res)
     return results
 
@@ -237,8 +257,8 @@ def main(argv=None):
             r = daily.cycle(out, a.inbox, gs, be, pbs, process, send=a.send, ado=ado,
                             subscription=a.subscription, brief_hour=a.brief_hour)
             print(datetime.now().strftime("%H:%M"), json.dumps(r, ensure_ascii=False), flush=True)
-            if a.once:
-                return 0
+            if a.once:   # non-zero when a step failed, so Task Scheduler's "last result" shows it
+                return 1 if any(isinstance(v, str) and v.startswith("error:") for v in r.values()) else 0
             time.sleep(a.interval)
     if a.cmd == "run":
         for f in a.files:
@@ -252,9 +272,12 @@ def main(argv=None):
     while True:
         for f in events.inbox_files(inbox):
             try:
-                for r in process(events.read_inbox_file(f), gs, be, out, pbs):
+                for r in process(events.read_inbox_file(f), gs, be, out, pbs, dedup=True):
                     print(_fmt(r), flush=True)
                 f.replace(done / f.name)
+            except BackendUnavailable as e:   # keep the file; retried next round (decided events are skipped)
+                print(f"waiting: {e}", file=sys.stderr, flush=True)
+                break
             except Exception as e:  # keep the loop alive; park the bad file
                 print(f"error {f.name}: {e}", file=sys.stderr, flush=True)
                 f.replace(done / (f.name + ".error"))

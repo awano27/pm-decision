@@ -69,7 +69,15 @@
           ]
         ],
         "unsure": "page_advice"
-      }
+      },
+      "guards": [
+        {
+          "field": "severity",
+          "pattern": "^Sev[01]$",
+          "below": 2.5
+        }
+      ],
+      "_comment": "Guard: a Sev0/Sev1 alert the model rates below an outage goes to a person (the alert author already called it severe; found as a severe miss on held-out alert-c01)."
     },
     "noise_check": {
       "kind": "judge",

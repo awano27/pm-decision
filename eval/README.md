@@ -39,8 +39,14 @@ on the 99 events, 29 / 6 / 0 / 1 on `fixtures_holdout.jsonl` (36 events never tu
 `python eval/e2e.py --backend kev --fixtures fixtures_holdout.jsonl`).
 Re-measured 2026-09-27 with stricter e2e scoring (correct = same terminal *and* same actions, including the
 playbook; to-human = actually queued for the PM): unchanged. The 9 playbook disagreements all ended at a
-different terminal (Kev was unsure and took the safe route), none were counted correct. The held-out set has
-no alert events yet.
+different terminal (Kev was unsure and took the safe route), none were counted correct.
+
+12 held-out alert events were added afterwards (alert-c01..c12). Their first run found one severe miss:
+a Sev1 "availability test failing in 4 of 5 regions, order page returns errors" was scored as degraded, not
+an outage, and got P1 without paging. Fix: a score-node guard (`guards` in graphs/monitor_alert.json) sends
+a Sev0/Sev1 alert that the model rates below an outage to a person. With the guard: 62 / 25 / 12 / 0 on the
+99 events (unchanged), 35 / 12 / 0 / 1 and 0 severe misses on the 48 held-out events (alerts 6 correct,
+6 to a person). The alert part of the held-out set has now been looked at once, so it is no longer untouched.
 
 CLM v0.1-8B (Contrastive-LM, Qwen3-8B Q8_0 embeddings via llama.cpp on CPU, ~1-2 s per question) was tried as
 a backend: 26 / 44 / 14 / 15 wrong (2 severe misses) on the 99 events, 9 / 23 / 3 / 1 on the held-out set;

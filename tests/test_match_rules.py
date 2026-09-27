@@ -50,5 +50,26 @@ class TestCriticalRule(unittest.TestCase):
             graph.validate(g)
 
 
+class TestSeverityGuard(unittest.TestCase):
+    ALERT = graph.load_dir(ROOT / "graphs", PBS)["monitor.alert"][0]
+
+    def run_alert(self, severity):
+        ev = {"kind": "monitor.alert", "id": "a", "rule": "order-api availability", "severity": severity,
+              "condition": "Fired", "description": "availability test failing in 4 of 5 regions", "context": {}}
+        return graph.run(self.ALERT, ev, LowAnswers(), playbooks=PBS)
+
+    def test_sev1_rated_low_goes_to_a_person(self):
+        r = self.run_alert("Sev1")
+        impact = next(s for s in r["path"] if s["node"] == "impact")
+        self.assertEqual(impact["edge"], "unsure")
+        self.assertIn("Sev1", impact["answer"]["guard"])
+        self.assertTrue(r["needs_human"])
+
+    def test_sev3_rated_low_is_left_to_the_model(self):
+        r = self.run_alert("Sev3")
+        impact = next(s for s in r["path"] if s["node"] == "impact")
+        self.assertNotEqual(impact["edge"], "unsure")
+
+
 if __name__ == "__main__":
     unittest.main()

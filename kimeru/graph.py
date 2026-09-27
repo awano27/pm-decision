@@ -71,6 +71,10 @@ def validate(g, playbooks=None):
                     raise GraphError(f"{nid}: no route for {sorted(missing)}")
             if q["type"] == "score" and not r.get("bands"):
                 raise GraphError(f"{nid}: score needs bands")
+            for gd in n.get("guards", []):
+                if q["type"] != "score" or not {"field", "pattern", "below"} <= set(gd):
+                    raise GraphError(f"{nid}: guards need a score question and field/pattern/below")
+                re.compile(gd["pattern"])
             for t in _targets(n):
                 if t not in nodes:
                     raise GraphError(f"{nid}: route to unknown node {t}")
@@ -140,6 +144,19 @@ def match_eval(node, event):
         if any(re.search(x, text, re.IGNORECASE) for x in node.get("mixed_if", [])):
             mixed = mixed or hit
     return ("mixed", mixed) if mixed else ("no", None)
+
+
+def guard_hit(node, event, ans, edge):
+    """Score-node guards: {"field", "pattern", "below"}. When the event field matches (e.g. severity
+    Sev0/Sev1) but the model's score is under `below`, the answer is overruled to "unsure"."""
+    import unicodedata
+    if edge == "unsure" or "score" not in ans:
+        return None
+    for gd in node.get("guards", []):
+        text = unicodedata.normalize("NFKC", str(event.get(gd["field"]) or ""))
+        if re.search(gd["pattern"], text, re.IGNORECASE) and ans["score"] < gd["below"]:
+            return f"{gd['field']}={text} but score {ans['score']:.2f} < {gd['below']}"
+    return None
 
 
 def match_node(node, event):
@@ -232,6 +249,10 @@ def run(g, event, backend, state=None, playbooks=None):
             continue
         ans = backend.ask(state, {nid: n["question"]})[nid]
         edge, nxt = route(n, ans, getattr(backend, "profile", None))
+        guard = guard_hit(n, event, ans, edge)
+        if guard:   # the source already rated it severe but the model scored it lower: a person decides
+            edge, nxt = "unsure", n["routes"]["unsure"]
+            ans = {**ans, "guard": guard}
         answers[nid] = ans
         trace.append({"node": nid, "answer": {k: v for k, v in ans.items() if k != "type"}, "edge": edge})
         nid = nxt

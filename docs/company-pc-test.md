@@ -2,25 +2,25 @@
 
 ## かんたん実行（おすすめ）
 
-1. 事前確認「0. 始める前に」の 3 点を確認する
-2. GitHub の `awano27/pm-decision` → **Code → Download ZIP**。ZIP を右クリック →「プロパティ」→「許可する」にチェック → OK（ダウンロード由来の警告を防ぐ）→ 展開
-3. 展開したフォルダの **`run-company-check.cmd` をダブルクリック**
-4. 画面の指示に答える（聞かれるのは次だけ。すべて Enter で「いいえ／スキップ」になる）
-   - Copilot のまとめ画面を開いたら Enter（無ければ `s`）
-   - 自分とのチャットへのテスト送信 → 許可すると、iPhone から指定の `OK 番号` を返信するよう表示される（最大 3 分自動で待つ）
-   - 確認待ち 2 件の送信 → iPhone から `OK 番号` と `NG 番号` を返信
-   - az の組織名・プロジェクト名、アラート読み取り（任意）
-   - Jev（T11）は環境変数 `TYPESAFE_API_KEY` があるときだけ確認する（キーを聞くことはない）
-5. 終わると結果シートが**クリップボードにコピー**される（`kimeru-check-result.txt` にも保存）。そのまま貼り付けて返す
+持ち込むのはフォルダ 1 つ、操作はダブルクリック 1 回。
+
+1. **開発 PC**: `powershell -ExecutionPolicy Bypass -File tools\make-bundle.ps1` で `C:\develop\kimeru-pc` を作る
+   （`kimeru`・`kev`・`az` の 3 つが入る。約 11GB。2 回目以降は変わったファイルだけ上書き）
+2. **会社 PC**: リモートデスクトップで `kimeru-pc` フォルダを好きな場所（例: `C:\kimeru-pc`）にコピーする
+3. **会社 PC**: `kimeru-pc\kimeru\START.cmd` をダブルクリック
+   - Kev の起動（最小化ウィンドウ。閉じない）→ az のサインイン（聞かれたら `y`、ブラウザで会社アカウント）→ 動作確認、の順に自動で進む
+   - 途中で聞かれるのは次だけ。わからなければ Enter（いいえ／スキップ）でよい
+     - Python がないとき: python.org のインストール不要版（約 11MB）を取得してよいか
+     - 確認待ち 2 件の送信 → iPhone から表示された `OK 番号` と `NG 番号` を返信
+     - ADO の組織名・プロジェクト名（任意）
+4. 終わると結果シートが**クリップボードにコピー**される（`kimeru-check-result.txt` にも保存）。そのまま貼り付けて返す
 
 結果シートには本文・人名・キーは入らない（件数・OK/NG・エラー文のみ）。一時ファイルと画面構造の出力は自動で削除される。
 
-特定の確認だけやり直す場合は、PowerShell で `.\run-company-check.cmd T9` のように番号を付けて実行する（依存する T3・T6・T8 は自動で実行される。複数指定可: `T5 T9`）。
-
-**月曜の準備**: コピー（`C:\kev`・`C:\az`・kimeru と `.python`）の後、まず `.\prepare-company.cmd`。
-置き場所・空きメモリを確認し、Kev の起動（最小化ウィンドウ）と az のサインインまで行う。「準備 OK」と出たら次へ。
-
-**月曜の短時間チェック**: `.\run-company-check.cmd monday`（T3・T9・T12 チャット一覧の読み取り・T13 kev の事前チェック。10 分以内）
+- 従来どおり `C:\kev`・`C:\az` に置いた場合もそのまま動く（`kimeru` の隣 → `C:\kev` / `C:\az` の順に探す）
+- 特定の確認だけやり直す: PowerShell で `.\run-company-check.cmd T9`（複数指定可: `T5 T9`）
+- 準備だけ: `.\prepare-company.cmd` ／ 確認だけ: `.\run-company-check.cmd monday`
+- 自動運転（`setup-company.cmd install`）は、Teams を 5 分ごとに切り替える問題を直すまで使わない
 
 ### ローカル判断モデル（kev）を使う場合
 

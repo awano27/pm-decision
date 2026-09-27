@@ -6,10 +6,15 @@
   Usage: prepare-company.cmd [-KevDir C:\kev] [-AzDir C:\az]
 #>
 [CmdletBinding(PositionalBinding = $false)]
-param([string]$KevDir = 'C:\kev', [string]$AzDir = 'C:\az', [int]$KevWaitSec = 600)
+param([string]$KevDir = '', [string]$AzDir = '', [int]$KevWaitSec = 600)
 $ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $root = Split-Path -Parent $PSScriptRoot
+# one-folder layout first (kev and az next to this kimeru folder), then the old fixed places
+$parent = Split-Path -Parent $root
+if (-not $KevDir) { $KevDir = @((Join-Path $parent 'kev'), 'C:\kev') | Where-Object { Test-Path (Join-Path $_ 'start-kev.cmd') } | Select-Object -First 1; if (-not $KevDir) { $KevDir = Join-Path $parent 'kev' } }
+if (-not $AzDir) { $AzDir = @((Join-Path $parent 'az'), 'C:\az') | Where-Object { Test-Path (Join-Path $_ 'bin\az.cmd') } | Select-Object -First 1; if (-not $AzDir) { $AzDir = Join-Path $parent 'az' } }
+if (Test-Path (Join-Path $AzDir 'bin\az.cmd')) { $env:KIMERU_AZ = Join-Path $AzDir 'bin\az.cmd' }   # the check that runs next uses the same az
 $missing = New-Object System.Collections.Generic.List[string]
 
 function Line($ok, $what, $detail) {
@@ -26,10 +31,10 @@ $py = Join-Path $root '.python\python.exe'
 $sysPy = foreach ($c in 'python', 'py') { $cmd = Get-Command $c -ErrorAction SilentlyContinue; if ($cmd -and ((& $cmd.Source --version 2>&1 | Out-String) -match 'Python 3\.(1\d|[2-9]\d)')) { $cmd.Source; break } }
 Line (Test-Path (Join-Path $root 'kimeru\cli.py')) 'kimeru' $root
 Line ((Test-Path $py) -or $sysPy) 'Python' $(if (Test-Path $py) { $py } elseif ($sysPy) { $sysPy } else { '.python がない → 前回の .python フォルダをこのフォルダにコピー（または run-company-check.cmd で取得）' })
-Line (Test-Path (Join-Path $KevDir 'start-kev.cmd')) 'Kev フォルダ' $(if (Test-Path (Join-Path $KevDir 'start-kev.cmd')) { $KevDir } else { "$KevDir にない → 開発 PC の C:\develop\kev-bundle をコピー" })
+Line (Test-Path (Join-Path $KevDir 'start-kev.cmd')) 'Kev フォルダ' $(if (Test-Path (Join-Path $KevDir 'start-kev.cmd')) { $KevDir } else { "$KevDir にない → 持ち込み用フォルダの kev をこのフォルダの隣に置く" })
 Line (Test-Path (Join-Path $KevDir 'models\kev-4b\head.pt')) 'Kev モデル' $(if (Test-Path (Join-Path $KevDir 'models\kev-4b\head.pt')) { 'kev-4b' } else { 'models\kev-4b がない（コピー途中？）' })
 $az = @($env:KIMERU_AZ, (Get-Command az -ErrorAction SilentlyContinue).Source, (Join-Path $AzDir 'bin\az.cmd')) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
-Line ([bool]$az) 'Azure CLI' $(if ($az) { $az } else { "$AzDir にない → 開発 PC の C:\develop\az-bundle\az をコピー" })
+Line ([bool]$az) 'Azure CLI' $(if ($az) { $az } else { "$AzDir にない → 持ち込み用フォルダの az をこのフォルダの隣に置く" })
 
 # 2) resources
 $os = Get-CimInstance Win32_OperatingSystem
@@ -63,7 +68,7 @@ if ($az) {
 
 Write-Host ''
 if ($missing.Count -eq 0) {
-  Write-Host "準備 OK。次は .\run-company-check.cmd monday" -ForegroundColor Green
+  Write-Host "準備 OK。" -ForegroundColor Green
 } else {
   Write-Host "足りないもの（$($missing.Count) 件）:" -ForegroundColor Yellow
   $missing | ForEach-Object { Write-Host "  - $_" }

@@ -246,11 +246,11 @@ if ($py) {
 # ---- Level 2: Azure CLI ----
 if (Want 'T10') { Say "T10 Azure CLI で取り込み" }
 # az: KIMERU_AZ, then PATH, then the official no-install ZIP unpacked to C:\az (same order as kimeru/pull.py)
-$az = @($env:KIMERU_AZ, (Get-Command az -ErrorAction SilentlyContinue).Source, 'C:\az\bin\az.cmd') |
+$az = @($env:KIMERU_AZ, (Get-Command az -ErrorAction SilentlyContinue).Source, (Join-Path (Split-Path -Parent $root) 'az\bin\az.cmd'), 'C:\az\bin\az.cmd') |
   Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 if ($az) { $env:KIMERU_AZ = $az }
 if (-not (Want 'T10')) { }
-elseif (-not $az -or -not $py) { Rec 'T10' $(if (-not $az) { 'SKIP az なし（C:\az に ZIP 版を展開）' } else { 'SKIP Python なし' }) }
+elseif (-not $az -or -not $py) { Rec 'T10' $(if (-not $az) { 'SKIP az なし（持ち込み用フォルダの az をこのフォルダの隣に置く）' } else { 'SKIP Python なし' }) }
 else {
   & $az account show -o none 2>$null
   if ($LASTEXITCODE -ne 0 -and (YesNo "   az にサインインしていません。az login を実行しますか（ブラウザが開きます）")) { & $az login -o none 2>&1 | Out-Null }
@@ -322,7 +322,7 @@ if ($py -and (Want 'T14')) {
   Say "T14 ローカル判断モデル（kev）で判断"
   $up = $false
   try { $null = Invoke-WebRequest 'http://127.0.0.1:8009/v1/models' -UseBasicParsing -TimeoutSec 5; $up = $true } catch {}
-  if (-not $up) { Rec 'T14' 'SKIP（kev 未起動: C:\kev\start-kev.cmd を先に実行）' }
+  if (-not $up) { Rec 'T14' 'SKIP（kev 未起動: START.cmd か kev\start-kev.cmd を先に実行）' }
   else {
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $k = Py @('-m', 'kimeru', '--backend', 'kev', '--out', (Join-Path $tmp 'kev'), 'run', 'examples\teams_chat.json')

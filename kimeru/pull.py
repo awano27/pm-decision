@@ -28,7 +28,8 @@ ADO_FIELDS = ["System.Id", "System.WorkItemType", "System.Title", "System.AreaPa
               "Microsoft.VSTS.Common.AcceptanceCriteria", "Microsoft.VSTS.Common.Priority"]
 
 
-AZ_FALLBACKS = (r"C:\az\bin\az.cmd",)   # the official no-install ZIP unpacked to C:\az
+AZ_FALLBACKS = (str(Path(__file__).resolve().parents[2] / "az" / "bin" / "az.cmd"),   # one-folder layout: az next to kimeru
+                r"C:\az\bin\az.cmd")                                                   # the official no-install ZIP unpacked to C:\az
 
 
 def find_az():

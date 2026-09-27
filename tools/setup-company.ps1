@@ -9,12 +9,12 @@
   remove   undoes 1-3 (keeps %LOCALAPPDATA%\kimeru data)
   status   shows what is installed and whether Kev answers
 
-  Usage: setup-company.cmd install [-KevDir C:\kev] [-Minutes 5]
+  Usage: setup-company.cmd install [-KevDir <kev folder>] [-Minutes 5]
 #>
 [CmdletBinding(PositionalBinding = $false)]
 param(
   [Parameter(Position = 0)][ValidateSet('install', 'remove', 'status')][string]$Action = 'status',
-  [string]$KevDir = 'C:\kev',
+  [string]$KevDir = '',        # default: the kev folder next to this kimeru folder, else C:\kev
   [int]$Minutes = 5,
   [string]$AdoOrg = '',       # with -AdoProject: the daily loop also pulls new ADO work items (needs az, e.g. C:\az)
   [string]$AdoProject = ''
@@ -22,6 +22,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $root = Split-Path -Parent $PSScriptRoot
+if (-not $KevDir) { $KevDir = @((Join-Path (Split-Path -Parent $root) 'kev'), 'C:\kev') | Where-Object { Test-Path (Join-Path $_ 'start-kev.cmd') } | Select-Object -First 1; if (-not $KevDir) { $KevDir = 'C:\kev' } }
 $data = Join-Path $env:LOCALAPPDATA 'kimeru'
 $startup = [Environment]::GetFolderPath('Startup')
 $lnk = Join-Path $startup 'kimeru-kev.lnk'

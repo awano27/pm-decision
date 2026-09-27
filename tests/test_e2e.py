@@ -44,5 +44,32 @@ class TestE2E(unittest.TestCase):
         self.assertFalse(r["severe_miss"])
 
 
+class MissBackend(StubBackend):
+    """Confidently misses a near-term risk: not a future risk, lowest impact, "just noise"."""
+
+    def ask(self, state, questions):
+        out = super().ask(state, questions)
+        for q, v in questions.items():
+            if v.get("type") == "noul":
+                out[q] = {"noul": 0.99 if q == "noise_check" else 0.01}
+            elif v.get("type") == "score":
+                out[q] = {"score": 0.0, "confidence": 0.99, "probabilities": {"0": 0.99}}
+        return out
+
+
+class TestScoring(unittest.TestCase):
+    def test_unqueued_advise_is_not_counted_as_human(self):
+        fx = next(f for f in e2e.fixtures() if f["id"] == "alert-9")   # disk full in ~6h -> prevent_now
+        r = e2e.run_one(fx, MissBackend())
+        self.assertEqual((r["model"], r["ideal"]), ("tune_rule", "prevent_now"))
+        self.assertEqual(r["outcome"], "wrong")
+        self.assertTrue(r["severe_miss"])
+
+    def test_same_terminal_with_other_actions_is_not_correct(self):
+        a = {"node": "x", "actions": [{"type": "ado.create", "title": "A"}]}
+        b = {"node": "x", "actions": [{"type": "ado.create", "title": "B"}]}
+        self.assertNotEqual(e2e._acts(a), e2e._acts(b))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -76,11 +76,11 @@ def validate(g, playbooks=None):
                     raise GraphError(f"{nid}: route to unknown node {t}")
         elif k == "match":
             r = n.get("routes") or {}
-            if set(r) != {"yes", "no"}:
-                raise GraphError(f"{nid}: match needs exactly yes/no routes")
+            if set(r) != ({"yes", "no", "mixed"} if n.get("mixed_if") else {"yes", "no"}):
+                raise GraphError(f"{nid}: match needs yes/no routes (plus mixed when mixed_if is set)")
             if not n.get("fields") or not n.get("patterns"):
                 raise GraphError(f"{nid}: match needs fields and patterns")
-            for pat in n["patterns"] + n.get("exclude", []):
+            for pat in n["patterns"] + n.get("exclude", []) + n.get("mixed_if", []):
                 try:
                     re.compile(pat)
                 except re.error as e:
@@ -123,18 +123,29 @@ def _split_non_adjacent(probs, at):
     return len(heavy) >= 2 and heavy[-1] - heavy[0] > 1
 
 
-def match_node(node, event):
-    """Pattern that matched (for the trace), or None. Optional "exclude" patterns veto a
-    match (e.g. a crash reported only in a test environment)."""
+def match_eval(node, event):
+    """("yes" | "mixed" | "no", pattern). Optional "exclude" patterns veto a hit only in the
+    same field (a crash reported only in a test environment); a test-environment note in
+    another field does not cancel a production report. A vetoed hit whose field also
+    matches "mixed_if" (e.g. 本番) routes "mixed" so a person looks at it."""
     import unicodedata
-    texts = [unicodedata.normalize("NFKC", str(event.get(f) or "")) for f in node["fields"]]
-    if any(re.search(x, t, re.IGNORECASE) for x in node.get("exclude", []) for t in texts):
-        return None
-    for text in texts:
-        for pat in node["patterns"]:
-            if re.search(pat, text, re.IGNORECASE):
-                return pat
-    return None
+    mixed = None
+    for f in node["fields"]:
+        text = unicodedata.normalize("NFKC", str(event.get(f) or ""))
+        hit = next((p for p in node["patterns"] if re.search(p, text, re.IGNORECASE)), None)
+        if not hit:
+            continue
+        if not any(re.search(x, text, re.IGNORECASE) for x in node.get("exclude", [])):
+            return "yes", hit
+        if any(re.search(x, text, re.IGNORECASE) for x in node.get("mixed_if", [])):
+            mixed = mixed or hit
+    return ("mixed", mixed) if mixed else ("no", None)
+
+
+def match_node(node, event):
+    """Pattern that matched cleanly (for the trace), or None."""
+    edge, hit = match_eval(node, event)
+    return hit if edge == "yes" else None
 
 
 def route(node, ans, profile=None):
@@ -202,9 +213,9 @@ def run(g, event, backend, state=None, playbooks=None):
             return {"graph": g["name"], "event_id": event.get("id"), "event_kind": event.get("kind"),
                     "path": trace, **out}
         if n["kind"] == "match":
-            hit = match_node(n, event)
-            trace.append({"node": nid, "answer": {"matched": hit}, "edge": "yes" if hit else "no"})
-            nid = n["routes"]["yes" if hit else "no"]
+            edge, hit = match_eval(n, event)
+            trace.append({"node": nid, "answer": {"matched": hit}, "edge": edge})
+            nid = n["routes"][edge]
             continue
         if n["kind"] == "plan":
             if not playbooks:  # no playbooks loaded: degrade to the pre-plan path

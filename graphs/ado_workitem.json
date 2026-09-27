@@ -141,7 +141,7 @@
     },
     "critical_bug": {
       "kind": "match",
-      "_comment": "safety net: a work item that states customers/production are broken right now is P1 whatever the model scores",
+      "_comment": "safety net: a work item that states customers/production are broken right now is P1 whatever the model scores Exclude vetoes only within the same field; test-env wording next to a production cue goes to a person (mixed).",
       "fields": [
         "title",
         "description"
@@ -155,12 +155,16 @@
       ],
       "routes": {
         "yes": "set_p1_critical",
-        "no": "has_ac"
+        "no": "has_ac",
+        "mixed": "triage_pm"
       },
       "exclude": [
         "(テスト|検証|開発|ステージング)環境",
         "(test|staging|dev) (env|environment)",
         "ローカル(環境|で)"
+      ],
+      "mixed_if": [
+        "本番|全ユーザー|全顧客|多数の(顧客|ユーザー)|production|prod |all users|every user|customers?"
       ]
     },
     "set_p1_critical": {

@@ -122,16 +122,20 @@ def tune(answers_path):
 
 def score(answers_path, profile=None):
     ans = load_answers(answers_path)
-    per_node, misses = {}, []
+    per_node, misses, skipped = {}, [], []
     for fx in fixtures():
+        asked = request(fx)["questions"]
         if fx["id"] not in ans:
+            skipped += [f"{fx['id']}/{nid}" for nid in fx["expect"] if nid in asked]
             continue
         g = GRAPHS[fx["event"]["kind"]]
         for nid, exp in fx["expect"].items():
             node, a = g["nodes"][nid], ans[fx["id"]].get(nid)
             want_type = "choice" if node["kind"] == "plan" else node["question"]["type"]
             if a is None or a.get("type", want_type) != want_type:
-                continue  # answer recorded for an older version of this question
+                if nid in asked:
+                    skipped.append(f"{fx['id']}/{nid}")   # missing, or recorded for an older version of the question
+                continue
             ok, edge, detail = judge(node, exp, a, profile)
             key = f"{g['name']}/{nid}"
             c = per_node.setdefault(key, [0, 0, 0])
@@ -143,6 +147,9 @@ def score(answers_path, profile=None):
     print("node                                   ok/n  unsure")
     for k, (ok, n, un) in sorted(per_node.items()):
         print(f"{k:<38} {ok}/{n}   {un}")
+    total = sum(c[1] for c in per_node.values())
+    print(f"\nscored {total} labeled model questions; not scored (no current answer): {len(skipped)}"
+          + (f" -> {', '.join(skipped[:10])}{' ...' if len(skipped) > 10 else ''}" if skipped else ""))
     print(f"\nmisses ({len(misses)}):")
     print("\n".join(misses) or "  none")
 
@@ -163,7 +170,9 @@ def live(out, backend="jev"):
             f.write(json.dumps({"id": r["id"], "answers": ans}, ensure_ascii=False) + "\n")
     times.sort()
     print(f"latency per request: median {times[len(times) // 2]:.2f}s, max {times[-1]:.2f}s ({len(times)} requests)")
-    score(out)
+    from kimeru.profiles import PROFILES
+    print(f"scored with the '{backend}' threshold profile")
+    score(out, PROFILES.get(backend, PROFILES["jev"]))
 
 
 if __name__ == "__main__":

@@ -42,6 +42,17 @@ class TestNotify(unittest.TestCase):
             self.assertEqual(notify.notify(d, b, send=False), [1])  # still unposted
             self.assertFalse(b.posts[0][1])
 
+    def test_box_mismatch_is_not_marked_posted(self):
+        class Mismatch(FakeBridge):
+            def post(self, text, send):
+                super().post(text, send)
+                return {"ok": True, "typed": False, "sent": False}
+        with tempfile.TemporaryDirectory() as d:
+            write_queue(d, REC)
+            with self.assertRaises(RuntimeError):
+                notify.notify(d, Mismatch(), send=True)
+            self.assertEqual(notify.notify(d, FakeBridge(), send=True), [1])   # retried on the next cycle
+
     def test_send_posts_once_and_dedups_queue(self):
         with tempfile.TemporaryDirectory() as d:
             write_queue(d, REC, REC)

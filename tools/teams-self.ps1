@@ -218,6 +218,7 @@ function Get-BoxText($b) {
   try { return $b.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern).DocumentRange.GetText(4000) }
   catch { try { return $b.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value } catch { return '' } }
 }
+function Squash($s) { ([string]$s) -replace '[\s\u00a0\u200b\ufeff]', '' }   # compare text ignoring line-break/space rendering
 function Test-BoxHasKimeru($w) { (Get-BoxText (Get-Box $w)).Trim().StartsWith('[kimeru') }
 
 function Wait-Sent($w) {
@@ -262,9 +263,13 @@ if ($Action -eq 'post') {
   Assert-Foreground $w
   [System.Windows.Forms.SendKeys]::SendWait('^v'); Start-Sleep -Milliseconds 300
   if ($saved) { [System.Windows.Forms.Clipboard]::SetText($saved) } else { [System.Windows.Forms.Clipboard]::Clear() }
-  $typed = (Get-BoxText $box).Trim().StartsWith('[kimeru')
+  # the box must hold exactly the planned text: an old draft left in the box would otherwise go out with it
+  $typed = (Squash (Get-BoxText $box)) -eq (Squash $Text)
   $sent = $false
-  if ($Send) { [void](Send-Box $w); $sent = $true }
+  if ($Send) {
+    if (-not $typed) { Fail 'compose box does not hold exactly the planned text (an old draft left in it?); not sent. Clear the box in Teams and retry' }
+    [void](Send-Box $w); $sent = $true
+  }
   Out-Json @{ ok = $true; typed = $typed; sent = $sent }; exit 0
 }
 
@@ -290,6 +295,10 @@ if ($Action -eq 'read') {
         $c = '{0} {1}' -f $Matches[1].ToUpper(), $Matches[2]
         $entry = "R:" + $c
         if (-not $seen.ContainsKey($c)) { $seen[$c] = 1; $replies.Add($c) }
+      }
+      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^修正\s*#?(\d+)\s*[:：]?\s*(\S.*)$') {
+        # redraft request for a writer draft (notify.parse_redraft): keep the instruction text
+        $entry = 'R:修正 {0} {1}' -f $Matches[1], $Matches[2].Trim()
       }
       if ($entry -and ($timeline.Count -eq 0 -or $timeline[$timeline.Count - 1] -ne $entry)) { $timeline.Add($entry) }
     }

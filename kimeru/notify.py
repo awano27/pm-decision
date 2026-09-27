@@ -108,7 +108,9 @@ def notify(out, bridge, send=False):
     for n, it in ap.data["items"].items():
         if it["posted"]:
             continue
-        bridge.post(format_post(n, it["record"]), send)
+        r = bridge.post(format_post(n, it["record"]), send) or {}
+        if send and (r.get("typed") is False or r.get("sent") is False):
+            raise RuntimeError(f"#{n} was not posted as planned: {r}")   # stays unposted; retried next cycle
         if send:
             it["posted"] = True
             ap.save()  # a failure on a later item must not forget what was already sent

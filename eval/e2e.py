@@ -9,11 +9,14 @@ a path. This walks the whole graph twice per event:
                 question gets the same answer the backend gave (cached), so the only
                 difference is where the model disagreed with a label
 
-and compares the terminal nodes.
+and compares the terminal nodes and the full planned actions (playbook tasks,
+priority, paging...), not only the terminal name.
 
-  outcome      model terminal == ideal terminal           -> correct
-               model ended in an advise/queue (a human)   -> to-human (safe)
-               otherwise                                  -> wrong
+  outcome      same terminal and same actions                    -> correct
+               not correct, but the record goes to the PM's queue
+               (needs_human; an advise node with queue:false does not count) -> to-human
+               not correct, a low-confidence edge took the designed safe route -> fallback
+               otherwise                                         -> wrong
   severe miss  ideal terminal is a severe action (page, P1, 24h prevention) but the
                model neither reached a severe action nor asked a human
 
@@ -90,14 +93,19 @@ class Oracle:
         return out
 
 
+def _acts(res):
+    return json.dumps(res.get("actions", []), ensure_ascii=False, sort_keys=True)
+
+
 def run_one(fx, backend):
     g = GRAPHS[fx["event"]["kind"]]
     rec = Recording(backend)
     model = graph.run(g, fx["event"], rec, playbooks=PBS)
     ideal = graph.run(g, fx["event"], Oracle(rec, fx["expect"], g), playbooks=PBS)
-    human = model["outcome"] == "advise"
+    human = bool(model.get("needs_human"))   # actually queued for the PM, not just an advise terminal
     unsure = any(s["edge"] == "unsure" for s in model["path"])
-    if model["node"] == ideal["node"]:
+    same_actions = _acts(model) == _acts(ideal)
+    if model["node"] == ideal["node"] and same_actions:
         outcome = "correct"
     elif human:
         outcome = "human"
@@ -108,6 +116,8 @@ def run_one(fx, backend):
     severe_miss = ideal["node"] in SEVERE and model["node"] not in SEVERE and not human
     return {"id": fx["id"], "graph": g["name"], "model": model["node"], "ideal": ideal["node"],
             "outcome": outcome, "severe_miss": severe_miss,
+            "actions_differ": model["node"] == ideal["node"] and not same_actions,
+            "playbook": [(model.get("plan") or {}).get("playbook"), (ideal.get("plan") or {}).get("playbook")],
             "path": [f"{s['node']}[{s['edge']}]" for s in model["path"]]}
 
 

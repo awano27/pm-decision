@@ -31,6 +31,16 @@ class TestSchedule(unittest.TestCase):
             self.assertNotIn('"', inner.replace('""', ""))               # every quote doubled for VBS
             self.assertIn("--backend kev daily --once --send", inner)
 
+    def test_ado_names_with_spaces_are_quoted_in_the_runner(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch("subprocess.run") as run:
+            run.return_value = SimpleNamespace(returncode=0)
+            out = Path(d) / "o"
+            a = SimpleNamespace(action="install", minutes=5, extra="", out=str(out), backend="kev",
+                                ado_org="contoso", ado_project="My Project")
+            self.assertEqual(cli.schedule(a), 0)
+            vbs = (out / "run-daily.vbs").read_text(encoding="utf-16")
+            self.assertIn('--ado-org ""contoso"" --ado-project ""My Project""', vbs)
+
 
 class TestKevNotUpYet(unittest.TestCase):
     def test_inbox_kept_when_backend_unreachable(self):

@@ -34,16 +34,44 @@ class Overloaded(StubBackend):
 class TestRetry(unittest.TestCase):
     def test_429_after_retries_is_retryable(self):
         err = urllib.error.HTTPError("u", 429, "busy", {}, io.BytesIO(b"slow down"))
-        with mock.patch("urllib.request.urlopen", side_effect=err), mock.patch("time.sleep"):
+        with mock.patch("kimeru.backends._urlopen", side_effect=err), mock.patch("time.sleep"):
             with self.assertRaises(BackendUnavailable):
                 KevBackend().ask({"x": 1}, {"q": {"type": "noul", "instructions": "x"}})
 
     def test_400_is_not_retryable(self):
         err = urllib.error.HTTPError("u", 400, "bad", {}, io.BytesIO(b"bad request"))
-        with mock.patch("urllib.request.urlopen", side_effect=err):
+        with mock.patch("kimeru.backends._urlopen", side_effect=err):
             with self.assertRaises(RuntimeError) as c:
                 KevBackend().ask({"x": 1}, {"q": {"type": "noul", "instructions": "x"}})
             self.assertNotIsInstance(c.exception, BackendUnavailable)
+
+    def test_local_judge_is_called_directly_even_with_a_proxy_set(self):
+        import http.server
+        import threading
+
+        class Kev(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                body = json.dumps({"answers": {"q": {"noul": 0.9}}}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), Kev)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        env = {"KIMERU_KEV_URL": f"http://127.0.0.1:{srv.server_address[1]}/v1",
+               "HTTP_PROXY": "http://127.0.0.1:9", "http_proxy": "http://127.0.0.1:9", "NO_PROXY": "", "no_proxy": ""}
+        try:
+            with mock.patch.dict("os.environ", env):
+                ans = KevBackend(retries=1).ask({"x": 1}, {"q": {"type": "noul", "instructions": "x"}})
+            self.assertEqual(ans["q"]["noul"], 0.9)
+        finally:
+            srv.shutdown()
 
     def test_same_file_twice_decides_once(self):
         with tempfile.TemporaryDirectory() as d:

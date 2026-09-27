@@ -100,8 +100,10 @@ switch ($Action) {
 
     # 3) daily cycle every N minutes, hidden, data in %LOCALAPPDATA%\kimeru
     Push-Location $root
-    $extra = if ($AdoOrg -and $AdoProject) { "--ado-org `"$AdoOrg`" --ado-project `"$AdoProject`"" } else { '' }
-    try { & $py -m kimeru --backend kev --out $data schedule install --minutes $Minutes --extra $extra; if ($LASTEXITCODE -ne 0) { throw 'schedule install failed' } }
+    # arguments as an array, optional ones only when set: PS 5.1 drops an empty string argument
+    $sched = @('-m', 'kimeru', '--backend', 'kev', '--out', $data, 'schedule', 'install', '--minutes', "$Minutes")
+    if ($AdoOrg -and $AdoProject) { $sched += @('--ado-org', $AdoOrg, '--ado-project', $AdoProject) }
+    try { & $py @sched; if ($LASTEXITCODE -ne 0) { throw 'schedule install failed' } }
     finally { Pop-Location }
     Write-Host "3) 自動運転: $Minutes 分ごと（データ: $data）"
     } catch {

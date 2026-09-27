@@ -6,6 +6,7 @@ import json
 import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -43,7 +44,7 @@ class JevBackend:
                 headers["Authorization"] = "Bearer " + self._key
             req = urllib.request.Request(self.api + "/systemone", data=body, method="POST", headers=headers)
             try:
-                with urllib.request.urlopen(req, timeout=self.TIMEOUT) as r:
+                with _urlopen(req, self.TIMEOUT) as r:
                     return json.loads(r.read().decode("utf-8"))["answers"]
             except urllib.error.HTTPError as e:
                 if e.code in (429, 500, 502, 503, 504, 529) and attempt < self.retries - 1:
@@ -59,6 +60,19 @@ class JevBackend:
                 raise BackendUnavailable(f"{self.NAME} not reachable at {self.api} ({e.reason})") from None
             except TimeoutError:
                 raise BackendUnavailable(f"{self.NAME} timed out after {self.TIMEOUT}s at {self.api}") from None
+
+
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
+_DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def _urlopen(req, timeout):
+    """A judge on this PC (Kev) is called directly, never through HTTP(S)_PROXY or the Windows
+    proxy setting: a proxy cannot reach 127.0.0.1 and the event text would leave the PC."""
+    host = urllib.parse.urlparse(req.full_url).hostname or ""
+    if host in LOOPBACK:
+        return _DIRECT.open(req, timeout=timeout)
+    return urllib.request.urlopen(req, timeout=timeout)
 
 
 class BackendUnavailable(RuntimeError):

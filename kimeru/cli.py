@@ -149,7 +149,9 @@ def main(argv=None):
     p_s = sub.add_parser("schedule", help="register/remove `daily --once --send` every N minutes (Task Scheduler, no admin)")
     p_s.add_argument("action", choices=["install", "remove", "status"])
     p_s.add_argument("--minutes", type=int, default=5)
-    p_s.add_argument("--extra", default="", help="extra args for daily, e.g. \"--ado-org o --ado-project p\"")
+    p_s.add_argument("--extra", default="", help="extra args for daily, e.g. \"--subscription s\"")
+    p_s.add_argument("--ado-org", default="")
+    p_s.add_argument("--ado-project", default="")
     p_p = sub.add_parser("pull", help="poll ADO / Azure Monitor with your az login into an inbox")
     p_p.add_argument("source", choices=["ado", "alerts", "teams"])
     p_p.add_argument("--include-existing", action="store_true", help="teams: also emit chats already on screen at the first poll")
@@ -320,8 +322,10 @@ def schedule(a):
     out = Path(a.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     backend = f"--backend {a.backend}" if a.backend != "stub" else ""
+    ado = getattr(a, "ado_org", ""), getattr(a, "ado_project", "")
+    extra = (f'--ado-org "{ado[0]}" --ado-project "{ado[1]}" ' if all(ado) else "") + (a.extra or "")
     line = (f'cmd /c cd /d "{HERE}" && "{runner}" -m kimeru --out "{out}" {backend} daily --once --send '
-            f'--inbox "{out / "inbox"}" {a.extra}').strip()
+            f'--inbox "{out / "inbox"}" {extra}').strip()
     vbs = out / "run-daily.vbs"
     # VBS string literal: double every quote; window style 0 = hidden, wait for completion
     vbs.write_text('CreateObject("WScript.Shell").Run "' + line.replace('"', '""') + '", 0, True\n', encoding="utf-16")  # WSH reads UTF-8 as ANSI: Japanese paths break

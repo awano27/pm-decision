@@ -138,9 +138,16 @@ class CopilotWriter:
     def draft(self, res, event, instruction=None):
         if not self.exe:
             raise RuntimeError("copilot CLI not found (GitHub Copilot app / `winget install GitHub.Copilot`)")
-        cmd = [self.exe, "-s", "--available-tools=", "--disable-builtin-mcps", "--no-ask-user",
-               "--no-auto-update", "--log-level", "none"] + (["--model", self.model] if self.model else [])
-        return _parse(_run(cmd, SYSTEM + "\n\n" + _material(res, event, instruction), self.timeout))
+        base = [self.exe, "-s", "--available-tools=", "--disable-builtin-mcps", "--no-ask-user",
+                "--no-auto-update", "--log-level", "none"]
+        prompt = SYSTEM + "\n\n" + _material(res, event, instruction)
+        if self.model:
+            try:
+                return _parse(_run(base + ["--model", self.model], prompt, self.timeout))
+            except RuntimeError as e:   # models differ per Copilot plan: fall back to the plan's default
+                if "--model" not in str(e) and "Model" not in str(e):
+                    raise
+        return _parse(_run(base, prompt, self.timeout))
 
 
 WRITERS = {"claude": ClaudeWriter, "copilot": CopilotWriter}

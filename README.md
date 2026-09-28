@@ -206,6 +206,7 @@ python -m kimeru --backend kev run examples/teams_chat.json
 ```bash
 set KIMERU_WRITER=copilot    # GitHub Copilot CLI（本人のサインイン。会社契約で使う場合はこちら）
 set KIMERU_WRITER=claude     # Claude Code CLI（本人のログイン）
+set KIMERU_WRITER_MODEL=claude-sonnet-5   # 省略可。使えるモデルは Copilot の契約次第（使えなければ既定のモデルに戻る）
                              # 未設定なら定型文のまま
 python eval/drafts.py --backend kev --writer copilot --out drafts.jsonl   # 下書きの点検
 ```

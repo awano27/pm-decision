@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420" role="img" aria-labelledby="t d">
+  <title id="t">kimeru</title>
+  <desc id="d">Teams・アラート・Azure DevOps・議事録が届くたびに、判断グラフが「決める」か「あなたに聞く」かを選ぶ</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0E1726"/>
+      <stop offset="1" stop-color="#15243A"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#F2C166"/>
+      <stop offset="1" stop-color="#E89B4B"/>
+    </linearGradient>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#6B7C95"/>
+    </marker>
+    <style>
+      .f { font-family: "Segoe UI", "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", system-ui, sans-serif; }
+      .chip { fill: #1D2E48; stroke: #33496B; stroke-width: 1.5; }
+      .chipt { fill: #D5DEEA; font-size: 17px; }
+      .node { fill: #203453; stroke: #4A6690; stroke-width: 1.5; }
+      .nodet { fill: #E8EEF6; font-size: 16px; }
+      .line { stroke: #6B7C95; stroke-width: 2; fill: none; marker-end: url(#a); }
+      .sub { fill: #9FB0C7; font-size: 13px; }
+    </style>
+  </defs>
+  <rect width="1200" height="420" rx="24" fill="url(#bg)"/>
+
+  <!-- title block -->
+  <g class="f">
+    <rect x="64" y="70" width="84" height="84" rx="20" fill="url(#gold)"/>
+    <text x="106" y="130" text-anchor="middle" font-size="50" font-weight="700" fill="#0E1726">決</text>
+    <text x="172" y="128" font-size="56" font-weight="700" fill="#F4F7FB" letter-spacing="1">kimeru</text>
+    <text x="66" y="210" font-size="28" font-weight="600" fill="#F4F7FB">PM の「どうする？」を、先回りして決める。</text>
+    <text x="66" y="250" font-size="17" fill="#AFC0D6">届いたイベントに判断モデルが 1 問ずつ答え、</text>
+    <text x="66" y="276" font-size="17" fill="#AFC0D6">確信があれば決め、迷えばあなたの iPhone に聞く。</text>
+    <g font-size="14" fill="#0E1726" font-weight="600">
+      <rect x="66" y="312" width="118" height="30" rx="15" fill="#75CFA3"/><text x="125" y="332" text-anchor="middle">ローカル判断</text>
+      <rect x="194" y="312" width="118" height="30" rx="15" fill="#8CB8F0"/><text x="253" y="332" text-anchor="middle">依存なし</text>
+      <rect x="322" y="312" width="150" height="30" rx="15" fill="#F2C166"/><text x="397" y="332" text-anchor="middle">管理者権限不要</text>
+    </g>
+  </g>
+
+  <!-- flow -->
+  <g class="f">
+    <g>
+      <rect class="chip" x="600" y="64" width="150" height="44" rx="12"/><text class="chipt" x="675" y="92" text-anchor="middle">💬 Teams</text>
+      <rect class="chip" x="600" y="124" width="150" height="44" rx="12"/><text class="chipt" x="675" y="152" text-anchor="middle">🚨 アラート</text>
+      <rect class="chip" x="600" y="184" width="150" height="44" rx="12"/><text class="chipt" x="675" y="212" text-anchor="middle">🎫 DevOps</text>
+      <rect class="chip" x="600" y="244" width="150" height="44" rx="12"/><text class="chipt" x="675" y="272" text-anchor="middle">📝 議事録</text>
+    </g>
+    <path class="line" d="M752 86 C790 86 790 176 822 176"/>
+    <path class="line" d="M752 146 C790 146 790 176 822 176"/>
+    <path class="line" d="M752 206 C790 206 790 176 822 176"/>
+    <path class="line" d="M752 266 C790 266 790 176 822 176"/>
+
+    <rect class="node" x="826" y="140" width="140" height="72" rx="14"/>
+    <text class="nodet" x="896" y="170" text-anchor="middle" font-weight="600">判断グラフ</text>
+    <text class="sub" x="896" y="192" text-anchor="middle">規則 → モデル → 進め方</text>
+
+    <path class="line" d="M968 162 C1000 162 1000 108 1030 108"/>
+    <path class="line" d="M968 190 C1000 190 1000 246 1030 246"/>
+
+    <rect x="1034" y="80" width="126" height="56" rx="14" fill="#1E3B34" stroke="#75CFA3" stroke-width="1.5"/>
+    <text x="1097" y="105" text-anchor="middle" font-size="17" font-weight="700" fill="#9BE3BF">決める</text>
+    <text x="1097" y="125" text-anchor="middle" font-size="12.5" fill="#9FB0C7">確信あり・規則</text>
+
+    <rect x="1034" y="218" width="126" height="56" rx="14" fill="#3A2F1C" stroke="#F2C166" stroke-width="1.5"/>
+    <text x="1097" y="243" text-anchor="middle" font-size="17" font-weight="700" fill="#F7D48F">あなたに聞く</text>
+    <text x="1097" y="263" text-anchor="middle" font-size="12.5" fill="#9FB0C7">迷ったら OK / NG</text>
+
+    <text x="880" y="352" text-anchor="middle" font-size="14" fill="#7E90A8">すべての経路が「決定」か「助言」で終わる</text>
+  </g>
+</svg>

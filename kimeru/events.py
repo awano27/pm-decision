@@ -80,7 +80,9 @@ def meeting_minutes(p):
     items = [m.group(1) for line in text.splitlines() if (m := _BULLET.match(line))]
     return [{
         "kind": "meeting.item", "source": "minutes",
-        "id": _id(title, date, i), "ts": date,
+        # id from the line's text, not its position: an edited file (lines inserted above) or another
+        # meeting with the same title and date must not collide with lines already decided
+        "id": _id(title, date, re.sub(r"\s+", " ", it).strip()), "ts": date,
         "meeting": title, "index": i, "item": it,
     } for i, it in enumerate(items)]
 

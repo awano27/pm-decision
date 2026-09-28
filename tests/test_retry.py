@@ -80,6 +80,18 @@ class TestRetry(unittest.TestCase):
             process(MINUTES, GRAPHS, StubBackend(), out, PBS, dedup=True)
             self.assertEqual(len(lines(out / "decisions.jsonl")), 3)
 
+    def test_minutes_lines_are_keyed_by_text_not_position(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            a = {"title": "定例", "date": "2026-10-01", "text": "- 決定: A とする"}
+            b = {"title": "定例", "date": "2026-10-01", "text": "- 決定: B とする"}     # same meeting name and date
+            process(a, GRAPHS, StubBackend(), out, PBS, dedup=True)
+            process(b, GRAPHS, StubBackend(), out, PBS, dedup=True)
+            self.assertEqual(len(lines(out / "decisions.jsonl")), 2)
+            edited = {"title": "定例", "date": "2026-10-01", "text": "- 決定: 中止とする\n- 決定: A とする"}
+            process(edited, GRAPHS, StubBackend(), out, PBS, dedup=True)   # a line inserted above
+            self.assertEqual(len(lines(out / "decisions.jsonl")), 3)            # only the new line
+
     def test_half_done_file_is_kept_and_finished_later(self):
         with tempfile.TemporaryDirectory() as d:
             inbox, out = Path(d) / "inbox", Path(d) / "out"

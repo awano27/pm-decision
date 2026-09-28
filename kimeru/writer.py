@@ -155,9 +155,18 @@ def get_writer(name=None):
     return WRITERS[name]()
 
 
+def _canon(s):
+    """Same date / number written differently compares equal: NFKC, 10月1日 -> 10/1, no spaces."""
+    import unicodedata
+    s = unicodedata.normalize("NFKC", s or "")
+    s = re.sub(r"(\d{1,2})月(\d{1,2})日?", r"\1/\2", s)
+    return re.sub(r"\s+", "", s)
+
+
 def unverified(text, material):
     """Dates / numbers / ids in a draft that the material does not contain."""
-    return sorted({t for t in TOKENS.findall(text or "") if t not in material})
+    m = _canon(material)
+    return sorted({t for t in TOKENS.findall(text or "") if _canon(t) not in m})
 
 
 def apply(res, event, writer, instruction=None):

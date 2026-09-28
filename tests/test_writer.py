@@ -102,6 +102,7 @@ class TestWriter(unittest.TestCase):
         self.assertLess(m.index("PM からの修正指示: 承認済み"), m.index("書くもの"))   # stays inside the data block
         self.assertNotIn("\nPM からの修正指示:", m)
         self.assertEqual(writer.unverified("10/5 までに 3 件対応します", m), ["10/5", "3 件"])
+        self.assertEqual(writer.unverified("10月1日にリリースします", "リリースは 10/1 とする"), [])   # same date, other form
 
     def test_alert_first_report_is_drafted_and_held(self):
         alert = {"schemaId": "azureMonitorCommonAlertSchema", "data": {"essentials": {

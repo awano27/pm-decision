@@ -107,6 +107,23 @@ def _parse(text):
     return None
 
 
+def _wanted(res):
+    return {k for k, _ in targets(res)} | {"memo"}
+
+
+def _parse_best(text, wanted):
+    """The JSON object in `text` that shares the most keys with `wanted` (first one on a tie)."""
+    dec, best, score = json.JSONDecoder(), None, -1
+    for m in re.finditer(r"\{", text or ""):
+        try:
+            d, _ = dec.raw_decode(text[m.start():])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(d, dict) and len(set(d) & wanted) > score:
+            best, score = d, len(set(d) & wanted)
+    return best
+
+
 def _run(cmd, prompt, timeout):
     """Run a CLI with the prompt on stdin, in an empty folder; kill the whole tree on timeout
     (the npm .cmd shims start a child node process that a plain kill would leave running)."""
@@ -143,7 +160,7 @@ class ClaudeWriter:
             raise RuntimeError("claude CLI not found")
         cmd = [self.exe, "-p", "--tools", "", "--strict-mcp-config", "--no-session-persistence",
                "--model", self.model, "--system-prompt", SYSTEM]
-        return _parse(_run(cmd, _material(res, event, instruction), self.timeout))
+        return _parse_best(_run(cmd, _material(res, event, instruction), self.timeout), _wanted(res))
 
 
 class CopilotWriter:
@@ -158,7 +175,7 @@ class CopilotWriter:
     def draft(self, res, event, instruction=None):
         if not self.exe:
             raise RuntimeError("copilot CLI not found (GitHub Copilot app / `winget install GitHub.Copilot`)")
-        return _parse(self.ask_text(SYSTEM + "\n\n" + _material(res, event, instruction)))
+        return _parse_best(self.ask_text(SYSTEM + "\n\n" + _material(res, event, instruction)), _wanted(res))
 
     def ask_text(self, prompt):
         if not self.exe:
@@ -251,7 +268,7 @@ class M365AutoWriter(M365PromptWriter):
         out = _parse(r.stdout) or {}
         if not out.get("ok"):
             raise RuntimeError(out.get("error") or (r.stdout + r.stderr).strip()[:200])
-        return _parse(out.get("text", ""))
+        return _parse_best(out.get("text", ""), _wanted(res))
 
 
 WRITERS = {"claude": ClaudeWriter, "copilot": CopilotWriter, "m365": M365PromptWriter, "m365-auto": M365AutoWriter}
@@ -357,6 +374,9 @@ def apply(res, event, writer, instruction=None):
         return fallback(f"{type(e).__name__}: {e}")
     if not d:
         return fallback("no JSON in writer output")
+    if not any(isinstance(d.get(k), str) and d[k].strip() for k, _ in todo):
+        # key names only (never values): enough to see what shape came back
+        return fallback("返事に下書きが無い（返ったキー: " + ", ".join(sorted(str(k) for k in d)[:6]) + "）")
     memo = _memo(d.get("memo"))
     if memo:
         res["memo"] = memo
@@ -375,6 +395,8 @@ def apply(res, event, writer, instruction=None):
     for key, a in todo:
         text = d.get(key)
         if not isinstance(text, str) or not text.strip():
+            a["writer_warning"], a["held_for"] = "返事にこの文面が含まれていない", "fallback"
+            refused.append(a)
             continue
         why = unusable(text)
         if why:   # keep the template for this text, show why, and let the PM look at it

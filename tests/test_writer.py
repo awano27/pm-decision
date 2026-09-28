@@ -234,6 +234,126 @@ class TestWriter(unittest.TestCase):
             self.assertEqual(t.posts[0].count("作業項目の説明「"), 2)
             self.assertIn(f"作業項目の説明の下書き ほか {n_tasks - 2} 件（OK ですべて記録）", t.posts[0])
 
+    def test_valid_json_without_drafts_is_a_failure_not_a_success(self):
+        class Shapes(FakeWriter):
+            def __init__(self, answer):
+                super().__init__()
+                self.answer = answer
+
+            def draft(self, res, event, instruction=None):
+                return self.answer(res)
+        cases = {
+            "wrong keys": lambda res: {"reply": "承知しました", "tasks": {}},
+            "empty text": lambda res: {k: "" for k, _ in writer.targets(res)},
+            "memo only": lambda res: {"memo": {"summary": "要点"}},
+        }
+        for name, answer in cases.items():
+            with tempfile.TemporaryDirectory() as d:
+                out, t = Path(d), FakeTeams()
+                [res] = process(MSG, GRAPHS, StubBackend(), out, PBS, writer=Shapes(answer))
+                self.assertIn("返事に下書きが無い", res["writer_error"], name)
+                self.assertTrue(res["needs_human"], name)                         # held, not recorded unseen
+                self.assertEqual(res["executed"], [], name)
+                notify.notify(out, t, send=True)
+                self.assertIn("⚠ Copilot の下書きを作れなかったため定型文です", t.posts[0], name)
+
+    def test_missing_keys_hold_only_those_texts(self):
+        class Partial(FakeWriter):
+            def draft(self, res, event, instruction=None):
+                d = super().draft(res, event, instruction)
+                d.pop(writer.targets(res)[-1][0])
+                return d
+        with tempfile.TemporaryDirectory() as d:
+            [res] = process(MSG, GRAPHS, StubBackend(), Path(d), PBS, writer=Partial())
+            last = writer.targets(res)[-1][1]
+            self.assertEqual((last["held_for"], last["writer_warning"]), ("fallback", "返事にこの文面が含まれていない"))
+            self.assertNotIn("drafted_by", last)
+            self.assertTrue(res["needs_human"])
+
+    def test_the_answer_object_wins_over_an_echoed_prompt_block(self):
+        text = ('{"author": "佐藤", "text": "判断お願いします"}\n途中の文\n'
+                '```json\n{"a1": "受領しました。", "memo": {"summary": "要点"}}\n```')
+        self.assertEqual(writer._parse_best(text, {"a1", "a2", "memo"})["a1"], "受領しました。")
+        self.assertEqual(writer._parse_best("JSON なし", {"a1"}), None)
+        self.assertEqual(writer._parse_best('{"x": 1} {"y": 2}', {"a1"}), {"x": 1})          # tie -> first
+
+    def test_failed_rewrite_says_so_and_keeps_the_previous_draft(self):
+        class Flaky(FakeWriter):
+            calls = 0
+
+            def draft(self, res, event, instruction=None):
+                Flaky.calls += 1
+                if instruction and "失敗" in instruction:
+                    return {"reply": "キー違い"}
+                return super().draft(res, event, instruction)
+        with tempfile.TemporaryDirectory() as d:
+            out, t, w = Path(d), FakeTeams(), Flaky()
+            process(MSG, GRAPHS, StubBackend(), out, PBS, writer=w)
+            notify.notify(out, t, send=True)
+            t.timeline.append("R:修正 1 失敗させて")
+            self.assertEqual(notify.collect(out, t, writer=w),
+                             [{"id": 1, "status": "redraft_failed", "instruction": "失敗させて"}])
+            self.assertEqual(notify.notify(out, t, send=True), [1])                         # same number, with the reason
+            self.assertIn("⚠ 修正できませんでした", t.posts[-1])
+            self.assertIn("佐藤さん、承知しました。", t.posts[-1])                            # the old draft is still there
+            calls = Flaky.calls
+            self.assertEqual(notify.collect(out, t, writer=w), [])                          # the old 修正 line is stale now
+            self.assertEqual(Flaky.calls, calls)
+            t.timeline.append("R:修正 1 短く")
+            self.assertEqual(notify.collect(out, t, writer=w)[0]["status"], "redrafted")
+            notify.notify(out, t, send=True)
+            self.assertNotIn("修正できませんでした", t.posts[-1])                            # no stale note after success
+
+    def test_rewrite_after_ask_back_clears_the_ask_back_state(self):
+        class Asks(FakeWriter):
+            def draft(self, res, event, instruction=None):
+                d = super().draft(res, event, instruction)
+                d["memo"] = {"summary": "要点", "missing": ["日時"], "ask_back": "日時を教えてください。"}
+                return d
+        with tempfile.TemporaryDirectory() as d:
+            out, t, w = Path(d), FakeTeams(), Asks()
+            process(MSG, GRAPHS, StubBackend(), out, PBS, writer=w)
+            notify.notify(out, t, send=True)
+            t.timeline.append("R:聞き返し 1")
+            notify.collect(out, t)
+            notify.notify(out, t, send=True)
+            self.assertIn("返信（聞き返し）の下書き", t.posts[-1])
+            t.timeline.append("R:修正 1 丁寧に")
+            self.assertEqual(notify.collect(out, t, writer=w)[0]["status"], "redrafted")
+            notify.notify(out, t, send=True)
+            self.assertNotIn("（聞き返し）の下書き", t.posts[-1])                            # a normal reply again
+            self.assertIn("聞き返すなら", t.posts[-1])                                       # and the offer is back
+
+    def test_hidden_work_items_still_show_their_warnings(self):
+        class Invents(FakeWriter):
+            def draft(self, res, event, instruction=None):
+                d = super().draft(res, event, instruction)
+                last = writer.targets(res)[-1][0]
+                d[last] = "10/5 までに @田中 が 3 件対応する"
+                return d
+        with tempfile.TemporaryDirectory() as d:
+            out, t = Path(d), FakeTeams()
+            process(MSG, GRAPHS, StubBackend(), out, PBS, writer=Invents())
+            notify.notify(out, t, send=True)
+            post = t.posts[0]
+            self.assertIn("ほか ", post)
+            self.assertIn("　⚠ 元の材料に無い日付・数値: ", post)
+
+    def test_misspelled_writer_does_not_park_the_file(self):
+        import os
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"KIMERU_WRITER": "m365_auto"}):
+            [res] = process(MSG, GRAPHS, StubBackend(), Path(d), PBS)
+            self.assertNotIn("writer_error", res)                                          # decided without a writer
+            self.assertIn("m365_auto", (Path(d) / "warnings.jsonl").read_text(encoding="utf-8"))
+
+    def test_daily_refuses_to_start_with_a_misspelled_writer(self):
+        import os
+        from unittest import mock
+        from kimeru import cli
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"KIMERU_WRITER": "m365_auto"}):
+            self.assertEqual(cli.main(["--out", d, "daily", "--once", "--inbox", str(Path(d) / "in")]), 2)
+
     def test_key_points_for_the_morning(self):
         class Asker:
             def ask_text(self, prompt):

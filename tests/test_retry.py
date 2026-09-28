@@ -38,6 +38,14 @@ class TestRetry(unittest.TestCase):
             with self.assertRaises(BackendUnavailable):
                 KevBackend().ask({"x": 1}, {"q": {"type": "noul", "instructions": "x"}})
 
+    def test_connection_cut_mid_answer_is_retryable(self):
+        import http.client
+        for err in (ConnectionResetError("reset"), http.client.RemoteDisconnected("closed"),
+                    http.client.IncompleteRead(b"x")):
+            with mock.patch("kimeru.backends._urlopen", side_effect=err), mock.patch("time.sleep"):
+                with self.assertRaises(BackendUnavailable, msg=type(err).__name__):
+                    KevBackend().ask({"x": 1}, {"q": {"type": "noul", "instructions": "x"}})
+
     def test_400_is_not_retryable(self):
         err = urllib.error.HTTPError("u", 400, "bad", {}, io.BytesIO(b"bad request"))
         with mock.patch("kimeru.backends._urlopen", side_effect=err):

@@ -6,6 +6,7 @@ Queue items (advise nodes with queue=true) are posted to the self chat as
 *proposed*; they run (dry-run in v0.1) when approved. A reply drafted by the
 writer (writer.py) is shown in full; "修正 N <指示>" redrafts it and posts it again.
 """
+import copy
 import json
 import re
 import subprocess
@@ -85,6 +86,8 @@ def format_post(n, rec):
         lines.append("Copilot が参照: " + " / ".join(rec["copilot_sources"]))
     drafts = [a for a in rec.get("actions", []) if a.get("drafted_by")]
     waiting = [a for a in rec.get("actions", []) if a.get("held_for")]
+    if rec.get("redraft_note"):
+        lines.append("⚠ " + rec["redraft_note"])
     if rec.get("writer_error"):
         lines.append("⚠ Copilot の下書きを作れなかったため定型文です（" + str(rec["writer_error"])[:60] + "）")
     for a in waiting:
@@ -109,7 +112,10 @@ def format_post(n, rec):
             if a.get("ask_back_unverified"):
                 lines.append("⚠ 元の材料に無い日付・数値: " + ", ".join(a["ask_back_unverified"]))
     if hidden:
-        lines.append(f"作業項目の説明の下書き ほか {len(hidden)} 件（OK ですべて記録）")
+        lines.append(f"作業項目の説明の下書き ほか {len(hidden)} 件（OK ですべて記録）:")
+        for a in hidden:
+            lines.append("・" + str(a.get("title") or "")[:50] +
+                         ("　⚠ 元の材料に無い日付・数値: " + ", ".join(a["unverified"]) if a.get("unverified") else ""))
     ask = any(a.get("ask_back") for a in drafts)
     lines.append(f"返信: OK {n} / NG {n} / 保留 {n}" + (f" / 修正 {n} <直してほしい点>" if drafts else "")
                  + (f" / 聞き返し {n}" if ask else ""))
@@ -263,14 +269,32 @@ def fresh_replies(read):
     return out
 
 
+STALE_ACTION_KEYS = ("drafted_by", "held_for", "writer_warning", "variant", "ask_back", "ask_back_unverified", "unverified")
+STALE_RECORD_KEYS = ("writer_error", "copilot_request", "copilot_sources", "memo", "redraft_note")
+
+
 def _redraft(it, instruction, writer):
+    """Write the item again with the PM's instruction. Returns the change to log; the item is posted
+    again under the same number either way (a failure says so and keeps the previous draft)."""
     rec = it["record"]
+    it["posted"], it["status"], it["request_posted"] = False, "pending", False
     if writer is None or not rec.get("material_event"):
-        return None
-    if not writer_mod.apply(rec, rec["material_event"], writer, instruction):
-        return None
-    it["posted"], it["status"] = False, "pending"   # next notify posts the new draft under the same number
-    it["request_posted"] = False
+        rec["redraft_note"] = "修正できませんでした（writer が設定されていません）。前の下書きのままです"
+        return {"status": "redraft_failed", "instruction": instruction}
+    before = copy.deepcopy(rec)
+    for a in rec.get("actions", []):
+        for k in STALE_ACTION_KEYS:
+            a.pop(k, None)
+    for k in STALE_RECORD_KEYS:
+        rec.pop(k, None)
+    drafted = writer_mod.apply(rec, rec["material_event"], writer, instruction)
+    used = [a for a in drafted if a.get("drafted_by")]
+    if not used:
+        why = rec.get("writer_error") or "使える下書きが返りませんでした"
+        rec.clear()
+        rec.update(before)
+        rec["redraft_note"] = f"修正できませんでした（{str(why)[:60]}）。前の下書きのままです"
+        return {"status": "redraft_failed", "instruction": instruction}
     return {"status": "redrafted", "instruction": instruction}
 
 
@@ -287,9 +311,7 @@ def collect(out, bridge, writer=None):
         if rd:
             it = ap.data["items"].get(rd[0])
             if it and it["posted"] and it["status"] in ("pending", "held"):
-                ch = _redraft(it, rd[1], writer)
-                if ch:
-                    changes.append({"id": int(rd[0]), **ch})
+                changes.append({"id": int(rd[0]), **_redraft(it, rd[1], writer)})
             continue
         r = parse_reply(line)
         if not r:

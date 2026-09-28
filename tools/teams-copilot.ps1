@@ -59,10 +59,24 @@ function Get-Entries($w) {
   @(Find-All $w $CT::TreeItem) + @(Find-All $w $CT::ListItem) + @(Find-All $w $CT::Button) + @(Find-All $w $CT::TabItem) |
     Where-Object { $_.Current.Name -match $COPILOT }
 }
+function Find-Box($w) {
+  # 1) the usual compose box id or a name that says so; 2) else the lowest editable field in the window
+  #    (the compose box sits at the bottom of the pane); 3) else the lowest focusable document
+  $edits = @(Find-All $w $CT::Edit)
+  $b = $edits | Where-Object { $_.Current.AutomationId -like 'new-message-*' -or $_.Current.Name -match 'Copilot|メッセージ|message|質問|Ask' } | Select-Object -First 1
+  if (-not $b -and $edits.Count) { $b = $edits | Where-Object { $_.Current.BoundingRectangle.Width -gt 0 } | Sort-Object { $_.Current.BoundingRectangle.Y } | Select-Object -Last 1 }
+  if (-not $b) { $b = @(Find-All $w $CT::Document) | Where-Object { $_.Current.IsKeyboardFocusable -and $_.Current.BoundingRectangle.Width -gt 0 } | Sort-Object { $_.Current.BoundingRectangle.Y } | Select-Object -Last 1 }
+  $b
+}
 function Get-Box($w) {
-  $b = Find-All $w $CT::Edit | Where-Object { $_.Current.AutomationId -like 'new-message-*' -or $_.Current.Name -match 'Copilot|メッセージ|message' } | Select-Object -First 1
+  $b = Find-Box $w
   if (-not $b) { Fail 'compose box not found in the Copilot chat' }
   $b
+}
+function Shape($s) {
+  # structure only: known UI words stay, every other name becomes its length
+  $s = [string]$s
+  if ($s -match '^(送信|Send|停止|Stop|生成を停止|添付|Attach|新しいチャット|New chat|質問|Ask|メッセージ|Message)') { $s.Substring(0, [math]::Min(14, $s.Length)) } else { "<$($s.Length)>" }
 }
 function Get-BoxText($b) {
   try { return $b.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern).DocumentRange.GetText(8000) }
@@ -110,11 +124,16 @@ if ($Action -eq 'probe') {
   $kinds = @($entries | ForEach-Object { $_.Current.ControlType.ProgrammaticName -replace '^ControlType\.', '' }) -join ','
   $opened = Open-Copilot $w
   $shape = if ($opened) { (($opened.Current.Name -split ' \| ') | ForEach-Object { if ($_ -match '^(Microsoft 365 )?Copilot$|^Microsoft Teams$|^チャット$|^Chat$') { $_ } else { '<text>' } }) -join ' | ' } else { '' }
-  $box = if ($opened) { Find-All $opened $CT::Edit | Where-Object { $_.Current.AutomationId -like 'new-message-*' -or $_.Current.Name -match 'Copilot|メッセージ|message' } | Select-Object -First 1 } else { $null }
+  $box = $null
+  for ($i = 0; $opened -and -not $box -and $i -lt 8; $i++) { $box = Find-Box $opened; if (-not $box) { Start-Sleep -Seconds 1; $opened = Get-TeamsWindow } }
   $send = if ($opened) { [bool](Find-All $opened $CT::Button | Where-Object { $_.Current.Name -match '^(送信|Send)' } | Select-Object -First 1) } else { $false }
+  $mask = { param($s) ([string]$s) -replace '[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){0,4}', '<id>' -replace '\d+', 'N' }
+  $edits = if ($opened) { @(Find-All $opened $CT::Edit | Select-Object -First 8 | ForEach-Object { "Edit:$(& $mask $_.Current.AutomationId):len$($_.Current.Name.Length):focus=$($_.Current.IsKeyboardFocusable)" }) } else { @() }
+  $docs = if ($opened) { @(Find-All $opened $CT::Document | Select-Object -First 5 | ForEach-Object { "Doc:$(& $mask $_.Current.AutomationId):focus=$($_.Current.IsKeyboardFocusable)" }) } else { @() }
+  $btns = if ($opened) { @(Find-All $opened $CT::Button | Select-Object -First 30 | ForEach-Object { Shape $_.Current.Name }) } else { @() }
   Out-Json ([ordered]@{ ok = $true; entries = $entries.Count; entryTypes = $kinds; opened = [bool]$opened; title = $shape
-                        composeBox = [bool]$box; boxId = $(if ($box) { ($box.Current.AutomationId -replace '[0-9a-f]{8,}', '<id>') } else { '' })
-                        sendButton = $send })
+                        composeBox = [bool]$box; boxId = $(if ($box) { (& $mask $box.Current.AutomationId) } else { '' })
+                        sendButton = $send; edits = $edits; docs = $docs; buttons = $btns })
   exit 0
 }
 

@@ -176,6 +176,18 @@ function Open-SelfChat($w) {
   if (Test-SelfOpen $w) { return $w }
   $cands = @(Find-SelfItems $w)
   if (-not $cands -and (Show-ChatApp $w)) { Start-Sleep -Seconds 2; $w = Get-TeamsWindow; $cands = @(Find-SelfItems $w) }
+  if (-not $cands) {
+    # Teams is on another app page (Activity, Calendar, Copilot...) and its chat button was not found:
+    # the self chat has a fixed link (48:notes), which opens it without any list
+    try { Start-Process 'msteams:/l/chat/48:notes/conversations' } catch {}
+    for ($i = 0; $i -lt 16; $i++) {
+      Start-Sleep -Milliseconds 500
+      $w = Get-TeamsWindow
+      if (Test-SelfOpen $w) { return $w }
+      $cands = @(Find-SelfItems $w)
+      if ($cands) { break }
+    }
+  }
   for ($i = 0; -not $cands -and $i -lt 10; $i++) {   # Teams just started: the chat list fills in a few seconds
     Start-Sleep -Seconds 1
     $w = Get-TeamsWindow

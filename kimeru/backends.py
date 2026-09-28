@@ -2,6 +2,7 @@
 noul -> {"noul": p}; choice -> {"choice", "confidence", "probabilities"};
 score -> {"score", "confidence", "probabilities"}.
 """
+import http.client
 import json
 import os
 import time
@@ -60,6 +61,12 @@ class JevBackend:
                 raise BackendUnavailable(f"{self.NAME} not reachable at {self.api} ({e.reason})") from None
             except TimeoutError:
                 raise BackendUnavailable(f"{self.NAME} timed out after {self.TIMEOUT}s at {self.api}") from None
+            except (OSError, http.client.HTTPException) as e:   # reset / half-closed / incomplete read
+                if attempt < self.retries - 1:
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                raise BackendUnavailable(f"{self.NAME} connection failed at {self.api} ({type(e).__name__})") from None
 
 
 LOOPBACK = ("127.0.0.1", "localhost", "::1")

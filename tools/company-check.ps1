@@ -369,12 +369,14 @@ if ($uia -and (Want 'T17')) {
   $pr = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'teams-copilot.ps1') -Action probe 2>&1 | Out-String
   $pj = try { $pr.Trim().TrimStart([char]0xFEFF) | ConvertFrom-Json } catch { $null }
   if (-not $pj -or -not $pj.ok) { Rec 'T17-probe' ('NG ' + (Safe-Error $pr)) }
-  else { Rec 'T17-probe' ("entries=$($pj.entries) [$($pj.entryTypes)] opened=$($pj.opened) title=$($pj.title) box=$($pj.composeBox) id=$($pj.boxId) send=$($pj.sendButton)") }
+  else { Rec 'T17-probe' ("entries=$($pj.entries) [$($pj.entryTypes)] opened=$($pj.opened) title=$($pj.title) box=$($pj.composeBox) id=$($pj.boxId) send=$($pj.sendButton) edits=[$(@($pj.edits) -join ';')] docs=[$(@($pj.docs) -join ';')] buttons=[$(@($pj.buttons) -join ',')]") }
   if ($py -and $pj -and $pj.opened -and (YesNo "   架空のチャット 1 件の文面を Teams の Copilot に書かせますか（Copilot の履歴に残ります）")) {
     $d = Py @('eval\drafts.py', '--backend', 'stub', '--writer', 'm365-auto', '--n', '1', '--kinds', 'teams.chat')
     $sum = ($d -split "`n") | Where-Object { $_ -match '^events=' } | Select-Object -First 1
     $err = ($d -split "`n") | Where-Object { $_ -match 'ERROR' } | Select-Object -First 1
-    Rec 'T17' $(if ($sum -and $sum -match 'drafted=[1-9]') { 'OK ' + (Short $sum) } else { 'NG ' + $(if ($err) { Short $err } else { Fails $d }) })
+    $m = [regex]::Match([string]$sum, 'texts=(\d+) drafted=(\d+) held=(\d+) failed_events=(\d+)')
+    $all = $m.Success -and $m.Groups[1].Value -eq $m.Groups[2].Value -and $m.Groups[4].Value -eq '0'
+    Rec 'T17' $(if ($all) { 'OK ' + (Short $sum) } else { 'NG ' + (Short $sum) + $(if ($err) { ' | ' + (Short $err) } else { '' }) })
   } elseif (Want 'T17') { Rec 'T17' 'SKIP' }
 }
 

@@ -61,7 +61,12 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
     by the same graph version, so a retried or re-dropped file does not decide twice."""
     if playbooks is None:
         playbooks = planner.load_playbooks(DEFAULT_PLAYBOOKS)
-    writer = writer if writer is not None else writer_mod.get_writer()
+    if writer is None:
+        try:
+            writer = writer_mod.get_writer()
+        except ValueError as e:   # a misspelled KIMERU_WRITER: decide without a writer, say so, never park the file
+            writer = None
+            _append(out / "warnings.jsonl", {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "writer": str(e)})
     seen = _processed(out) if dedup else set()
     results = []
     for ev in events.normalize(payload):
@@ -260,6 +265,11 @@ def main(argv=None):
         return 0
     if a.cmd == "daily":
         from . import daily
+        try:
+            writer_mod.get_writer()
+        except ValueError as e:   # fail at the start, where a person or the scheduler's exit code can see it
+            print(f"kimeru: {e}", file=sys.stderr)
+            return 2
         ado = (a.ado_org, a.ado_project) if a.ado_org and a.ado_project else None
         while True:
             r = daily.cycle(out, a.inbox, gs, be, pbs, process, send=a.send, ado=ado,

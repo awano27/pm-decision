@@ -48,14 +48,17 @@ def main():
         t0 = time.time()
         drafted = writer.apply(res, ev, w)
         secs.append(time.time() - t0)
+        held = [d for d in drafted if not d.get("drafted_by")]   # template kept: refused, missing or fallback
+        drafted = [d for d in drafted if d.get("drafted_by")]
         items = [{"type": d["type"], "title": d.get("title"), "text": d[writer.FIELD[d["type"]]],
                   "template": d.get("template_text"), "unverified": d.get("unverified", []),
                   "long": len(d[writer.FIELD[d["type"]]]) > LIMIT[d["type"]]} for d in drafted]
         rows.append({"id": x["id"], "kind": ev["kind"], "node": res["node"], "error": res.get("writer_error"),
-                     "targets": len(writer.targets(res)), "drafted": items, "sec": round(secs[-1], 1)})
+                     "targets": len(writer.targets(res)), "drafted": items, "held": len(held), "sec": round(secs[-1], 1)})
         flags = sum(bool(i["unverified"]) for i in items)
         print(f"{x['id']:12} {res['node']:18} {secs[-1]:5.1f}s drafted {len(items)}/{len(writer.targets(res))}"
-              f"{'  invented=' + str(flags) if flags else ''}{'  ERROR ' + res['writer_error'][:60] if res.get('writer_error') else ''}",
+              f"{'  invented=' + str(flags) if flags else ''}{'  held=' + str(len(held)) if held else ''}"
+              f"{'  ERROR ' + res['writer_error'][:90] if res.get('writer_error') else ''}",
               flush=True)
     if a.out:
         Path(a.out).write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
@@ -65,7 +68,7 @@ def main():
     items = [i for r in rows for i in r["drafted"]]
     secs.sort()
     print(f"\nevents={len(rows)} texts={sum(r['targets'] for r in rows)} drafted={len(items)} "
-          f"failed_events={sum(1 for r in rows if r['error'])} invented={sum(bool(i['unverified']) for i in items)} "
+          f"held={sum(r['held'] for r in rows)} failed_events={sum(1 for r in rows if r['error'])} invented={sum(bool(i['unverified']) for i in items)} "
           f"long={sum(i['long'] for i in items)} median={secs[len(secs) // 2]:.1f}s max={secs[-1]:.1f}s")
 
 

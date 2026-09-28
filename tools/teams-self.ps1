@@ -346,13 +346,25 @@ if ($Action -eq 'post') {
   try { $saved = [System.Windows.Forms.Clipboard]::GetText() } catch {}
   try {
     [System.Windows.Forms.Clipboard]::SetText($Text)
-    Assert-Foreground $w
-    $box.SetFocus(); Start-Sleep -Milliseconds 200
-    Assert-Foreground $w
-    [System.Windows.Forms.SendKeys]::SendWait('^v'); Start-Sleep -Milliseconds 300
+    # Teams rebuilds the compose box after a send: take a fresh element each try and click into it,
+    # then check the paste landed (the empty box reads as its placeholder, so compare with before)
+    for ($try = 0; $try -lt 2; $try++) {
+      $box = Get-Box $w
+      Assert-Foreground $w
+      $box.SetFocus(); Start-Sleep -Milliseconds 200
+      $r = $box.Current.BoundingRectangle
+      if ($r.Width -gt 0) {
+        [void][K.W]::SetCursorPos([int]($r.X + [math]::Min(80, $r.Width / 2)), [int]($r.Y + $r.Height / 2))
+        [K.W]::mouse_event(2, 0, 0, 0, 0); [K.W]::mouse_event(4, 0, 0, 0, 0); Start-Sleep -Milliseconds 200
+      }
+      Assert-Foreground $w
+      [System.Windows.Forms.SendKeys]::SendWait('^v'); Start-Sleep -Milliseconds 400
+      if ((Squash (Get-BoxText (Get-Box $w))) -ne $before) { break }
+    }
   } finally {
     if ($saved) { [System.Windows.Forms.Clipboard]::SetText($saved) } else { [System.Windows.Forms.Clipboard]::Clear() }
   }
+  $box = Get-Box $w
   # the box must hold exactly the planned text: an old draft left in the box would otherwise go out with it
   $typed = (Squash (Get-BoxText $box)) -eq (Squash $Text)
   $sent = $false

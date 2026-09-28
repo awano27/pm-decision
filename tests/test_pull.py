@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 from kimeru import events, pull
 from kimeru.backends import StubBackend
@@ -32,6 +33,31 @@ class FakeHttp:
             if key in url:
                 return resp(url, body) if callable(resp) else resp
         raise AssertionError("unexpected url " + url)
+
+
+class TestAdoNames(unittest.TestCase):
+    def test_pasted_forms(self):
+        self.assertEqual(pull.ado_names("contoso/Proj"), ("contoso", "Proj"))
+        self.assertEqual(pull.ado_names("contoso/Proj", "Proj"), ("contoso", "Proj"))
+        self.assertEqual(pull.ado_names("https://dev.azure.com/contoso/My%20Proj/"), ("contoso", "My Proj"))
+        self.assertEqual(pull.ado_names("contoso.visualstudio.com/Proj"), ("contoso", "Proj"))
+
+    def test_sign_in_page_instead_of_json_is_a_clear_error(self):
+        class Resp:
+            status = 203
+
+            def read(self):
+                return b"<html>sign in</html>"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+        with mock.patch("urllib.request.urlopen", return_value=Resp()):
+            with self.assertRaises(pull.PullError) as c:
+                pull.http_json("GET", "https://dev.azure.com/x/_apis/wit", "t")
+        self.assertIn("organization", str(c.exception))
 
 
 class TestAdo(unittest.TestCase):

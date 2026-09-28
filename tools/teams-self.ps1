@@ -44,6 +44,8 @@ Add-Type -Namespace K -Name W -MemberDefinition @'
 [DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
 [DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h);
 [DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr h, int n);
+[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+[DllImport("user32.dll")] public static extern void mouse_event(int f, int x, int y, int d, int e);
 '@
 
 function Assert-Foreground($w) {
@@ -154,17 +156,33 @@ function Open-SelfChat($w) {
     if ($w) { $cands = @(Find-SelfItems $w) }
   }
   if (-not $cands) { Fail 'self chat not found in chat list (open it once by hand and run -Action learn)' }
-  foreach ($item in $cands) {   # a candidate may be a message rather than the chat entry: verify by title
-    try { $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() }
-    catch { try { $item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch { continue } }
-    for ($i = 0; $i -lt 12; $i++) {
-      Start-Sleep -Milliseconds 250
-      $w = Get-TeamsWindow
-      if ((Test-Selected $item) -and (Get-ChatId $item) -eq '48:notes') { return $w }
-      if (Test-SelfTitle $w) { return $w }
+  $tried = New-Object System.Collections.Generic.List[string]
+  foreach ($item in $cands) {   # a candidate may be a message rather than the chat entry: verify after each try
+    foreach ($how in 'select', 'invoke', 'click') {
+      try {
+        switch ($how) {
+          'select' { $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() }
+          'invoke' { $item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
+          'click' {
+            # new Teams may mark the entry selected via UIA without navigating: click it like a person would
+            Assert-Foreground $w
+            $r = $item.Current.BoundingRectangle
+            if ($r.Width -le 0) { throw 'no rectangle' }
+            [void][K.W]::SetCursorPos([int]($r.X + [math]::Min(60, $r.Width / 2)), [int]($r.Y + $r.Height / 2))
+            [K.W]::mouse_event(2, 0, 0, 0, 0); [K.W]::mouse_event(4, 0, 0, 0, 0)
+          }
+        }
+        $tried.Add("${how}:ok")
+      } catch { $tried.Add("${how}:err"); continue }
+      for ($i = 0; $i -lt 12; $i++) {
+        Start-Sleep -Milliseconds 250
+        $w = Get-TeamsWindow
+        if (Test-SelfOpen $w) { return $w }
+      }
     }
   }
-  Fail 'self chat did not open'
+  $n = if ($w) { Get-NotesItem $w } else { $null }
+  Fail ("self chat did not open (tried " + ($tried -join ',') + "; notes entry " + $(if ($n) { "found, selected=" + (Test-Selected $n) } else { 'not found' }) + ")")
 }
 
 $w = Get-TeamsWindow

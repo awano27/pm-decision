@@ -12,6 +12,7 @@ State (last poll time, seen ids) lives in out/pull_state.json.
 NOTE: tested against recorded/fixture API shapes only; not yet run against a live tenant.
 """
 import json
+import re
 import shutil
 import subprocess
 import time
@@ -65,7 +66,12 @@ def http_json(method, url, token, body=None, retries=3):
             "Authorization": "Bearer " + token, "Content-Type": "application/json", "User-Agent": "kimeru/0.1"})
         try:
             with urllib.request.urlopen(req, timeout=60) as r:
-                return json.loads(r.read().decode("utf-8"))
+                raw = r.read().decode("utf-8", "replace")
+                try:
+                    return json.loads(raw)
+                except json.JSONDecodeError:   # e.g. ADO answers 203 + a sign-in page for a wrong organization
+                    raise PullError(f"not a JSON answer (HTTP {r.status}) from {url.split('?')[0]}: "
+                                    "check the organization / project name and `az login`") from None
         except urllib.error.HTTPError as e:
             if e.code in (429, 500, 502, 503, 504) and attempt < retries - 1:
                 time.sleep(float(e.headers.get("Retry-After") or delay))
@@ -107,8 +113,23 @@ def _drop(inbox, name, payload):
     tmp.replace(inbox / (safe + ".json"))  # atomic: watch never sees a half-written file
 
 
+def ado_names(org, project=""):
+    """Accept what people paste: "org", "org/project", "dev.azure.com/org/project" or the old
+    "org.visualstudio.com" form. Returns (org, project)."""
+    s = re.sub(r"^https?://", "", (org or "").strip()).strip("/")
+    s = re.sub(r"^dev\.azure\.com/", "", s, flags=re.I)
+    m = re.match(r"^([^./]+)\.visualstudio\.com/?(.*)$", s, flags=re.I)
+    if m:
+        s = m[1] + ("/" + m[2] if m[2] else "")
+    parts = [x for x in s.split("/") if x]
+    org = parts[0] if parts else ""
+    project = (project or "").strip() or (urllib.parse.unquote(parts[1]) if len(parts) > 1 else "")
+    return org, project
+
+
 def pull_ado(org, project, inbox, out, http=http_json, token=None, now=None, first_lookback_h=24):
     """Return number of new work items dropped into the inbox."""
+    org, project = ado_names(org, project)
     st = State(out)
     sec = st.section(f"ado:{org}/{project}")
     now = now or datetime.now(timezone.utc)

@@ -258,23 +258,23 @@ else {
   if ($LASTEXITCODE -ne 0) { Rec 'T10' 'NG az login できず（条件付きアクセス等）' }
   else {
     $inbox = Join-Path $tmp 'inbox'; $res = @()
-    $org = Read-Host "   ADO の組織名（dev.azure.com/<ここ>。Enter でスキップ）"
+    $org = Read-Host "   ADO の組織名（dev.azure.com/<ここ>。URL や 組織/プロジェクト の形でも可。Enter でスキップ）"
     if ($org) {
-      $proj = Read-Host "   ADO のプロジェクト名"
+      $proj = if ($org -match '/.+/.+|^[^/]+/[^/]+$') { '' } else { Read-Host "   ADO のプロジェクト名" }
       $a = Py @('-m', 'kimeru', '--out', $out, 'pull', 'ado', '--org', $org, '--project', $proj, '--inbox', $inbox)
-      $res += "ado=" + (Short $a)
+      $res += "ado=" + $(if ($a -match '(\d+) new') { "$($Matches[1]) 件" } else { Fails $a })
     }
     $sub = (& $az account show --query id -o tsv 2>$null)
     if ($sub -and (YesNo "   現在のサブスクリプションの発報中アラートを読み取りますか（読み取りのみ）")) {
       $a = Py @('-m', 'kimeru', '--out', $out, 'pull', 'alerts', '--subscription', $sub, '--inbox', $inbox)
-      $res += "alerts=" + (Short $a)
+      $res += "alerts=" + $(if ($a -match '(\d+) new') { "$($Matches[1]) 件" } else { Fails $a })
     }
     if (Test-Path $inbox) {
       $w = Py @('-m', 'kimeru', '--out', $out, 'watch', $inbox, '--once')
       $res += "判断=" + ([regex]::Matches($w, '(?m)^\[')).Count
     }
     $azv = (& $az version --query '\"azure-cli\"' -o tsv 2>$null)
-    Rec 'T10' ("az=$azv ログイン済み ($az) / " + $(if ($res) { $res -join ' / ' } else { '取り込み対象の指定なし' }))
+    Rec 'T10' ("az=$azv ログイン済み / " + $(if ($res) { $res -join ' / ' } else { '取り込み対象の指定なし' }))
   }
 }
 

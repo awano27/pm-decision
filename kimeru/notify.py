@@ -16,7 +16,7 @@ from . import actions
 from . import writer as writer_mod
 
 HERE = Path(__file__).resolve().parent.parent
-REPLY = re.compile(r"^(OK|NG|保留)\s*#?(\d+)$", re.IGNORECASE)
+REPLY = re.compile(r"^(OK|NG|保留|聞き返し)\s*#?(\d+)$", re.IGNORECASE)
 REDRAFT = re.compile(r"^修正\s*#?(\d+)\s*[:：]?\s*(\S.*)$")
 
 
@@ -30,7 +30,7 @@ def parse_redraft(line):
     """("3", "もっと短く") for "修正 3 もっと短く"; None otherwise."""
     m = REDRAFT.match(unicodedata.normalize("NFKC", line).strip())
     return (m.group(1), m.group(2).strip()) if m else None
-STATUS = {"OK": "approved", "NG": "rejected", "保留": "held"}
+STATUS = {"OK": "approved", "NG": "rejected", "保留": "held", "聞き返し": "approved"}
 
 
 class PowerShellBridge:
@@ -70,18 +70,43 @@ def format_post(n, rec):
         what = src.get("text") or src.get("item") or src.get("title") or src.get("rule") or ""
         who = src.get("author")
         lines.append("元: " + (f"{who}: " if who else "") + str(what)[:200])
+    memo = rec.get("memo") or {}
+    if memo:
+        lines.append("Copilot のメモ:")
+        if memo.get("summary"):
+            lines.append(f"・要点: {memo['summary']}")
+        if memo.get("missing"):
+            lines.append("・足りない情報: " + " / ".join(memo["missing"]))
+        if memo.get("options"):
+            lines.append("・選択肢: " + " / ".join(memo["options"]))
+        if memo.get("next"):
+            lines.append(f"・次の一手: {memo['next']}")
+    if rec.get("copilot_sources"):
+        lines.append("Copilot が参照: " + " / ".join(rec["copilot_sources"]))
     drafts = [a for a in rec.get("actions", []) if a.get("drafted_by")]
     waiting = [a for a in rec.get("actions", []) if a.get("held_for")]
     for a in waiting[:1]:
         lines.append("定型文: " + str(a.get(writer_mod.FIELD[a["type"]]) or ""))
     if rec.get("copilot_request"):
         lines.append("↓ 次の投稿を Microsoft 365 Copilot に貼ると下書きができます")
+    tasks = [a for a in drafts if a["type"] == "ado.create"]
+    hidden = tasks[2:]   # a phone screen: two work-item descriptions, the rest counted (all are kept and run on OK)
     for a in drafts:
+        if a in hidden:
+            continue
         label = writer_mod.LABEL.get(a["type"], a["type"]) + (f"「{a['title']}」" if a.get("title") else "")
         lines.append(f"{label}の下書き（{a['drafted_by']}）:\n{a[writer_mod.FIELD[a['type']]]}")
         if a.get("unverified"):
             lines.append("⚠ 元の材料に無い日付・数値: " + ", ".join(a["unverified"]))
-    lines.append(f"返信: OK {n} / NG {n} / 保留 {n}" + (f" / 修正 {n} <直してほしい点>" if drafts else ""))
+        if a.get("ask_back"):
+            lines.append(f"聞き返すなら（「聞き返し {n}」でこちらを送る）:" + chr(10) + a["ask_back"])
+            if a.get("ask_back_unverified"):
+                lines.append("⚠ 元の材料に無い日付・数値: " + ", ".join(a["ask_back_unverified"]))
+    if hidden:
+        lines.append(f"作業項目の説明の下書き ほか {len(hidden)} 件（OK ですべて記録）")
+    ask = any(a.get("ask_back") for a in drafts)
+    lines.append(f"返信: OK {n} / NG {n} / 保留 {n}" + (f" / 修正 {n} <直してほしい点>" if drafts else "")
+                 + (f" / 聞き返し {n}" if ask else ""))
     return "\n".join(lines)
 
 
@@ -270,8 +295,16 @@ def collect(out, bridge, writer=None):
         new = STATUS[word]
         if new == it["status"]:
             continue
+        if word == "聞き返し":   # send the ask-back reply instead of the drafted answer
+            replies = [a for a in it["record"].get("actions", []) if a.get("type") == "teams.reply" and a.get("ask_back")]
+            if not replies:
+                continue          # nothing to ask back: the item stays as it is
+            for a in replies:
+                a["answer_text"], a["text"] = a["text"], a["ask_back"]
         it["status"] = new
         ch = {"id": int(num), "status": new}
+        if word == "聞き返し":
+            ch["variant"] = "ask_back"
         if new == "approved":
             ch["executed"] = [actions.execute(a, dry_run=True) for a in it["record"].get("actions", [])]
         changes.append(ch)

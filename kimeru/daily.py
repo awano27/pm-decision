@@ -29,6 +29,20 @@ def _step(out, name, fn, report):
         _log(out, {"step": name, "error": report[name]})
 
 
+def _with_key_points(text):
+    """Morning brief + "今日の要点" (3 lines) from the writer LLM when one is set (copilot / claude).
+    Any failure leaves the brief as it was."""
+    try:
+        from . import writer as writer_mod
+        head, *rest = text.split("\n")
+        points = writer_mod.summarize_day(writer_mod.get_writer(), rest)
+    except Exception:
+        return text
+    if not points:
+        return text
+    return "\n".join([head, "今日の要点（Copilot）:"] + [f"・{p}" for p in points] + rest)
+
+
 def process_inbox(inbox, out, graphs, backend, playbooks, process):
     inbox = Path(inbox)
     done = inbox / "done"
@@ -79,6 +93,7 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
     if now.hour >= brief_hour and st.get("brief_date") != today:
         def do_brief():
             text, ranked = brief_mod.build(out, backend, date=today)
+            text = _with_key_points(text)
             bridge.post(text, send)
             return len(ranked)
         _step(out, "brief", do_brief, r)

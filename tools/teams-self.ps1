@@ -399,7 +399,7 @@ if ($Action -eq 'read') {
         $entry = "P:" + $Matches[1]
         if (-not $posts.Contains($Matches[1])) { $posts.Add($Matches[1]) }
       }
-      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留)\s*#?(\d+)$') {
+      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留|聞き返し)\s*#?(\d+)$') {
         # phones often send full-width or re-cased text ("ＯＫ　６７５", "Ok 675"): canonicalize
         $c = '{0} {1}' -f $Matches[1].ToUpper(), $Matches[2]
         $entry = "R:" + $c

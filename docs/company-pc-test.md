@@ -2,25 +2,32 @@
 
 ## かんたん実行（おすすめ）
 
-持ち込むのはフォルダ 1 つ、操作はダブルクリック 1 回。
+持ち込むのはフォルダ 1 つ（分割して運ぶ）、操作はダブルクリック 1 回。
 
-1. **開発 PC**: `powershell -ExecutionPolicy Bypass -File tools\make-bundle.ps1` で `C:\develop\kimeru-pc` を作る
-   （`kimeru`・`kev`・`az` の 3 つが入る。約 11GB。2 回目以降は変わったファイルだけ上書き）
-2. **会社 PC**: リモートデスクトップで `kimeru-pc` フォルダを**フォルダごと**好きな場所（例: `C:\kimeru-pc`）にコピーする（中身だけを移すと `kev` と `az` が見つからない）
-3. **会社 PC**: `kimeru-pc\START.cmd` をダブルクリック
-   - Kev の起動（最小化ウィンドウ。閉じない）→ az のサインイン（聞かれたら `y`、ブラウザで会社アカウント）→ 動作確認、の順に自動で進む
-   - 途中で聞かれるのは次だけ。わからなければ Enter（いいえ／スキップ）でよい
-     - Python がないとき: python.org のインストール不要版（約 11MB）を取得してよいか → `y`
-     - 自分とのチャットが見つからないとき: Teams で「自分とのチャット」を手で開く（90 秒待つ）
-     - 確認待ち 2 件の送信 → iPhone から表示された `OK 番号` と `NG 番号` を返信
-     - ADO の組織名・プロジェクト名（任意）
-4. 終わると結果シートが**クリップボードにコピー**される（`kimeru-check-result.txt` にも保存）。そのまま貼り付けて返す
+1. **開発 PC**: kimeru・Kev・Azure CLI・Python を 1 つにまとめ、1GB ずつに分割する。
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File tools\make-bundle.ps1 -Zip -KevSrc <Kev の持ち込み用フォルダ> -AzSrc <az の ZIP 展開先>
+   powershell -ExecutionPolicy Bypass -File tools\split-zip.ps1 -Zip C:\develop\kimeru-pc.zip
+   ```
+   `C:\develop\parts` に分割ファイル（約 8 個）と `JOIN.cmd` ができる。Kev だけ・kimeru だけの更新なら、変わった部分の小さな ZIP を作って上書き展開してもよい。
+2. **会社 PC**: リモートデスクトップで `parts` フォルダを**フォルダごと**好きな場所にコピーする。途中で失敗したら、失敗したファイルだけ取り直す。
+   前回の `C:\kimeru-pc` が残っていれば、先に削除する。
+3. **会社 PC**: `JOIN.cmd` をダブルクリック。結合 → 破損チェック（`NG` と出たら、そのファイルを取り直す）→ `C:\kimeru-pc` へ展開（約 2 分）→ `START.cmd` の順に自動で進む。
+4. `START.cmd` が Kev を起動（最小化ウィンドウ。閉じない）し、az のサインインと動作確認に進む。**質問には明示的に答える**（Enter だけだとその項目は「SKIP」になり、確認したことにならない）。
+   - az にサインインしていません → `y`（ブラウザで会社アカウント）
+   - 確認待ち 2 件を自分とのチャットに送信します → `y`。その後、数秒はマウス・キーボードに触らず、iPhone から表示された `OK 番号` と `NG 番号` を **別々のメッセージで** 返信する
+   - 自分とのチャットが見つからないとき → Teams で「自分とのチャット」を手で開く（90 秒待つ）
+   - ADO の組織名 → `https://dev.azure.com/<組織>/<プロジェクト>` の形で貼ってよい（別テナントの組織なら、サインインを聞かれたら `y`）
+   - GitHub Copilot / Teams の Copilot に架空のサンプルを書かせますか → 試すなら `y`（Copilot の履歴に残る）
+   - PC の通知が見えましたか → 見えたら `y`
+5. 終わると結果シートが**クリップボードにコピー**される（`kimeru-check-result.txt` にも保存）。そのまま貼り付けて返す。
 
-結果シートには本文・人名・キーは入らない（件数・OK/NG・エラー文のみ）。一時ファイルと画面構造の出力は自動で削除される。
+結果シートには本文・人名・キーは入らない（件数・OK/NG・エラー文のみ）。ただし、失敗したときのエラー文に組織名などが含まれることがあるので、貼る前に目を通す。一時ファイルと画面構造の出力は自動で削除される。
 
 - 従来どおり `C:\kev`・`C:\az` に置いた場合もそのまま動く（`kimeru` の隣 → `C:\kev` / `C:\az` の順に探す）
-- 特定の確認だけやり直す: PowerShell で `.\run-company-check.cmd T9`（複数指定可: `T5 T9`）
+- 特定の確認だけやり直す: PowerShell で `.\run-company-check.cmd T9`（複数指定可: `T9 T15 T16`）
 - 準備だけ: `.\prepare-company.cmd` ／ 確認だけ: `.\run-company-check.cmd monday`
+- Kev が遅い（1 件が数分）ときは、Kev の窓に `precision: fp32` と出ているか確認する。bf16 に対応しない CPU では、起動時に自動で fp32（メモリ約 14GB）になる
 - 自動運転（`setup-company.cmd install`）は、Teams を 5 分ごとに切り替える問題を直すまで使わない
 
 ### ローカル判断モデル（kev）を使う場合

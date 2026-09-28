@@ -116,7 +116,8 @@
           "tags": "kimeru;incident"
         }
       ],
-      "advice": "顧客影響大。関係者への一次連絡を PM から出すこと"
+      "advice": "顧客影響大。関係者への一次連絡を PM から出すこと",
+      "notify": true
     },
     "bug_p1": {
       "kind": "decide",
@@ -129,7 +130,8 @@
           "description": "{event.description}",
           "tags": "kimeru;alert"
         }
-      ]
+      ],
+      "notify": true
     },
     "task_internal": {
       "kind": "decide",
@@ -214,7 +216,8 @@
           "due": "{step.due}",
           "tags": "kimeru;incident;plan"
         }
-      ]
+      ],
+      "notify": true
     },
     "future_risk": {
       "kind": "judge",
@@ -301,7 +304,8 @@
           "text": "[予防・24時間以内] {event.rule}: {event.description}"
         }
       ],
-      "advice": "24時間以内に起きる見込みの問題: {event.rule}。今日中に担当を決めること"
+      "advice": "24時間以内に起きる見込みの問題: {event.rule}。今日中に担当を決めること",
+      "notify": true
     },
     "prevent_week": {
       "kind": "decide",

@@ -103,6 +103,41 @@ def _key(rec):
     return f"{rec.get('graph')}:{rec.get('event_id')}:{rec.get('node')}"
 
 
+def format_notice(rec):
+    lines = [f"[kimeru 通知] 自動で決定しました（{rec.get('graph')}）"]
+    if rec.get("summary"):
+        lines.append(f"元: {str(rec['summary'])[:200]}")
+    if rec.get("advice"):
+        lines.append(f"内容: {rec['advice']}")
+    ran = [e["action"].get("type", "?") for e in rec.get("executed", [])]
+    if ran:
+        lines.append("記録した行動: " + ", ".join(ran) + "（現在は記録のみ）")
+    lines.append("返信は不要です")
+    return "\n".join(lines)
+
+
+def notify_notices(out, bridge, send=False):
+    """Post automatic decisions the PM should know about (notices.jsonl), each once."""
+    out = Path(out)
+    ap = Approvals(out)
+    done = set(ap.data.setdefault("notices", []))
+    q = out / "notices.jsonl"
+    rows = [json.loads(l) for l in q.read_text(encoding="utf-8").splitlines() if l.strip()] if q.exists() else []
+    posted = []
+    for rec in rows:
+        key = _key(rec)
+        if key in done:
+            continue
+        r = bridge.post(format_notice(rec), send) or {}
+        if send and (r.get("typed") is False or r.get("sent") is False):
+            raise RuntimeError(f"notice {key} was not posted as planned: {r}")
+        if send:
+            ap.data["notices"].append(key); done.add(key)
+            ap.save()
+        posted.append(key)
+    return posted
+
+
 def notify(out, bridge, send=False):
     """Post every not-yet-posted queue item to the self chat."""
     out = Path(out)
@@ -165,6 +200,9 @@ def _redraft(it, instruction, writer):
 def collect(out, bridge, writer=None):
     """Read replies from the self chat and apply them. Returns applied changes."""
     ap = Approvals(out)
+    # nothing is waiting for an answer: do not touch Teams at all (reading switches it to the self chat)
+    if not any(it["posted"] and it["status"] in ("pending", "held") for it in ap.data["items"].values()):
+        return []
     writer = writer if writer is not None else writer_mod.get_writer()
     changes = []
     for line in fresh_replies(bridge.read()):

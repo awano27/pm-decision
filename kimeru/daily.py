@@ -63,6 +63,7 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
         _step(out, "pull_alerts", lambda: pull.pull_alerts(subscription, inbox, out), r)
     _step(out, "judge", lambda: process_inbox(inbox, out, graphs, backend, playbooks, process), r)
     _step(out, "notify", lambda: notify.notify(out, bridge, send=send), r)
+    _step(out, "notices", lambda: len(notify.notify_notices(out, bridge, send=send)), r)
     _step(out, "approvals", lambda: [f"#{c['id']}:{c['status']}" for c in notify.collect(out, bridge)], r)
 
     st_path = out / "daily_state.json"

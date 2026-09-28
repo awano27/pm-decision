@@ -85,6 +85,8 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
             _append(out / "decisions.jsonl", res)
             if res["needs_human"]:
                 _append(out / "queue.jsonl", {**res, "actions": held} if held and res["outcome"] == "decide" else res)
+            elif res.get("notify"):   # decided automatically, but the PM should know (paging, P1, today's decision)
+                _append(out / "notices.jsonl", res)
             if dedup:
                 with (out / "processed.txt").open("a", encoding="utf-8") as f:
                     f.write(key + "\n")

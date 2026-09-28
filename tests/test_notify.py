@@ -53,6 +53,21 @@ class TestNotify(unittest.TestCase):
                 notify.notify(d, Mismatch(), send=True)
             self.assertEqual(notify.notify(d, FakeBridge(), send=True), [1])   # retried on the next cycle
 
+    def test_collect_leaves_teams_alone_when_nothing_waits(self):
+        class Counting(FakeBridge):
+            reads = 0
+
+            def read(self):
+                Counting.reads += 1
+                return super().read()
+        with tempfile.TemporaryDirectory() as d:
+            b = Counting(["OK 1"])
+            self.assertEqual(notify.collect(d, b), [])            # no approvals.json at all
+            write_queue(d, REC)
+            notify.notify(d, b, send=False)                        # pasted only: not posted, nothing to wait for
+            self.assertEqual(notify.collect(d, b), [])
+            self.assertEqual(Counting.reads, 0)
+
     def test_send_posts_once_and_dedups_queue(self):
         with tempfile.TemporaryDirectory() as d:
             write_queue(d, REC, REC)

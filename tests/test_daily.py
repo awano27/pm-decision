@@ -80,6 +80,27 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class TestNotices(unittest.TestCase):
+    def test_confident_severe_decision_reaches_the_pm_once(self):
+        alert = {"schemaId": "azureMonitorCommonAlertSchema", "data": {"essentials": {
+            "alertId": "a1", "alertRule": "checkout-api 5xx", "severity": "Sev1", "monitorCondition": "Fired",
+            "description": "customers cannot pay; checkout returns 500 for all users"}, "alertContext": {}}}
+        with tempfile.TemporaryDirectory() as d:
+            out, inbox, t = Path(d) / "out", Path(d) / "inbox", FakeTeams()
+            inbox.mkdir()
+            (inbox / "a.json").write_text(json.dumps(alert), encoding="utf-8")
+            r = daily.cycle(out, inbox, GRAPHS, StubBackend(), PBS, process, bridge=t, send=True,
+                            now=datetime(2026, 9, 28, 7, 0))
+            self.assertEqual(r["notices"], 1)
+            notice = [p for p, _ in t.posts if p.startswith("[kimeru 通知]")]
+            self.assertEqual(len(notice), 1)
+            self.assertIn("customers cannot pay", notice[0])
+            self.assertNotIn("OK ", notice[0])                       # no number, no reply expected
+            r = daily.cycle(out, inbox, GRAPHS, StubBackend(), PBS, process, bridge=t, send=True,
+                            now=datetime(2026, 9, 28, 7, 5))
+            self.assertEqual(r["notices"], 0)                         # posted once
+
+
 class TestTextMinutes(unittest.TestCase):
     def test_txt_in_inbox_is_minutes(self):
         with tempfile.TemporaryDirectory() as d:

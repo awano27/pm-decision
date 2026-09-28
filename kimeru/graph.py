@@ -240,7 +240,8 @@ def run(g, event, backend, state=None, playbooks=None):
             out = {"outcome": n["kind"], "node": nid,
                    "advice": render(n.get("advice"), ctx),
                    "actions": acts,
-                   "needs_human": n["kind"] == "advise" and n.get("queue", False)}
+                   "needs_human": n["kind"] == "advise" and n.get("queue", False),
+                   "notify": n["kind"] == "decide" and bool(n.get("notify"))}
             if plan:
                 out["plan"] = plan
             return {"graph": g["name"], "event_id": event.get("id"), "event_kind": event.get("kind"),

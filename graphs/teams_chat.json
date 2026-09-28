@@ -111,7 +111,8 @@
           "text": "受領しました。本日中に判断して返信します。"
         }
       ],
-      "advice": "本日中に判断が必要: {event.author}「{event.text}」"
+      "advice": "本日中に判断が必要: {event.author}「{event.text}」",
+      "notify": true
     },
     "decision_later": {
       "kind": "decide",
@@ -150,7 +151,8 @@
           "tags": "kimeru;from-teams"
         }
       ],
-      "advice": "障害報告をBug化した。監視アラートと突き合わせること"
+      "advice": "障害報告をBug化した。監視アラートと突き合わせること",
+      "notify": true
     },
     "log_fyi": {
       "kind": "decide",
@@ -213,7 +215,8 @@
           "tags": "kimeru;plan;{plan.playbook}"
         }
       ],
-      "advice": "{plan.title}: {plan.summary}"
+      "advice": "{plan.title}: {plan.summary}",
+      "notify": true
     }
   }
 }

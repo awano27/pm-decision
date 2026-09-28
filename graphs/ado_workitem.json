@@ -98,7 +98,8 @@
           }
         }
       ],
-      "advice": "P1 を今スプリントに入れるか判断: #{event.id} {event.title}"
+      "advice": "P1 を今スプリントに入れるか判断: #{event.id} {event.title}",
+      "notify": true
     },
     "set_p2": {
       "kind": "decide",
@@ -178,7 +179,8 @@
           }
         }
       ],
-      "advice": "顧客影響の大きいチケットを P1 にしました（規則による判定）。今スプリントで対応するか判断: #{event.id} {event.title}"
+      "advice": "顧客影響の大きいチケットを P1 にしました（規則による判定）。今スプリントで対応するか判断: #{event.id} {event.title}",
+      "notify": true
     },
     "has_ac": {
       "kind": "match",

@@ -144,10 +144,11 @@ function Test-SelectedUp($el) {
   $false
 }
 function Test-SelfOpen($w) {
+  # either signal is enough: the window title "チャット | <name> (あなた) | Microsoft Teams", or the
+  # 48:notes entry reporting IsSelected (some list layouts report no selection at all)
   if (-not $w) { return $false }
-  $notes = Get-NotesItems $w
-  if ($notes) { return [bool](@($notes | Where-Object { Test-SelectedUp $_ }).Count) }
-  Test-SelfTitle $w
+  if (Test-SelfTitle $w) { return $true }
+  [bool](@(Get-NotesItems $w | Where-Object { Test-SelectedUp $_ }).Count)
 }
 function Get-SelectedKinds($w) {
   # which kinds of chat are selected right now (no names): tells "opened another chat" from "nothing selected"

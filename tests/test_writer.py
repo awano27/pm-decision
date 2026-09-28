@@ -116,6 +116,34 @@ class TestWriter(unittest.TestCase):
             self.assertNotIn("teams.post", [e["action"]["type"] for e in res["executed"]])
             self.assertIn("oncall.page", [e["action"]["type"] for e in res["executed"]])       # paging is not held
 
+    def test_m365_paste_in_request_is_posted_after_the_approval(self):
+        with tempfile.TemporaryDirectory() as d:
+            out, t = Path(d), FakeTeams()
+            [res] = process(MSG, GRAPHS, StubBackend(), out, PBS, writer=writer.get_writer("m365"))
+            self.assertTrue(res["needs_human"])
+            self.assertIn("来月のリリース日をずらすか", res["copilot_request"])
+            self.assertEqual(res["executed"], [])                              # the reply waits for the PM
+            self.assertEqual(notify.notify(out, t, send=True), [1])
+            self.assertTrue(t.posts[0].startswith("[kimeru #1]"))
+            self.assertIn("定型文: 受領しました", t.posts[0])
+            self.assertTrue(t.posts[1].startswith("[kimeru #1 Copilot 用]"))     # its own message to copy
+            self.assertIn("メールや会議", t.posts[1])
+            self.assertEqual(notify.notify(out, t, send=True), [])              # both posted once
+            self.assertEqual(len(t.posts), 2)
+            t.timeline.append("R:OK 1")
+            [ch] = notify.collect(out, t)
+            self.assertEqual(ch["status"], "approved")
+
+    def test_m365_auto_falls_back_to_the_paste_in_request(self):
+        w = writer.get_writer("m365-auto")
+        w.script = str(Path(tempfile.gettempdir()) / "no-such-teams-copilot.ps1")   # Copilot unreachable
+        with tempfile.TemporaryDirectory() as d:
+            [res] = process(MSG, GRAPHS, StubBackend(), Path(d), PBS, writer=w)
+            self.assertIn("writer_error", res)
+            self.assertIn("copilot_request", res)
+            self.assertTrue(res["needs_human"])
+            self.assertFalse(any(a.get("drafted_by") for a in res["actions"]))
+
     def test_parse_and_selection(self):
         self.assertEqual(writer._parse('前置き {"a1": "はい"} 後ろ'), {"a1": "はい"})
         self.assertEqual(writer._parse('```json\n{"a1": "x"}\n```\n補足 {波括弧}'), {"a1": "x"})

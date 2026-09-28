@@ -1,0 +1,164 @@
+﻿<#
+.SYNOPSIS
+  Ask Microsoft 365 Copilot inside Teams (the "Copilot" chat) and read its answer, via built-in
+  Windows UI Automation. No downloads, no admin rights; the prompt stays in your M365 tenant.
+
+  probe                  -> JSON with structure hints only (no chat text): is there a Copilot entry
+                            in the chat list, what the window title looks like once it is open,
+                            whether a compose box and a Send/Stop button are found
+  ask -PromptFile <f>    -> open the Copilot chat, paste the prompt (UTF-8 file), send it, wait until
+                            the answer stops growing, print JSON {ok, text}
+
+  Safety: text is pasted and sent only while the window title says Copilot; the compose box must hold
+  exactly the prompt before sending (the same exact-text check as the self chat).
+#>
+param(
+  [Parameter(Mandatory = $true)][ValidateSet('probe', 'ask')][string]$Action,
+  [string]$PromptFile = '',
+  [int]$TimeoutSec = 150
+)
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms
+$A = [System.Windows.Automation.AutomationElement]
+$CT = [System.Windows.Automation.ControlType]
+Add-Type -Namespace KC -Name W -MemberDefinition @'
+[DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
+[DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h);
+[DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr h, int n);
+[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+[DllImport("user32.dll")] public static extern void mouse_event(int f, int x, int y, int d, int e);
+'@
+$COPILOT = '^(Microsoft 365 )?Copilot(\s|$|,|（|\()'
+
+function Out-Json($o) { $o | ConvertTo-Json -Compress -Depth 5 }
+function Fail($msg) { Out-Json @{ ok = $false; error = $msg }; exit 2 }
+function Get-TeamsWindow {
+  $pids = @(Get-Process -Name ms-teams -ErrorAction SilentlyContinue | ForEach-Object Id)
+  if (-not $pids) { return $null }
+  $A::RootElement.FindAll('Children', [System.Windows.Automation.Condition]::TrueCondition) |
+    Where-Object { $pids -contains $_.Current.ProcessId -and $_.Current.Name } | Select-Object -First 1
+}
+function Find-All($root, $type) {
+  $root.FindAll('Descendants', (New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, $type)))
+}
+function Assert-Foreground($w) {
+  $h = [IntPtr]$w.Current.NativeWindowHandle
+  if ([KC.W]::GetForegroundWindow() -ne $h) { [void][KC.W]::ShowWindow($h, 9); [void][KC.W]::SetForegroundWindow($h); Start-Sleep -Milliseconds 400 }
+  if ([KC.W]::GetForegroundWindow() -ne $h) { Fail 'Teams is not the foreground window; nothing sent' }
+}
+function Click($el) {
+  $r = $el.Current.BoundingRectangle
+  if ($r.Width -le 0) { return $false }
+  [void][KC.W]::SetCursorPos([int]($r.X + [math]::Min(60, $r.Width / 2)), [int]($r.Y + $r.Height / 2))
+  [KC.W]::mouse_event(2, 0, 0, 0, 0); [KC.W]::mouse_event(4, 0, 0, 0, 0); $true
+}
+function Test-CopilotOpen($w) { $w -and ($w.Current.Name -match '(^|\| )(Microsoft 365 )?Copilot( \||$)') }
+function Get-Entries($w) {
+  # chat-list entries (tree or list layouts) and app-bar buttons whose name starts with Copilot
+  @(Find-All $w $CT::TreeItem) + @(Find-All $w $CT::ListItem) + @(Find-All $w $CT::Button) + @(Find-All $w $CT::TabItem) |
+    Where-Object { $_.Current.Name -match $COPILOT }
+}
+function Get-Box($w) {
+  $b = Find-All $w $CT::Edit | Where-Object { $_.Current.AutomationId -like 'new-message-*' -or $_.Current.Name -match 'Copilot|メッセージ|message' } | Select-Object -First 1
+  if (-not $b) { Fail 'compose box not found in the Copilot chat' }
+  $b
+}
+function Get-BoxText($b) {
+  try { return $b.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern).DocumentRange.GetText(8000) }
+  catch { try { return $b.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value } catch { return '' } }
+}
+function Squash($s) { ([string]$s) -replace '[\s ​﻿]', '' }
+function Test-Busy($w) {
+  # while Copilot is writing there is a Stop button
+  [bool](Find-All $w $CT::Button | Where-Object { $_.Current.Name -match '^(停止|Stop|生成を停止|Stop generating|応答を停止)' -and $_.Current.IsEnabled } | Select-Object -First 1)
+}
+function Get-Texts($w) {
+  # every named Text / Group / Document node under the window, in screen order, de-duplicated
+  $seen = @{}; $out = New-Object System.Collections.Generic.List[string]
+  foreach ($t in @($CT::Text, $CT::Group, $CT::Document, $CT::ListItem)) {
+    foreach ($e in (Find-All $w $t)) {
+      $n = [string]$e.Current.Name
+      if ($n.Length -ge 2 -and -not $seen.ContainsKey($n)) { $seen[$n] = 1; $out.Add($n) }
+    }
+  }
+  $out
+}
+
+function Open-Copilot($w) {
+  if (Test-CopilotOpen $w) { return $w }
+  foreach ($e in (Get-Entries $w)) {
+    foreach ($how in 'select', 'invoke', 'click') {
+      try {
+        switch ($how) {
+          'select' { $e.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() }
+          'invoke' { $e.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
+          'click' { Assert-Foreground $w; if (-not (Click $e)) { throw 'no rectangle' } }
+        }
+      } catch { continue }
+      for ($i = 0; $i -lt 12; $i++) { Start-Sleep -Milliseconds 250; $w = Get-TeamsWindow; if (Test-CopilotOpen $w) { return $w } }
+    }
+  }
+  $null
+}
+
+$w = Get-TeamsWindow
+if (-not $w) { Fail 'Teams window not found' }
+
+if ($Action -eq 'probe') {
+  $entries = @(Get-Entries $w)
+  $kinds = @($entries | ForEach-Object { $_.Current.ControlType.ProgrammaticName -replace '^ControlType\.', '' }) -join ','
+  $opened = Open-Copilot $w
+  $shape = if ($opened) { (($opened.Current.Name -split ' \| ') | ForEach-Object { if ($_ -match '^(Microsoft 365 )?Copilot$|^Microsoft Teams$|^チャット$|^Chat$') { $_ } else { '<text>' } }) -join ' | ' } else { '' }
+  $box = if ($opened) { Find-All $opened $CT::Edit | Where-Object { $_.Current.AutomationId -like 'new-message-*' -or $_.Current.Name -match 'Copilot|メッセージ|message' } | Select-Object -First 1 } else { $null }
+  $send = if ($opened) { [bool](Find-All $opened $CT::Button | Where-Object { $_.Current.Name -match '^(送信|Send)' } | Select-Object -First 1) } else { $false }
+  Out-Json ([ordered]@{ ok = $true; entries = $entries.Count; entryTypes = $kinds; opened = [bool]$opened; title = $shape
+                        composeBox = [bool]$box; boxId = $(if ($box) { ($box.Current.AutomationId -replace '[0-9a-f]{8,}', '<id>') } else { '' })
+                        sendButton = $send })
+  exit 0
+}
+
+# ---- ask ----
+if (-not (Test-Path $PromptFile)) { Fail 'prompt file not found' }
+$prompt = (Get-Content -Raw -Encoding UTF8 $PromptFile).Trim()
+$w = Open-Copilot $w
+if (-not $w) { Fail 'Copilot chat not found in Teams (no chat-list entry or app button named Copilot)' }
+$box = Get-Box $w
+if ((Squash (Get-BoxText $box)).Length -gt 40) { Fail 'the Copilot compose box is not empty (a draft of yours?); nothing sent' }
+$before = @(Get-Texts $w)
+$saved = $null
+try { $saved = [System.Windows.Forms.Clipboard]::GetText() } catch {}
+try {
+  [System.Windows.Forms.Clipboard]::SetText($prompt)
+  Assert-Foreground $w
+  $box = Get-Box $w; $box.SetFocus(); Start-Sleep -Milliseconds 200; [void](Click $box); Start-Sleep -Milliseconds 200
+  Assert-Foreground $w
+  [System.Windows.Forms.SendKeys]::SendWait('^v'); Start-Sleep -Milliseconds 500
+} finally {
+  if ($saved) { [System.Windows.Forms.Clipboard]::SetText($saved) } else { [System.Windows.Forms.Clipboard]::Clear() }
+}
+$box = Get-Box $w
+if ((Squash (Get-BoxText $box)) -ne (Squash $prompt)) {
+  Assert-Foreground $w; $box.SetFocus(); [System.Windows.Forms.SendKeys]::SendWait('^a'); [System.Windows.Forms.SendKeys]::SendWait('{DEL}')
+  Fail 'the Copilot compose box did not hold exactly the prompt; removed it, nothing sent'
+}
+if (-not (Test-CopilotOpen (Get-TeamsWindow))) { Fail 'window changed before send; aborted' }
+$btn = Find-All $w $CT::Button | Where-Object { $_.Current.Name -match '^(送信|Send)(\s*\(|$)' -and $_.Current.IsEnabled } | Select-Object -First 1
+if ($btn) { try { $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch { $btn = $null } }
+if (-not $btn) { Assert-Foreground $w; $box.SetFocus(); [System.Windows.Forms.SendKeys]::SendWait('{ENTER}') }
+
+# wait for the answer: the longest new text that is not our prompt, unchanged for 3 polls while no Stop button
+$deadline = (Get-Date).AddSeconds($TimeoutSec)
+$last = ''; $stable = 0
+$known = @{}; foreach ($t in $before) { $known[$t] = 1 }
+$p = Squash $prompt
+while ((Get-Date) -lt $deadline) {
+  Start-Sleep -Seconds 2
+  $w = Get-TeamsWindow
+  $new = @(Get-Texts $w | Where-Object { -not $known.ContainsKey($_) -and (Squash $_) -ne $p -and -not $p.Contains((Squash $_)) })
+  $cand = ($new | Sort-Object Length -Descending | Select-Object -First 1)
+  if ($cand -and $cand -eq $last -and -not (Test-Busy $w)) { $stable++ } else { $stable = 0 }
+  $last = $cand
+  if ($stable -ge 2 -and $last.Length -ge 10) { Out-Json @{ ok = $true; text = $last }; exit 0 }
+}
+Fail ("no answer from Copilot within $TimeoutSec s" + $(if ($last) { ' (an answer was still changing)' } else { '' }))

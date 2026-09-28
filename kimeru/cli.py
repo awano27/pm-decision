@@ -74,7 +74,7 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
             if writer_mod.apply(res, ev, writer):
                 res["material_event"] = {k: ev.get(k) for k in writer_mod.EVENT_FIELDS if ev.get(k)}
                 # LLM text goes out only after the PM approves its exact wording
-                held = [a for a in res["actions"] if a.get("drafted_by")]
+                held = [a for a in res["actions"] if a.get("drafted_by") or a.get("held_for")]
             # decide runs now; advise actions are only proposed until approved (see notify.collect)
             now = [a for a in res["actions"] if a not in held] if res["outcome"] == "decide" else []
             res["executed"] = [actions.execute(a, dry_run=True) for a in now]

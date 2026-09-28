@@ -21,7 +21,7 @@ $Results = [ordered]@{}   # not $R: PowerShell names are case-insensitive ($r is
 $tmp = Join-Path $env:TEMP ("kimeru-check-" + (Get-Random -Minimum 10000 -Maximum 99999))
 New-Item -ItemType Directory -Force $tmp | Out-Null
 
-if ($Only -contains 'monday') { $Only = @('T9', 'T10', 'T12', 'T13', 'T14', 'T15', 'T16') }   # short Monday session (T3/T6/T8 run anyway); T2 dropped: minutes come as .txt (docs/minutes-format.md)
+if ($Only -contains 'monday') { $Only = @('T9', 'T10', 'T12', 'T13', 'T14', 'T15', 'T16', 'T17') }   # short Monday session (T3/T6/T8 run anyway); T2 dropped: minutes come as .txt (docs/minutes-format.md)
 function Want($t) { -not $Only -or $Only -contains $t }
 function Fails($s) {
   # prefer our one-line "... failed: ..." message, else the last traceback line
@@ -361,6 +361,21 @@ if (Want 'T16') {
     $seen = YesNo "   画面右下に「kimeru: テスト通知」が出ましたか（集中モード中は通知センターに入ります）"
     Rec 'T16' $(if ($seen) { 'OK 通知が表示された' } else { 'NG 通知が見えない（設定 > システム > 通知 で PowerShell / 集中モードを確認）' })
   }
+}
+
+# ---- T17: Microsoft 365 Copilot in Teams (m365-auto writer) ----
+if ($uia -and (Want 'T17')) {
+  Say "T17 Teams の Copilot チャット（画面構造の調査。会社のデータは送りません）"
+  $pr = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'teams-copilot.ps1') -Action probe 2>&1 | Out-String
+  $pj = try { $pr.Trim().TrimStart([char]0xFEFF) | ConvertFrom-Json } catch { $null }
+  if (-not $pj -or -not $pj.ok) { Rec 'T17-probe' ('NG ' + (Safe-Error $pr)) }
+  else { Rec 'T17-probe' ("entries=$($pj.entries) [$($pj.entryTypes)] opened=$($pj.opened) title=$($pj.title) box=$($pj.composeBox) id=$($pj.boxId) send=$($pj.sendButton)") }
+  if ($py -and $pj -and $pj.opened -and (YesNo "   架空のチャット 1 件の文面を Teams の Copilot に書かせますか（Copilot の履歴に残ります）")) {
+    $d = Py @('eval\drafts.py', '--backend', 'stub', '--writer', 'm365-auto', '--n', '1', '--kinds', 'teams.chat')
+    $sum = ($d -split "`n") | Where-Object { $_ -match '^events=' } | Select-Object -First 1
+    $err = ($d -split "`n") | Where-Object { $_ -match 'ERROR' } | Select-Object -First 1
+    Rec 'T17' $(if ($sum -and $sum -match 'drafted=[1-9]') { 'OK ' + (Short $sum) } else { 'NG ' + $(if ($err) { Short $err } else { Fails $d }) })
+  } elseif (Want 'T17') { Rec 'T17' 'SKIP' }
 }
 
 # ---- Result ----

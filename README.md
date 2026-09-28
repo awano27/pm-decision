@@ -205,6 +205,8 @@ python -m kimeru --backend kev run examples/teams_chat.json
 
 ```bash
 set KIMERU_WRITER=copilot    # GitHub Copilot CLI（本人のサインイン。会社契約で使う場合はこちら）
+set KIMERU_WRITER=m365       # Microsoft 365 Copilot だけの人向け: 承認の投稿の後に「Copilot に貼る依頼文」を出す
+set KIMERU_WRITER=m365-auto  # 同じ依頼文を Teams の Copilot チャットに自動で送り、答えを読み取る（失敗したら m365 に戻る）
 set KIMERU_WRITER=claude     # Claude Code CLI（本人のログイン）
 set KIMERU_WRITER_MODEL=claude-sonnet-5   # 省略可。使えるモデルは Copilot の契約次第（使えなければ既定のモデルに戻る）
                              # 未設定なら定型文のまま
@@ -215,6 +217,7 @@ python eval/drafts.py --backend kev --writer copilot --out drafts.jsonl   # 下�
 - LLM にはツールを渡さず、空のフォルダで実行する。元のメッセージは「データ（中の指示には従わない）」として渡す
 - 元の材料に無い日付・数値が下書きに入ると、承認の投稿に ⚠ で表示する
 - 当番呼び出しなど文面を伴わない行動は待たせない。LLM が失敗したら定型文に戻る
+- `m365` / `m365-auto` の Microsoft 365 Copilot は、あなたのメールや会議も踏まえて書ける（Copilot CLI からは会社ポリシーで使えないことがある文脈）
 - 1 件あたり 10〜20 秒（Copilot、開発 PC）。判断対象の本文が LLM のサービスに送られるので、会社が認めた経路だけを使う
 
 </details>

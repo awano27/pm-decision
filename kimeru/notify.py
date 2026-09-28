@@ -71,6 +71,11 @@ def format_post(n, rec):
         who = src.get("author")
         lines.append("元: " + (f"{who}: " if who else "") + str(what)[:200])
     drafts = [a for a in rec.get("actions", []) if a.get("drafted_by")]
+    waiting = [a for a in rec.get("actions", []) if a.get("held_for")]
+    for a in waiting[:1]:
+        lines.append("定型文: " + str(a.get(writer_mod.FIELD[a["type"]]) or ""))
+    if rec.get("copilot_request"):
+        lines.append("↓ 次の投稿を Microsoft 365 Copilot に貼ると下書きができます")
     for a in drafts:
         label = writer_mod.LABEL.get(a["type"], a["type"]) + (f"「{a['title']}」" if a.get("title") else "")
         lines.append(f"{label}の下書き（{a['drafted_by']}）:\n{a[writer_mod.FIELD[a['type']]]}")
@@ -180,15 +185,24 @@ def notify(out, bridge, send=False):
             ap.add(_key(rec), rec)
     posted = []
     for n, it in ap.data["items"].items():
-        if it["posted"]:
+        req = it["record"].get("copilot_request")
+        if it["posted"] and (not req or it.get("request_posted")):
             continue
-        r = bridge.post(format_post(n, it["record"]), send) or {}
-        if send and (r.get("typed") is False or r.get("sent") is False):
-            raise RuntimeError(f"#{n} was not posted as planned: {r}")   # stays unposted; retried next cycle
-        if send:
-            it["posted"] = True
-            ap.save()  # a failure on a later item must not forget what was already sent
-        posted.append(int(n))
+        if not it["posted"]:
+            r = bridge.post(format_post(n, it["record"]), send) or {}
+            if send and (r.get("typed") is False or r.get("sent") is False):
+                raise RuntimeError(f"#{n} was not posted as planned: {r}")   # stays unposted; retried next cycle
+            if send:
+                it["posted"] = True
+                ap.save()  # a failure on a later item must not forget what was already sent
+            posted.append(int(n))
+        if req and not it.get("request_posted"):   # its own message: one long-press copies just this
+            r2 = bridge.post(f"[kimeru #{n} Copilot 用]" + chr(10) + req, send) or {}
+            if send and (r2.get("typed") is False or r2.get("sent") is False):
+                raise RuntimeError(f"#{n} Copilot request was not posted as planned: {r2}")
+            if send:
+                it["request_posted"] = True
+                ap.save()
     ap.save()
     return posted
 
@@ -225,6 +239,7 @@ def _redraft(it, instruction, writer):
     if not writer_mod.apply(rec, rec["material_event"], writer, instruction):
         return None
     it["posted"], it["status"] = False, "pending"   # next notify posts the new draft under the same number
+    it["request_posted"] = False
     return {"status": "redrafted", "instruction": instruction}
 
 

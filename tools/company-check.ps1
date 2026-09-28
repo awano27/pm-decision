@@ -44,7 +44,8 @@ function Safe-Diag($raw) {
     $j = $raw.Trim().TrimStart([char]0xFEFF) | ConvertFrom-Json
     if ($j.error) { return 'error=' + (Short $j.error) }
     $marks = @($j.parenMarkers.PSObject.Properties).Count
-    return "selfItemFound=$($j.selfItemFound) learnedName=$($j.learnedName) treeItems=$($j.treeItems) listItems=$($j.listItems) 括弧表記の種類=$marks"
+    $shape = ([string]$j.titleShape) -replace '\((?!(あなた|自分|You|Me)\))[^)]*\)', '(x)'
+    return "selfItemFound=$($j.selfItemFound) learnedName=$($j.learnedName) treeItems=$($j.treeItems) listItems=$($j.listItems) 括弧表記の種類=$marks title=$shape"
   } catch { return "診断出力を解析できず（$(([string]$raw).Length) 文字、内容は記録しない）" }
 }
 function Rec($k, $v) { $Results[$k] = $v; Write-Host ("   {0}: {1}" -f $k, $v) -ForegroundColor Yellow }
@@ -262,6 +263,9 @@ else {
     if ($org) {
       $proj = if ($org -match '/.+/.+|^[^/]+/[^/]+$') { '' } else { Read-Host "   ADO のプロジェクト名" }
       $a = Py @('-m', 'kimeru', '--out', $out, 'pull', 'ado', '--org', $org, '--project', $proj, '--inbox', $inbox)
+      if ($a -match 'with --login' -and (YesNo "   ADO の組織は別のテナントにあります。そのテナントで az login しますか（ブラウザが開きます）")) {
+        $a = Py @('-m', 'kimeru', '--out', $out, 'pull', 'ado', '--login', '--org', $org, '--project', $proj, '--inbox', $inbox)
+      }
       $res += "ado=" + $(if ($a -match '(\d+) new') { "$($Matches[1]) 件" } else { Fails $a })
     }
     $sub = (& $az account show --query id -o tsv 2>$null)
@@ -327,7 +331,9 @@ if ($py -and (Want 'T14')) {
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $k = Py @('-m', 'kimeru', '--backend', 'kev', '--out', (Join-Path $tmp 'kev'), 'run', 'examples\teams_chat.json')
     $sw.Stop()
-    Rec 'T14' $(if ($k -match 'plan:|path:') { ("OK {0}s " -f [math]::Round($sw.Elapsed.TotalSeconds)) + (Short (($k -split "`n") | Where-Object { $_ -match 'path:' } | Select-Object -First 1)) } else { 'NG ' + (Fails $k) })
+    $dtype = try { ((Invoke-WebRequest 'http://127.0.0.1:8009/v1/models' -UseBasicParsing -TimeoutSec 5).Content | ConvertFrom-Json).models[0].dtype } catch { '?' }
+    $cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name -replace '\s+', ' '
+    Rec 'T14' $(if ($k -match 'plan:|path:') { ("OK {0}s dtype={1} CPU={2} " -f [math]::Round($sw.Elapsed.TotalSeconds), $dtype, $cpu) + (Short (($k -split "`n") | Where-Object { $_ -match 'path:' } | Select-Object -First 1)) } else { 'NG ' + (Fails $k) })
   }
 }
 

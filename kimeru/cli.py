@@ -159,6 +159,7 @@ def main(argv=None):
     p_p.add_argument("--org")
     p_p.add_argument("--project")
     p_p.add_argument("--subscription")
+    p_p.add_argument("--login", action="store_true", help="ado: first `az login` into the organization's tenant")
     a = ap.parse_args(argv)
     out = Path(a.out)
 
@@ -175,6 +176,9 @@ def main(argv=None):
             if a.source == "teams":
                 n = pull.pull_teams(a.inbox, out, include_existing=a.include_existing)
             elif a.source == "ado":
+                if a.login and pull.ado_login(a.org) != 0:
+                    print("pull ado failed: az login for the organization's tenant did not finish", file=sys.stderr)
+                    return 1
                 n = pull.pull_ado(a.org, a.project, a.inbox, out)
             else:
                 n = pull.pull_alerts(a.subscription, a.inbox, out)

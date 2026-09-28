@@ -147,9 +147,20 @@ function Mask($s) {
   if ($o.Length -gt 60) { $o.Substring(0, 60) } else { $o }
 }
 
+function Show-ChatApp($w) {
+  # Teams may be on Activity / Calendar / Teams: then there is no chat list to search
+  $btn = @(Find-All $w $CT::Button) + @(Find-All $w $CT::TabItem) + @(Find-All $w $CT::ListItem) |
+    Where-Object { $_.Current.Name -match '^(チャット|Chat)(\s|$|\(|（|,)' } | Select-Object -First 1
+  if (-not $btn) { return $false }
+  try { $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); return $true } catch {}
+  try { $btn.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select(); return $true } catch {}
+  $false
+}
+
 function Open-SelfChat($w) {
   if (Test-SelfOpen $w) { return $w }
   $cands = @(Find-SelfItems $w)
+  if (-not $cands -and (Show-ChatApp $w)) { Start-Sleep -Seconds 2; $w = Get-TeamsWindow; $cands = @(Find-SelfItems $w) }
   for ($i = 0; -not $cands -and $i -lt 10; $i++) {   # Teams just started: the chat list fills in a few seconds
     Start-Sleep -Seconds 1
     $w = Get-TeamsWindow
@@ -158,10 +169,14 @@ function Open-SelfChat($w) {
   if (-not $cands) { Fail 'self chat not found in chat list (open it once by hand and run -Action learn)' }
   $tried = New-Object System.Collections.Generic.List[string]
   foreach ($item in $cands) {   # a candidate may be a message rather than the chat entry: verify after each try
-    foreach ($how in 'select', 'invoke', 'click') {
+    foreach ($how in 'select', 'link', 'invoke', 'click') {
       try {
         switch ($how) {
           'select' { $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() }
+          'link' {
+            # the self chat's id is 48:notes: a Teams deep link opens it directly (language independent)
+            Start-Process 'msteams:/l/chat/48:notes/conversations'
+          }
           'invoke' { $item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
           'click' {
             # new Teams may mark the entry selected via UIA without navigating: click it like a person would

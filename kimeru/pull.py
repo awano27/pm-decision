@@ -43,15 +43,50 @@ def find_az():
     return None
 
 
-def az_token(resource):
+class TenantSignInNeeded(RuntimeError):
+    """az has no sign-in for the tenant that owns the ADO organization (fix: `pull ado --login`)."""
+
+
+def az_token(resource, tenant=None):
     az = find_az()
     if not az:
         raise RuntimeError("Azure CLI (az) not found: unpack the ZIP to C:\\az or set KIMERU_AZ, then run `az login`")
-    r = subprocess.run([az, "account", "get-access-token", "--resource", resource, "--query", "accessToken", "-o", "tsv"],
-                       capture_output=True, text=True, timeout=60)
+    r = subprocess.run([az, "account", "get-access-token", "--resource", resource, "--query", "accessToken", "-o", "tsv"]
+                       + (["--tenant", tenant] if tenant else []), capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
+        if tenant:   # the id itself stays out of messages and logs
+            raise TenantSignInNeeded("az is not signed in to the tenant of this Azure DevOps organization: "
+                                     "run the same pull again with --login")
         raise RuntimeError("az get-access-token failed (run `az login`): " + r.stderr.strip()[:200])
     return r.stdout.strip()
+
+
+def ado_tenant(org, opener=None):
+    """Tenant id that owns an ADO organization, read from the X-VSS-ResourceTenant header of an
+    anonymous request (no sign-in needed). An organization often lives in another tenant than the
+    default `az login` one; a token for the wrong tenant gets HTTP 203 + a sign-in page."""
+    opener = opener or urllib.request.urlopen
+    req = urllib.request.Request(f"https://dev.azure.com/{urllib.parse.quote(org)}/_apis/connectionData",
+                                 headers={"User-Agent": "kimeru/0.1", "X-TFS-FedAuthRedirect": "Suppress"})
+    try:
+        with opener(req, timeout=30) as r:
+            h = r.headers
+    except urllib.error.HTTPError as e:
+        h = e.headers
+    except (urllib.error.URLError, TimeoutError):
+        return None
+    t = (h.get("X-VSS-ResourceTenant") or "").split(",")[0].strip()
+    if re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", t) and set(t) != {"0", "-"}:
+        return t
+    return None
+
+
+def ado_login(org):
+    """Interactive `az login` into the organization's tenant (browser). Returns az's exit code."""
+    az, tenant = find_az(), ado_tenant(ado_names(org)[0])
+    if not az:
+        raise RuntimeError("Azure CLI (az) not found")
+    return subprocess.run([az, "login", "-o", "none"] + (["--tenant", tenant] if tenant else [])).returncode
 
 
 class PullError(RuntimeError):
@@ -63,7 +98,8 @@ def http_json(method, url, token, body=None, retries=3):
     delay = 1.0
     for attempt in range(retries):
         req = urllib.request.Request(url, data=data, method=method, headers={
-            "Authorization": "Bearer " + token, "Content-Type": "application/json", "User-Agent": "kimeru/0.1"})
+            "Authorization": "Bearer " + token, "Content-Type": "application/json", "User-Agent": "kimeru/0.1",
+            "X-TFS-FedAuthRedirect": "Suppress"})   # ADO: 401 instead of 203 + a sign-in page
         try:
             with urllib.request.urlopen(req, timeout=60) as r:
                 raw = r.read().decode("utf-8", "replace")
@@ -134,7 +170,7 @@ def pull_ado(org, project, inbox, out, http=http_json, token=None, now=None, fir
     sec = st.section(f"ado:{org}/{project}")
     now = now or datetime.now(timezone.utc)
     since = sec["since"] or _iso(now - timedelta(hours=first_lookback_h))
-    token = token or az_token(ADO_RESOURCE)
+    token = token or az_token(ADO_RESOURCE, ado_tenant(org))
     base = f"https://dev.azure.com/{urllib.parse.quote(org)}/{urllib.parse.quote(project)}/_apis/wit"
     wiql = ("SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project "
             f"AND [System.CreatedDate] >= '{since}' ORDER BY [System.CreatedDate] ASC")

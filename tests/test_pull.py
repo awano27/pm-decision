@@ -60,6 +60,38 @@ class TestAdoNames(unittest.TestCase):
         self.assertIn("organization", str(c.exception))
 
 
+class TestAdoTenant(unittest.TestCase):
+    TID = "11111111-2222-3333-4444-555555555555"
+
+    def test_tenant_from_401_header(self):
+        import io
+        import urllib.error
+
+        def opener(req, timeout):
+            self.assertEqual(req.headers.get("X-tfs-fedauthredirect"), "Suppress")
+            raise urllib.error.HTTPError(req.full_url, 401, "x", {"X-VSS-ResourceTenant": self.TID}, io.BytesIO(b""))
+        self.assertEqual(pull.ado_tenant("contoso", opener=opener), self.TID)
+
+    def test_no_or_empty_tenant(self):
+        import io
+        import urllib.error
+
+        def zeros(req, timeout):
+            raise urllib.error.HTTPError(req.full_url, 401, "x",
+                                         {"X-VSS-ResourceTenant": "00000000-0000-0000-0000-000000000000"}, io.BytesIO(b""))
+        self.assertIsNone(pull.ado_tenant("contoso", opener=zeros))
+
+    def test_token_for_the_tenant_and_a_clear_error_without_the_id(self):
+        from types import SimpleNamespace
+        with mock.patch.object(pull, "find_az", return_value="az"), \
+                mock.patch("subprocess.run", return_value=SimpleNamespace(returncode=1, stdout="", stderr="no account")) as run:
+            with self.assertRaises(pull.TenantSignInNeeded) as c:
+                pull.az_token(pull.ADO_RESOURCE, self.TID)
+        self.assertIn("--tenant", run.call_args[0][0])
+        self.assertNotIn(self.TID, str(c.exception))
+        self.assertIn("--login", str(c.exception))
+
+
 class TestAdo(unittest.TestCase):
     def test_new_items_dropped_once_and_since_advances(self):
         http = FakeHttp([("/wiql", {"workItems": [{"id": 4812}]}), ("/workitems?ids=4812", {"value": [WI]})])

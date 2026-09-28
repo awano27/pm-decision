@@ -330,6 +330,13 @@ if ($Action -eq 'post') {
   if (-not $Text.StartsWith('[kimeru')) { Fail 'refusing to post text that does not start with [kimeru' }
   $Text = $Text -replace '\\n', "`r`n"   # callers pass line breaks as literal \n
   $box = Get-Box $w
+  $prev = $null
+  for ($i = 0; $i -lt 10; $i++) {   # the previous send may still be clearing the box: wait until it stops changing
+    $cur = Get-BoxText $box
+    if ($cur -eq $prev -and -not $cur.Trim().StartsWith('[kimeru')) { break }
+    $prev = $cur; Start-Sleep -Milliseconds 300
+  }
+  $before = Squash (Get-BoxText $box)
   # a kimeru post left in the box by an earlier failed run is ours to remove; anything else is the
   # person's own draft and is never touched (the exact-text check below then refuses to send)
   if ((Get-BoxText $box).Trim().StartsWith('[kimeru') -and -not (Clear-OurBox $w $box)) {
@@ -353,7 +360,9 @@ if ($Action -eq 'post') {
     if (-not $typed) {
       # take our paste back out when the box holds only kimeru text; a person's draft stays as it was
       $cleared = (Get-BoxText $box).Trim().StartsWith('[kimeru') -and (Clear-OurBox $w $box)
-      Fail ('compose box does not hold exactly the planned text (a draft of yours in it?); not sent' +
+      $got = Squash (Get-BoxText $box); $want = Squash $Text
+      $shape = "before=$($before.Length) box=$($got.Length) planned=$($want.Length) endsWith=$($got.EndsWith($want)) startsWith=$($got.StartsWith($want))"
+      Fail ("compose box does not hold exactly the planned text ($shape); not sent" +
             $(if ($cleared) { '; the pasted text was removed again' } else { '; clear the box in Teams and retry' }))
     }
     [void](Send-Box $w); $sent = $true

@@ -107,20 +107,34 @@ def _parse(text):
     return None
 
 
+def has_content(v):
+    """A real value: a string with at least two characters that are not dots / dashes / blanks
+    (the prompt's format example carries "..."), or a list / dict holding one."""
+    if isinstance(v, str):
+        return len(re.sub(r"[\s.…・_*\-–—]", "", v)) >= 2
+    if isinstance(v, dict):
+        return any(has_content(x) for x in v.values())
+    if isinstance(v, list):
+        return any(has_content(x) for x in v)
+    return False
+
+
 def _wanted(res):
     return {k for k, _ in targets(res)} | {"memo"}
 
 
 def _parse_best(text, wanted):
-    """The JSON object in `text` that shares the most keys with `wanted` (first one on a tie)."""
+    """The JSON object in `text` with the most wanted keys that hold real content (later one on a tie)."""
     dec, best, score = json.JSONDecoder(), None, -1
     for m in re.finditer(r"\{", text or ""):
         try:
             d, _ = dec.raw_decode(text[m.start():])
         except json.JSONDecodeError:
             continue
-        if isinstance(d, dict) and len(set(d) & wanted) > score:
-            best, score = d, len(set(d) & wanted)
+        if isinstance(d, dict):
+            sc = sum(1 for k in wanted if k in d and has_content(d[k]))
+            if sc >= score:   # on a tie the LATER object wins: an answer follows the prompt it may echo
+                best, score = d, sc
     return best
 
 
@@ -268,7 +282,9 @@ class M365AutoWriter(M365PromptWriter):
         out = _parse(r.stdout) or {}
         if not out.get("ok"):
             raise RuntimeError(out.get("error") or (r.stdout + r.stderr).strip()[:200])
-        return _parse_best(out.get("text", ""), _wanted(res))
+        answer = out.get("text", "")
+        cut = answer.rfind("（JSON だけ）")   # the last line of our own request
+        return _parse_best(answer[cut + len("（JSON だけ）"):] if cut >= 0 else answer, _wanted(res))
 
 
 WRITERS = {"claude": ClaudeWriter, "copilot": CopilotWriter, "m365": M365PromptWriter, "m365-auto": M365AutoWriter}
@@ -302,10 +318,10 @@ def _memo(m):
     if not isinstance(m, dict):
         return {}
     s = lambda x: str(x).strip()[:160]
-    out = {k: s(m[k]) for k in ("summary", "next", "ask_back") if isinstance(m.get(k), str) and m[k].strip()}
+    out = {k: s(m[k]) for k in ("summary", "next", "ask_back") if has_content(m.get(k))}
     for k in ("missing", "options"):
         if isinstance(m.get(k), list):
-            items = [s(x) for x in m[k] if str(x).strip()][:3]
+            items = [s(x) for x in m[k] if has_content(x)][:3]
             if items:
                 out[k] = items
     return out
@@ -333,6 +349,8 @@ BROKEN = re.compile(r"[{}]|```")
 def unusable(text):
     """Why a drafted text must not be used, or "": a refusal, a question back to the PM or the
     assistant talking about its instructions, or broken output (JSON / code fences)."""
+    if not has_content(text):
+        return "空の返事"
     if REFUSAL.search(text):
         return "断りの返事"
     if META.search(text):
@@ -374,7 +392,7 @@ def apply(res, event, writer, instruction=None):
         return fallback(f"{type(e).__name__}: {e}")
     if not d:
         return fallback("no JSON in writer output")
-    if not any(isinstance(d.get(k), str) and d[k].strip() for k, _ in todo):
+    if not any(has_content(d.get(k)) for k, _ in todo):
         # key names only (never values): enough to see what shape came back
         return fallback("返事に下書きが無い（返ったキー: " + ", ".join(sorted(str(k) for k in d)[:6]) + "）")
     memo = _memo(d.get("memo"))

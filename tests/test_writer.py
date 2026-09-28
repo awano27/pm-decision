@@ -275,7 +275,31 @@ class TestWriter(unittest.TestCase):
                 '```json\n{"a1": "受領しました。", "memo": {"summary": "要点"}}\n```')
         self.assertEqual(writer._parse_best(text, {"a1", "a2", "memo"})["a1"], "受領しました。")
         self.assertEqual(writer._parse_best("JSON なし", {"a1"}), None)
-        self.assertEqual(writer._parse_best('{"x": 1} {"y": 2}', {"a1"}), {"x": 1})          # tie -> first
+        self.assertEqual(writer._parse_best('{"x": 1} {"y": 2}', {"a1"}), {"y": 2})          # tie -> the later one
+
+    def test_echoed_format_example_is_never_a_draft(self):
+        echo = ('...（JSON だけ）\n出力形式: {"a1": "...", "a2": "...", "memo": {"summary": "...", "missing": [], '
+                '"options": [], "next": "..."}}（JSON だけ）\n'
+                '{"a1": "受領しました。復旧見込みを確認します。", "a2": "QA 環境の復旧見込みを確認する。", '
+                '"memo": {"summary": "延期の可否の判断依頼", "missing": ["復旧見込み"], "options": [], "next": "確認する"}}')
+        best = writer._parse_best(echo, {"a1", "a2", "memo"})
+        self.assertEqual(best["a1"], "受領しました。復旧見込みを確認します。")
+        # the format example alone (Copilot echoed the prompt and wrote nothing) has no content
+        only_example = '出力形式: {"a1": "...", "a2": "…", "memo": {"summary": "...", "missing": [], "next": "..."}}'
+        d = writer._parse_best(only_example, {"a1", "a2", "memo"})
+        self.assertFalse(any(writer.has_content(d.get(k)) for k in ("a1", "a2", "memo")))
+        self.assertEqual(writer.unusable("..."), "空の返事")
+        self.assertEqual(writer._memo({"summary": "...", "missing": ["…"], "next": "確認する"}), {"next": "確認する"})
+
+    def test_placeholder_answer_falls_back_with_a_warning(self):
+        class Placeholders(FakeWriter):
+            def draft(self, res, event, instruction=None):
+                return {k: "..." for k, _ in writer.targets(res)} | {"memo": {"summary": "..."}}
+        with tempfile.TemporaryDirectory() as d:
+            [res] = process(MSG, GRAPHS, StubBackend(), Path(d), PBS, writer=Placeholders())
+            self.assertIn("返事に下書きが無い", res["writer_error"])
+            self.assertTrue(res["needs_human"])
+            self.assertNotIn("memo", res)
 
     def test_failed_rewrite_says_so_and_keeps_the_previous_draft(self):
         class Flaky(FakeWriter):

@@ -133,7 +133,8 @@ if ($Action -eq 'probe') {
   $btns = if ($opened) { @(Find-All $opened $CT::Button | Select-Object -First 30 | ForEach-Object { Shape $_.Current.Name }) } else { @() }
   Out-Json ([ordered]@{ ok = $true; entries = $entries.Count; entryTypes = $kinds; opened = [bool]$opened; title = $shape
                         composeBox = [bool]$box; boxId = $(if ($box) { (& $mask $box.Current.AutomationId) } else { '' })
-                        sendButton = $send; edits = $edits; docs = $docs; buttons = $btns })
+                        sendButton = $send; edits = $edits; docs = $docs; buttons = $btns
+                        boxTextLen = $(if ($box) { (Get-BoxText $box).Trim().Length } else { -1 }); boxNameLen = $(if ($box) { ([string]$box.Current.Name).Length } else { -1 }) })
   exit 0
 }
 
@@ -143,7 +144,21 @@ $prompt = (Get-Content -Raw -Encoding UTF8 $PromptFile).Trim()
 $w = Open-Copilot $w
 if (-not $w) { Fail 'Copilot chat not found in Teams (no chat-list entry or app button named Copilot)' }
 $box = Get-Box $w
-if ((Squash (Get-BoxText $box)).Length -gt 40) { Fail 'the Copilot compose box is not empty (a draft of yours?); nothing sent' }
+$cur = (Get-BoxText $box).Trim()
+$ph = [string]$box.Current.Name
+if ($cur -and (Squash $cur) -ne (Squash $ph)) {
+  # text left by our own earlier run may be cleared; anything else could be the person's draft: leave it
+  if ($cur.StartsWith('あなたはプロジェクトマネージャーの下書き係')) {
+    Assert-Foreground $w; $box.SetFocus(); Start-Sleep -Milliseconds 150; Assert-Foreground $w
+    [System.Windows.Forms.SendKeys]::SendWait('^a'); Start-Sleep -Milliseconds 100
+    [System.Windows.Forms.SendKeys]::SendWait('{DEL}'); Start-Sleep -Milliseconds 300
+    $cur = (Get-BoxText (Get-Box $w)).Trim()
+  }
+  if ($cur -and (Squash $cur) -ne (Squash $ph)) {
+    # lengths only, never the text
+    Fail ("the Copilot compose box holds $($cur.Length) characters (placeholder $($ph.Length)) that are not kimeru's; nothing sent")
+  }
+}
 $before = @(Get-Texts $w)
 $saved = $null
 try { $saved = [System.Windows.Forms.Clipboard]::GetText() } catch {}

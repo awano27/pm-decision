@@ -65,9 +65,17 @@ def format_post(n, rec):
         lines.append(f"内容: {rec['advice']}")
     if rec.get("actions"):
         lines.append("承認で実行: " + ", ".join(a.get("type", "?") for a in rec["actions"]))
-    drafts = [a for a in rec.get("actions", []) if a.get("type") == "teams.reply" and a.get("drafted_by")]
+    src = (rec.get("material_event") or {})
+    if src and any(a.get("drafted_by") for a in rec.get("actions", [])):
+        what = src.get("text") or src.get("item") or src.get("title") or src.get("rule") or ""
+        who = src.get("author")
+        lines.append("元: " + (f"{who}: " if who else "") + str(what)[:200])
+    drafts = [a for a in rec.get("actions", []) if a.get("drafted_by")]
     for a in drafts:
-        lines.append(f"返信の下書き（{a['drafted_by']}）:\n{a['text']}")
+        label = writer_mod.LABEL.get(a["type"], a["type"]) + (f"「{a['title']}」" if a.get("title") else "")
+        lines.append(f"{label}の下書き（{a['drafted_by']}）:\n{a[writer_mod.FIELD[a['type']]]}")
+        if a.get("unverified"):
+            lines.append("⚠ 元の材料に無い日付・数値: " + ", ".join(a["unverified"]))
     lines.append(f"返信: OK {n} / NG {n} / 保留 {n}" + (f" / 修正 {n} <直してほしい点>" if drafts else ""))
     return "\n".join(lines)
 

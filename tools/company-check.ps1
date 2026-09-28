@@ -21,7 +21,7 @@ $Results = [ordered]@{}   # not $R: PowerShell names are case-insensitive ($r is
 $tmp = Join-Path $env:TEMP ("kimeru-check-" + (Get-Random -Minimum 10000 -Maximum 99999))
 New-Item -ItemType Directory -Force $tmp | Out-Null
 
-if ($Only -contains 'monday') { $Only = @('T9', 'T10', 'T12', 'T13', 'T14') }   # short Monday session (T3/T6/T8 run anyway); T2 dropped: minutes come as .txt (docs/minutes-format.md)
+if ($Only -contains 'monday') { $Only = @('T9', 'T10', 'T12', 'T13', 'T14', 'T15') }   # short Monday session (T3/T6/T8 run anyway); T2 dropped: minutes come as .txt (docs/minutes-format.md)
 function Want($t) { -not $Only -or $Only -contains $t }
 function Fails($s) {
   # prefer our one-line "... failed: ..." message, else the last traceback line
@@ -328,6 +328,19 @@ if ($py -and (Want 'T14')) {
     $k = Py @('-m', 'kimeru', '--backend', 'kev', '--out', (Join-Path $tmp 'kev'), 'run', 'examples\teams_chat.json')
     $sw.Stop()
     Rec 'T14' $(if ($k -match 'plan:|path:') { ("OK {0}s " -f [math]::Round($sw.Elapsed.TotalSeconds)) + (Short (($k -split "`n") | Where-Object { $_ -match 'path:' } | Select-Object -First 1)) } else { 'NG ' + (Fails $k) })
+  }
+}
+
+# ---- T15: GitHub Copilot CLI writes the follow-up text (fictional sample only) ----
+if ($py -and (Want 'T15')) {
+  Say "T15 GitHub Copilot で文面の下書き（架空のサンプル 1 件。会社のデータは送りません）"
+  $cop = (Get-Command copilot -ErrorAction SilentlyContinue).Source
+  if (-not $cop) { Rec 'T15' 'SKIP copilot コマンドなし（GitHub Copilot アプリ / winget install GitHub.Copilot）' }
+  elseif (-not (YesNo "   架空のチャット 1 件の返信とタスク説明を GitHub Copilot に書かせますか")) { Rec 'T15' 'SKIP' }
+  else {
+    $d = Py @('eval\drafts.py', '--backend', 'stub', '--writer', 'copilot', '--n', '1', '--kinds', 'teams.chat')
+    $sum = ($d -split "`n") | Where-Object { $_ -match '^events=' } | Select-Object -First 1
+    Rec 'T15' $(if ($sum -and $sum -match 'failed_events=0') { 'OK ' + (Short $sum) } else { 'NG ' + (Fails $d) })
   }
 }
 

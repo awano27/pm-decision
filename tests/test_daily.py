@@ -101,6 +101,31 @@ class TestNotices(unittest.TestCase):
             self.assertEqual(r["notices"], 0)                         # posted once
 
 
+class TestToast(unittest.TestCase):
+    def test_pc_notification_when_something_new_is_posted_only(self):
+        shown = []
+        with tempfile.TemporaryDirectory() as d:
+            out, inbox, t = Path(d) / "out", Path(d) / "inbox", FakeTeams()
+            run = lambda now: daily.cycle(out, inbox, GRAPHS, StubBackend(), PBS, process, bridge=t, send=True,
+                                          now=now, toaster=lambda title, body: shown.append((title, body)) or "shown")
+            t.chat_list = [one_on_one("おはようございます", "8:00")]
+            run(datetime(2026, 9, 28, 7, 0))
+            self.assertEqual(shown, [])                                   # nothing new: no notification
+            t.chat_list = [one_on_one("これは何ですか", "8:05")]
+            r = run(datetime(2026, 9, 28, 7, 5))
+            self.assertEqual(r["toast"], "shown")
+            self.assertEqual(shown[-1][0], "kimeru: 確認待ち 1 件")
+            self.assertTrue(shown[-1][1].startswith("#1 "))
+            run(datetime(2026, 9, 28, 7, 10))
+            self.assertEqual(len(shown), 1)                               # once per new post
+
+    def test_no_notification_without_the_real_bridge_or_send(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = daily.cycle(Path(d) / "out", Path(d) / "inbox", GRAPHS, StubBackend(), PBS, process,
+                            bridge=FakeTeams(), send=True, now=datetime(2026, 9, 28, 7, 0))
+            self.assertNotIn("toast", r)
+
+
 class TestTextMinutes(unittest.TestCase):
     def test_txt_in_inbox_is_minutes(self):
         with tempfile.TemporaryDirectory() as d:

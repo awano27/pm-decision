@@ -103,6 +103,37 @@ def _key(rec):
     return f"{rec.get('graph')}:{rec.get('event_id')}:{rec.get('node')}"
 
 
+def toast_text(out, posted, notices):
+    """Title and body for the PC notification: counts, plus the first item's short summary."""
+    ap = Approvals(out)
+    parts = []
+    if posted:
+        parts.append(f"確認待ち {len(posted)} 件")
+    if notices:
+        parts.append(f"自動決定の通知 {notices} 件")
+    first = ap.data["items"].get(str(posted[0])) if posted else None
+    what = ""
+    if first:
+        rec = first["record"]
+        what = f"#{posted[0]} " + str(rec.get("summary") or rec.get("advice") or rec.get("graph") or "")[:60]
+    body = (what + (f" ほか {len(posted) - 1} 件" if len(posted) > 1 else "")).strip() or "Teams の自分とのチャットを確認してください"
+    return "kimeru: " + " / ".join(parts), body
+
+
+def show_toast(title, body):
+    """Windows notification on this PC (tools/toast.ps1). Opt out with KIMERU_TOAST=0."""
+    import os
+    if os.environ.get("KIMERU_TOAST", "1") == "0":
+        return "off"
+    r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                        str(HERE / "tools" / "toast.ps1"), "-Title", title, "-Body", body],
+                       capture_output=True, text=True, encoding="utf-8", timeout=30,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if r.returncode != 0:
+        raise RuntimeError((r.stdout + r.stderr).strip()[:200])
+    return "shown"
+
+
 def format_notice(rec):
     lines = [f"[kimeru 通知] 自動で決定しました（{rec.get('graph')}）"]
     if rec.get("summary"):

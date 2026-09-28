@@ -21,7 +21,7 @@ $Results = [ordered]@{}   # not $R: PowerShell names are case-insensitive ($r is
 $tmp = Join-Path $env:TEMP ("kimeru-check-" + (Get-Random -Minimum 10000 -Maximum 99999))
 New-Item -ItemType Directory -Force $tmp | Out-Null
 
-if ($Only -contains 'monday') { $Only = @('T9', 'T10', 'T12', 'T13', 'T14', 'T15') }   # short Monday session (T3/T6/T8 run anyway); T2 dropped: minutes come as .txt (docs/minutes-format.md)
+if ($Only -contains 'monday') { $Only = @('T9', 'T10', 'T12', 'T13', 'T14', 'T15', 'T16') }   # short Monday session (T3/T6/T8 run anyway); T2 dropped: minutes come as .txt (docs/minutes-format.md)
 function Want($t) { -not $Only -or $Only -contains $t }
 function Fails($s) {
   # prefer our one-line "... failed: ..." message, else the last traceback line
@@ -349,6 +349,17 @@ if ($py -and (Want 'T15')) {
     $d = Py @('eval\drafts.py', '--backend', 'stub', '--writer', 'copilot', '--n', '1', '--kinds', 'teams.chat')
     $sum = ($d -split "`n") | Where-Object { $_ -match '^events=' } | Select-Object -First 1
     Rec 'T15' $(if ($sum -and $sum -match 'failed_events=0') { 'OK ' + (Short $sum) } else { 'NG ' + (Fails $d) })
+  }
+}
+
+# ---- T16: Windows notification on this PC (self-chat posts never notify your own devices) ----
+if (Want 'T16') {
+  Say "T16 PC への通知（Windows の通知を 1 件出します。クリックすると Teams の自分とのチャットが開きます）"
+  $o = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'toast.ps1') -Title 'kimeru: テスト通知' -Body '確認待ちができるとこの通知が出ます' 2>&1 | Out-String
+  if ($o -notmatch '"ok":true') { Rec 'T16' ('NG ' + (Safe-Error $o)) }
+  else {
+    $seen = YesNo "   画面右下に「kimeru: テスト通知」が出ましたか（集中モード中は通知センターに入ります）"
+    Rec 'T16' $(if ($seen) { 'OK 通知が表示された' } else { 'NG 通知が見えない（設定 > システム > 通知 で PowerShell / 集中モードを確認）' })
   }
 }
 

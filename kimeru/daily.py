@@ -50,10 +50,12 @@ def process_inbox(inbox, out, graphs, backend, playbooks, process):
 
 
 def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=False,
-          ado=None, subscription=None, brief_hour=8, now=None):
+          ado=None, subscription=None, brief_hour=8, now=None, toaster=None):
     """Run one cycle. Returns a small report dict (also written to daily.log.jsonl)."""
     now = now or datetime.now()
     out = Path(out)
+    # the PC notification goes with the real Teams bridge only (tests and demos pass their own bridge)
+    toaster = toaster or (notify.show_toast if bridge is None else None)
     bridge = bridge or notify.PowerShellBridge()
     r = {}
     _step(out, "pull_teams", lambda: pull.pull_teams(inbox, out, bridge=bridge), r)
@@ -64,6 +66,11 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
     _step(out, "judge", lambda: process_inbox(inbox, out, graphs, backend, playbooks, process), r)
     _step(out, "notify", lambda: notify.notify(out, bridge, send=send), r)
     _step(out, "notices", lambda: len(notify.notify_notices(out, bridge, send=send)), r)
+    posted = r["notify"] if isinstance(r.get("notify"), list) else []
+    notices = r["notices"] if isinstance(r.get("notices"), int) else 0
+    if send and toaster and (posted or notices):
+        # self-chat posts never notify the PM's own devices: a Windows notification on this PC does
+        _step(out, "toast", lambda: toaster(*notify.toast_text(out, posted, notices)), r)
     _step(out, "approvals", lambda: [f"#{c['id']}:{c['status']}" for c in notify.collect(out, bridge)], r)
 
     st_path = out / "daily_state.json"

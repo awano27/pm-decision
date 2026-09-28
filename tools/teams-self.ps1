@@ -118,8 +118,8 @@ function Get-ChatKind($id) {
 function Find-SelfItems($w) {
   $items = Get-ChatItems $w
   # 0) the self chat's id is "48:notes" in current Teams: language independent
-  $byId = @($items | Where-Object { $_.Current.Name.Length -lt 400 -and (Get-ChatId $_) -eq '48:notes' })
-  if ($byId) { return @($byId | Select-Object -First 1) }
+  $byId = @($items | Where-Object { (Get-ChatId $_) -eq '48:notes' })
+  if ($byId) { return @($byId | Select-Object -First 3) }
   # 1) "<name> (あなた|自分|...)" at the start; work accounts append the latest message and time
   $hit = $items | Where-Object { $_.Current.Name -match "^[^:：]{1,60}? $SELF" }
   # 2) learned display name as a whole word near the start (items may carry a type prefix such as
@@ -132,12 +132,26 @@ function Find-SelfItems($w) {
   @($hit | Sort-Object { $_.Current.Name.Length } | Select-Object -First 3)
 }
 function Find-SelfItem($w) { Find-SelfItems $w | Select-Object -First 1 }
-function Get-NotesItem($w) { @(Get-ChatItems $w | Where-Object { $_.Current.Name.Length -lt 400 -and (Get-ChatId $_) -eq '48:notes' }) | Select-Object -First 1 }
+function Get-NotesItems($w) { @(Get-ChatItems $w | Where-Object { (Get-ChatId $_) -eq '48:notes' }) }
+function Get-NotesItem($w) { Get-NotesItems $w | Select-Object -First 1 }
+function Test-SelectedUp($el) {
+  # the element itself or one of its 3 nearest parents reports IsSelected
+  $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+  for ($i = 0; $el -and $i -lt 4; $i++) {
+    if (Test-Selected $el) { return $true }
+    $el = $walker.GetParent($el)
+  }
+  $false
+}
 function Test-SelfOpen($w) {
   if (-not $w) { return $false }
-  $n = Get-NotesItem $w
-  if ($n) { return [bool](Test-Selected $n) }
+  $notes = Get-NotesItems $w
+  if ($notes) { return [bool](@($notes | Where-Object { Test-SelectedUp $_ }).Count) }
   Test-SelfTitle $w
+}
+function Get-SelectedKinds($w) {
+  # which kinds of chat are selected right now (no names): tells "opened another chat" from "nothing selected"
+  @(Get-ChatItems $w | Where-Object { Test-Selected $_ } | ForEach-Object { Get-ChatKind (Get-ChatId $_) }) -join ','
 }
 
 function Mask($s) {
@@ -196,8 +210,10 @@ function Open-SelfChat($w) {
       }
     }
   }
-  $n = if ($w) { Get-NotesItem $w } else { $null }
-  Fail ("self chat did not open (tried " + ($tried -join ',') + "; notes entry " + $(if ($n) { "found, selected=" + (Test-Selected $n) } else { 'not found' }) + ")")
+  $notes = if ($w) { @(Get-NotesItems $w) } else { @() }
+  $sel = if ($w) { Get-SelectedKinds $w } else { '' }
+  Fail ("self chat did not open (tried " + ($tried -join ',') + "; notes entries " + $notes.Count +
+        ", selected chats: " + $(if ($sel) { $sel } else { 'none' }) + ")")
 }
 
 $w = Get-TeamsWindow

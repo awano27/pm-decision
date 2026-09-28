@@ -262,9 +262,11 @@ else {
     $org = Read-Host "   ADO の組織名（dev.azure.com/<ここ>。URL や 組織/プロジェクト の形でも可。Enter でスキップ）"
     if ($org) {
       $proj = if ($org -match '/.+/.+|^[^/]+/[^/]+$') { '' } else { Read-Host "   ADO のプロジェクト名" }
-      $a = Py @('-m', 'kimeru', '--out', $out, 'pull', 'ado', '--org', $org, '--project', $proj, '--inbox', $inbox)
+      # PS 5.1 drops an empty argument: pass --project only when it has a value (a pasted URL carries it)
+      $adoArgs = @('--org', $org) + $(if ($proj) { @('--project', $proj) } else { @() }) + @('--inbox', $inbox)
+      $a = Py (@('-m', 'kimeru', '--out', $out, 'pull', 'ado') + $adoArgs)
       if ($a -match 'with --login' -and (YesNo "   ADO の組織は別のテナントにあります。そのテナントで az login しますか（ブラウザが開きます）")) {
-        $a = Py @('-m', 'kimeru', '--out', $out, 'pull', 'ado', '--login', '--org', $org, '--project', $proj, '--inbox', $inbox)
+        $a = Py (@('-m', 'kimeru', '--out', $out, 'pull', 'ado', '--login') + $adoArgs)
       }
       $res += "ado=" + $(if ($a -match '(\d+) new') { "$($Matches[1]) 件" } else { Fails $a })
     }

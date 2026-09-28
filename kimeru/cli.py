@@ -168,8 +168,8 @@ def main(argv=None):
 
     if a.cmd == "pull":
         from . import pull
-        if a.source == "ado" and not (a.org and a.project):
-            ap.error("pull ado needs --org and --project")
+        if a.source == "ado" and not all(pull.ado_names(a.org or "", a.project or "")):
+            ap.error("pull ado needs --org and --project (or --org with the project URL)")
         if a.source == "alerts" and not a.subscription:
             ap.error("pull alerts needs --subscription")
         try:

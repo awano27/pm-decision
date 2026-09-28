@@ -306,6 +306,25 @@ def summarize_day(writer, lines):
     return [str(x).strip()[:120] for x in (d.get("lines") or []) if str(x).strip()][:3]
 
 
+REFUSAL = re.compile(r"申し訳(ありません|ございません)|お手伝いできません|(作成|回答|対応)(でき|いたしかね)ません|"
+                     r"I can(no|')t|I'm sorry|As an AI", re.I)
+META = re.compile(r"JSON|プロンプト|(与えられた|提供された|いただいた)材料|材料(には|に)(ない|記載)|kimeru|"
+                  r"(上記|この)の?指示|(どの|何を).{0,20}(書け|作成すれ)ば|(情報|詳細)を(教えて|いただけ).{0,20}(作成|お書き)")
+BROKEN = re.compile(r"[{}]|```")
+
+
+def unusable(text):
+    """Why a drafted text must not be used, or "": a refusal, a question back to the PM or the
+    assistant talking about its instructions, or broken output (JSON / code fences)."""
+    if REFUSAL.search(text):
+        return "断りの返事"
+    if META.search(text):
+        return "PM への聞き返し・指示への言及"
+    if BROKEN.search(text):
+        return "壊れた返事"
+    return ""
+
+
 def apply(res, event, writer, instruction=None):
     """Fill drafted text into res["actions"] in place. Returns the drafted actions (empty if none).
 
@@ -323,33 +342,48 @@ def apply(res, event, writer, instruction=None):
     if getattr(writer, "PROMPT_ONLY", False):
         return paste_in()
     material = _material(res, event, instruction)
+
+    def fallback(reason):   # a writer is set but gave nothing usable: the template waits for the PM, with a warning
+        res["writer_error"] = reason[:300]
+        if hasattr(writer, "request"):
+            return paste_in()
+        for _, a in todo:
+            a["held_for"] = "fallback"
+        return [a for _, a in todo]
+
     try:
         d = writer.draft(res, event, instruction)
     except Exception as e:  # writer is optional: any failure keeps the template
-        res["writer_error"] = f"{type(e).__name__}: {e}"[:300]
-        return paste_in() if hasattr(writer, "request") else []
+        return fallback(f"{type(e).__name__}: {e}")
     if not d:
-        res["writer_error"] = "no JSON in writer output"
-        return paste_in() if hasattr(writer, "request") else []
+        return fallback("no JSON in writer output")
     memo = _memo(d.get("memo"))
     if memo:
         res["memo"] = memo
         ask = memo.pop("ask_back", "")
         reply = next((a for _, a in todo if a["type"] == "teams.reply"), None)
-        if ask and reply is not None:
+        if ask and reply is not None and not unusable(ask):
             reply["ask_back"] = ask
             reply["ask_back_unverified"] = unverified(ask, material)
-    src = [str(x).strip()[:80] for x in (d.get("sources") or []) if str(x).strip()] if isinstance(d.get("sources"), list) else []
-    if src:
-        res["copilot_sources"] = src[:3]
-    drafted = []
+    # sources only from Microsoft 365 Copilot, which can read the PM's mail and meetings; anything a
+    # CLI writer calls a source would be made up
+    if str(getattr(writer, "NAME", "")).startswith("m365") and isinstance(d.get("sources"), list):
+        src = [str(x).strip()[:80] for x in d["sources"] if str(x).strip()]
+        if src:
+            res["copilot_sources"] = src[:3]
+    drafted, refused = [], []
     for key, a in todo:
         text = d.get(key)
         if not isinstance(text, str) or not text.strip():
+            continue
+        why = unusable(text)
+        if why:   # keep the template for this text, show why, and let the PM look at it
+            a["writer_warning"], a["held_for"] = why, "fallback"
+            refused.append(a)
             continue
         f = FIELD[a["type"]]
         a.setdefault("template_text", a.get(f, ""))
         a[f], a["drafted_by"] = text.strip(), writer.NAME
         a["unverified"] = unverified(text, material)
         drafted.append(a)
-    return drafted
+    return drafted + refused

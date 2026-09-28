@@ -30,7 +30,7 @@ def parse_redraft(line):
     """("3", "もっと短く") for "修正 3 もっと短く"; None otherwise."""
     m = REDRAFT.match(unicodedata.normalize("NFKC", line).strip())
     return (m.group(1), m.group(2).strip()) if m else None
-STATUS = {"OK": "approved", "NG": "rejected", "保留": "held", "聞き返し": "approved"}
+STATUS = {"OK": "approved", "NG": "rejected", "保留": "held", "聞き返し": "ask_back"}   # 聞き返し: repost, not a decision
 
 
 class PowerShellBridge:
@@ -85,6 +85,11 @@ def format_post(n, rec):
         lines.append("Copilot が参照: " + " / ".join(rec["copilot_sources"]))
     drafts = [a for a in rec.get("actions", []) if a.get("drafted_by")]
     waiting = [a for a in rec.get("actions", []) if a.get("held_for")]
+    if rec.get("writer_error"):
+        lines.append("⚠ Copilot の下書きを作れなかったため定型文です（" + str(rec["writer_error"])[:60] + "）")
+    for a in waiting:
+        if a.get("writer_warning"):
+            lines.append(f"⚠ Copilot の{writer_mod.LABEL.get(a['type'], a['type'])}は使えないため定型文です（{a['writer_warning']}）")
     for a in waiting[:1]:
         lines.append("定型文: " + str(a.get(writer_mod.FIELD[a["type"]]) or ""))
     if rec.get("copilot_request"):
@@ -94,7 +99,8 @@ def format_post(n, rec):
     for a in drafts:
         if a in hidden:
             continue
-        label = writer_mod.LABEL.get(a["type"], a["type"]) + (f"「{a['title']}」" if a.get("title") else "")
+        label = (writer_mod.LABEL.get(a["type"], a["type"]) + ("（聞き返し）" if a.get("variant") == "ask_back" else "")
+                 + (f"「{a['title']}」" if a.get("title") else ""))
         lines.append(f"{label}の下書き（{a['drafted_by']}）:\n{a[writer_mod.FIELD[a['type']]]}")
         if a.get("unverified"):
             lines.append("⚠ 元の材料に無い日付・数値: " + ", ".join(a["unverified"]))
@@ -292,19 +298,23 @@ def collect(out, bridge, writer=None):
         it = ap.data["items"].get(num)
         if not it or not it["posted"] or it["status"] not in ("pending", "held"):
             continue
-        new = STATUS[word]
-        if new == it["status"]:
-            continue
-        if word == "聞き返し":   # send the ask-back reply instead of the drafted answer
+        if word == "聞き返し":
+            # the ask-back draft becomes the reply and is posted again under the same #N; OK N records it
             replies = [a for a in it["record"].get("actions", []) if a.get("type") == "teams.reply" and a.get("ask_back")]
             if not replies:
                 continue          # nothing to ask back: the item stays as it is
             for a in replies:
-                a["answer_text"], a["text"] = a["text"], a["ask_back"]
+                a["answer_text"], a["text"] = a["text"], a.pop("ask_back")
+                a["unverified"] = a.pop("ask_back_unverified", [])
+                a["variant"] = "ask_back"
+            it["posted"], it["status"], it["request_posted"] = False, "pending", False
+            changes.append({"id": int(num), "status": "ask_back"})
+            continue
+        new = STATUS[word]
+        if new == it["status"]:
+            continue
         it["status"] = new
         ch = {"id": int(num), "status": new}
-        if word == "聞き返し":
-            ch["variant"] = "ask_back"
         if new == "approved":
             ch["executed"] = [actions.execute(a, dry_run=True) for a in it["record"].get("actions", [])]
         changes.append(ch)

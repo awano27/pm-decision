@@ -285,6 +285,15 @@ function Get-BoxText($b) {
   catch { try { return $b.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value } catch { return '' } }
 }
 function Squash($s) { ([string]$s) -replace '[\s\u00a0\u200b\ufeff]', '' }   # compare text ignoring line-break/space rendering
+function Clear-OurBox($w, $box) {
+  # only called when the box starts with "[kimeru": select all and delete, then check it is empty
+  Assert-Foreground $w
+  $box.SetFocus(); Start-Sleep -Milliseconds 150
+  Assert-Foreground $w
+  [System.Windows.Forms.SendKeys]::SendWait('^a'); Start-Sleep -Milliseconds 100
+  [System.Windows.Forms.SendKeys]::SendWait('{DEL}'); Start-Sleep -Milliseconds 300
+  -not (Get-BoxText $box).Trim().StartsWith('[kimeru')
+}
 function Test-BoxHasKimeru($w) { (Get-BoxText (Get-Box $w)).Trim().StartsWith('[kimeru') }
 
 function Wait-Sent($w) {
@@ -321,19 +330,32 @@ if ($Action -eq 'post') {
   if (-not $Text.StartsWith('[kimeru')) { Fail 'refusing to post text that does not start with [kimeru' }
   $Text = $Text -replace '\\n', "`r`n"   # callers pass line breaks as literal \n
   $box = Get-Box $w
+  # a kimeru post left in the box by an earlier failed run is ours to remove; anything else is the
+  # person's own draft and is never touched (the exact-text check below then refuses to send)
+  if ((Get-BoxText $box).Trim().StartsWith('[kimeru') -and -not (Clear-OurBox $w $box)) {
+    Fail 'an earlier kimeru post is left in the compose box and could not be cleared; clear it in Teams and retry'
+  }
   $saved = $null
   try { $saved = [System.Windows.Forms.Clipboard]::GetText() } catch {}
-  [System.Windows.Forms.Clipboard]::SetText($Text)
-  Assert-Foreground $w
-  $box.SetFocus(); Start-Sleep -Milliseconds 200
-  Assert-Foreground $w
-  [System.Windows.Forms.SendKeys]::SendWait('^v'); Start-Sleep -Milliseconds 300
-  if ($saved) { [System.Windows.Forms.Clipboard]::SetText($saved) } else { [System.Windows.Forms.Clipboard]::Clear() }
+  try {
+    [System.Windows.Forms.Clipboard]::SetText($Text)
+    Assert-Foreground $w
+    $box.SetFocus(); Start-Sleep -Milliseconds 200
+    Assert-Foreground $w
+    [System.Windows.Forms.SendKeys]::SendWait('^v'); Start-Sleep -Milliseconds 300
+  } finally {
+    if ($saved) { [System.Windows.Forms.Clipboard]::SetText($saved) } else { [System.Windows.Forms.Clipboard]::Clear() }
+  }
   # the box must hold exactly the planned text: an old draft left in the box would otherwise go out with it
   $typed = (Squash (Get-BoxText $box)) -eq (Squash $Text)
   $sent = $false
   if ($Send) {
-    if (-not $typed) { Fail 'compose box does not hold exactly the planned text (an old draft left in it?); not sent. Clear the box in Teams and retry' }
+    if (-not $typed) {
+      # take our paste back out when the box holds only kimeru text; a person's draft stays as it was
+      $cleared = (Get-BoxText $box).Trim().StartsWith('[kimeru') -and (Clear-OurBox $w $box)
+      Fail ('compose box does not hold exactly the planned text (a draft of yours in it?); not sent' +
+            $(if ($cleared) { '; the pasted text was removed again' } else { '; clear the box in Teams and retry' }))
+    }
     [void](Send-Box $w); $sent = $true
   }
   Out-Json @{ ok = $true; typed = $typed; sent = $sent }; exit 0

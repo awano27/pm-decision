@@ -82,7 +82,10 @@ function Get-BoxText($b) {
   try { return $b.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern).DocumentRange.GetText(8000) }
   catch { try { return $b.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value } catch { return '' } }
 }
-function Squash($s) { ([string]$s) -replace '[\s ​﻿]', '' }
+function Squash($s) {
+  # blanks and invisible format characters, incl. U+FFFC (object marker) that an empty web editor can hold
+  ([string]$s) -replace '[\s ­​-‏⁠﻿￼]', ''
+}
 function Get-PageText($w) {
   # the whole web page as one text (the chat is a web view): the longest Document text in the window
   $best = ''
@@ -157,7 +160,8 @@ $box = Get-Box $w
 $cur = Get-BoxText $box
 $sq = Squash $cur
 $phq = Squash ([string]$box.Current.Name)
-if ($sq -and $sq -ne $phq) {
+if ($sq.Length -gt 2 -and $sq -ne $phq) {
+  # (two characters or fewer is an editor artifact, never a draft)
   # text left by our own earlier run may be cleared; anything else could be the person's draft: leave it
   if ($cur.Trim().StartsWith('あなたはプロジェクトマネージャーの下書き係')) {
     Assert-Foreground $w; $box.SetFocus(); Start-Sleep -Milliseconds 150; Assert-Foreground $w
@@ -165,7 +169,7 @@ if ($sq -and $sq -ne $phq) {
     [System.Windows.Forms.SendKeys]::SendWait('{DEL}'); Start-Sleep -Milliseconds 300
     $sq = Squash (Get-BoxText (Get-Box $w))
   }
-  if ($sq -and $sq -ne $phq) {
+  if ($sq.Length -gt 2 -and $sq -ne $phq) {
     # lengths only, never the text
     Fail ("the Copilot compose box holds $($sq.Length) visible characters (placeholder $($phq.Length)) that are not kimeru's; nothing sent")
   }

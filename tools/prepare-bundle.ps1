@@ -1,9 +1,9 @@
 ﻿<#
 .SYNOPSIS
-  Monday prep on a company PC: check everything that must be carried in, start Kev, sign in to az.
+  Monday prep on a managed PC: check everything that must be carried in, start Kev, sign in to az.
   Changes nothing except starting Kev (minimized) and, if you agree, `az login`. No admin rights.
 
-  Usage: prepare-company.cmd [-KevDir C:\kev] [-AzDir C:\az]
+  Usage: prepare-bundle.cmd [-KevDir C:\kev] [-AzDir C:\az]
 #>
 [CmdletBinding(PositionalBinding = $false)]
 param([string]$KevDir = '', [string]$AzDir = '', [int]$KevWaitSec = 600)
@@ -30,7 +30,7 @@ Write-Host "kimeru 月曜の準備チェック" -ForegroundColor Cyan
 $py = Join-Path $root '.python\python.exe'
 $sysPy = foreach ($c in 'python', 'py') { $cmd = Get-Command $c -ErrorAction SilentlyContinue; if ($cmd -and ((& $cmd.Source --version 2>&1 | Out-String) -match 'Python 3\.(1\d|[2-9]\d)')) { $cmd.Source; break } }
 Line (Test-Path (Join-Path $root 'kimeru\cli.py')) 'kimeru' $root
-Line ((Test-Path $py) -or $sysPy) 'Python' $(if (Test-Path $py) { $py } elseif ($sysPy) { $sysPy } else { '.python がない → 前回の .python フォルダをこのフォルダにコピー（または run-company-check.cmd で取得）' })
+Line ((Test-Path $py) -or $sysPy) 'Python' $(if (Test-Path $py) { $py } elseif ($sysPy) { $sysPy } else { '.python がない → 前回の .python フォルダをこのフォルダにコピー（または run-check.cmd で取得）' })
 Line (Test-Path (Join-Path $KevDir 'start-kev.cmd')) 'Kev フォルダ' $(if (Test-Path (Join-Path $KevDir 'start-kev.cmd')) { $KevDir } else { "$KevDir にない → 持ち込み用フォルダの kev をこのフォルダの隣に置く" })
 Line (Test-Path (Join-Path $KevDir 'models\kev-4b\head.pt')) 'Kev モデル' $(if (Test-Path (Join-Path $KevDir 'models\kev-4b\head.pt')) { 'kev-4b' } else { 'models\kev-4b がない（コピー途中？）' })
 $az = @($env:KIMERU_AZ, (Get-Command az -ErrorAction SilentlyContinue).Source, (Join-Path $AzDir 'bin\az.cmd')) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1

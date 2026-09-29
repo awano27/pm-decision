@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  One-time setup of kimeru + local Kev on a company PC. No admin rights.
+  One-time setup of kimeru + local Kev on a managed PC. No admin rights.
 
   install  1) Startup-folder shortcut that starts Kev at logon (minimized)
            2) user environment variable KIMERU_BACKEND=kev
@@ -9,7 +9,7 @@
   remove   undoes 1-3 (keeps %LOCALAPPDATA%\kimeru data)
   status   shows what is installed and whether Kev answers
 
-  Usage: setup-company.cmd install [-KevDir <kev folder>] [-Minutes 5]
+  Usage: setup-managed.cmd install [-KevDir <kev folder>] [-Minutes 5]
 #>
 [CmdletBinding(PositionalBinding = $false)]
 param(
@@ -76,7 +76,7 @@ switch ($Action) {
     $kevCmd = Join-Path $KevDir 'start-kev.cmd'
     if (-not (Test-Path $kevCmd)) { throw "start-kev.cmd not found in $KevDir (copy the kev bundle there first, or pass -KevDir)" }
     $py = Find-Python
-    if (-not $py) { throw 'Python 3.10+ not found. Run run-company-check.cmd once (it can fetch the no-install Python into .python).' }
+    if (-not $py) { throw 'Python 3.10+ not found. Run run-check.cmd once (it can fetch the no-install Python into .python).' }
 
     # remember what was there before the first install, so remove (or a failed install) can put it back
     New-Item -ItemType Directory -Force $data | Out-Null

@@ -1,7 +1,7 @@
 ﻿<#
 .SYNOPSIS
   Split a big zip into parts small enough for Remote Desktop copy, plus a JOIN.cmd that puts it
-  back together on the company PC (checks the SHA-256, unpacks to C:\, starts START.cmd).
+  back together on the managed PC (checks the SHA-256, unpacks to C:\, starts START.cmd).
 
   Usage: powershell -ExecutionPolicy Bypass -File tools\split-zip.ps1 -Zip C:\develop\zipbuild\kimeru-pc.zip [-PartMB 1000]
   Output: <zip folder>\parts\kimeru-pc.zip.001 ... and JOIN.cmd  (copy the whole parts folder)

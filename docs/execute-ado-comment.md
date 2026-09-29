@@ -33,12 +33,12 @@ python -m kimeru config set execute ado.comment
 `teams.reply` / `teams.post` は、送りません。承認すると、**送る文面だけ** の投稿（`[kimeru 送信用 #N]`）が自分とのチャットに返ります。iPhone で長押しして、コピーして送ってください。
 `config set open_chat_link 1` にすると、相手とのチャットを開くリンクが付きます（実験的。リンクに文面は入りません）。
 
-## 試験（会社 PC）
+## 試験（管理された PC）
 
 試験用の作業項目（誰の邪魔にもならないもの）を用意して、次を実行します。
 
 ```powershell
-.\run-company-check.cmd T22
+.\run-check.cmd T22
 ```
 
 作業項目の番号を入力すると、承認の流れを 1 回通し、コメントが **1 回だけ** 書かれたかを確かめます。

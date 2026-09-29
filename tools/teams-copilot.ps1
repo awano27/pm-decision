@@ -513,7 +513,7 @@ if (-not (Test-Busy $w) -and -not ((After-Marker $script:page) -match $keyRx)) {
 $page = $script:page; $nodes = $script:nodes; $w = Get-TeamsWindow
 $dump = @()
 if ($dbg) {
-  # only for a fictional sample (company-check T17 sets the flag): what is on the page, longest first
+  # only for a fictional sample (check T17 sets the flag): what is on the page, longest first
   $all = $w.FindAll('Descendants', [System.Windows.Automation.Condition]::TrueCondition)
   $rows = foreach ($e in $all) {
     $n = [string]$e.Current.Name

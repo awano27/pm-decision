@@ -8,7 +8,7 @@ The judge (Jev / Kev) picks the route; a writer LLM only fills in text:
 Drafted text never goes out on its own: every action with LLM text is held for the PM, who sees
 the full text in the self chat (notify.py) and answers OK / NG / 修正 N <指示>.
 
-  KIMERU_WRITER=copilot   GitHub Copilot CLI (`copilot`, the user's own sign-in; company contract)
+  KIMERU_WRITER=copilot   GitHub Copilot CLI (`copilot`, the user's own sign-in; organization contract)
   KIMERU_WRITER=claude    Claude Code CLI (`claude -p`, the user's own login)
   KIMERU_WRITER=codex     OpenAI Codex CLI (`codex exec`, the user's own ChatGPT / API login)
   KIMERU_WRITER=grok      xAI Grok CLI (`grok --prompt-file`, the user's own login)
@@ -525,7 +525,7 @@ class M365AutoWriter(M365PromptWriter):
         answer = answer[cut + len("（JSON だけ）"):] if cut >= 0 else answer
         d = _parse_best(answer, _wanted(res))
         if not d:
-            # shape only; the text itself only when a person asked for it on a fictional sample (company-check T17)
+            # shape only; the text itself only when a person asked for it on a fictional sample (check T17)
             more = f", head={answer.strip()[:300]!r}" if os.environ.get("KIMERU_DEBUG_WRITER") == "1" else ""
             raise RuntimeError(f"Copilot の返事に JSON が無い（{out.get('from', '?')}、{len(answer)} 字、"
                                f"ページ {out.get('pageLen', '?')} 字{more}）")

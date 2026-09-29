@@ -2,6 +2,10 @@
 
 ## 未リリース
 
+### ドキュメント整理
+
+- README を概要中心に再構成し、詳細を `docs/`（reference・writers・evaluation・managed-environments）へ分離。組織固有の表現をなくし、スクリプト名を一般化（`run-check.cmd`・`tools/check.ps1`・`setup-managed.cmd`・`prepare-bundle.cmd`）
+
 ### できないことの改善（A〜F）
 
 - 設定ファイル（`config.json`）と `kimeru config`。自動運転が設定を引き継ぐ。`schedule status`
@@ -30,7 +34,7 @@
 - **M365 だけの人向けの手動貼り付け（`m365`）を正式化**: 依頼文は 1 段落で返す形にし、返ってきた文面は
   `下書き N <文面>` と 1 行で返信すると、承認の投稿に取り込まれる（引用記号の除去、使えない文面の拒否、材料に無い日付・数値の ⚠）
 - `m365-auto` は失敗すると 30 分休み、その間は手動の依頼文に切り替わる（毎回フォーカスを奪って数分かかるのを防ぐ）
-- 会社 PC 用の確認セット（`run-company-check.cmd`）と、更新 zip の配布手順
+- 管理された PC 用の確認セット（`run-check.cmd`）と、更新 zip の配布手順
 
 ## 既知の制限
 

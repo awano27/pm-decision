@@ -1,7 +1,7 @@
 ﻿<#
 .SYNOPSIS
-  One-shot company PC check for kimeru (run via run-company-check.cmd).
-  Runs every level of docs/company-pc-test.md automatically, asks only when a human
+  One-shot managed PC check for kimeru (run via run-check.cmd).
+  Runs every level of docs/managed-pc-check.md automatically, asks only when a human
   is required (sending to your own self chat, iPhone replies, opening a screen, az / Jev),
   and writes a result sheet (no message text, names or tokens) to the clipboard and
   kimeru-check-result.txt.
@@ -9,7 +9,7 @@
 [CmdletBinding(PositionalBinding = $false)]
 param(
   [int]$WaitSec = 180,
-  # run-company-check.cmd T9  -> only T9 (plus the steps it depends on: T3, T6, T8)
+  # run-check.cmd T9  -> only T9 (plus the steps it depends on: T3, T6, T8)
   [Parameter(ValueFromRemainingArguments = $true)][string[]]$Only = @()
 )
 $ErrorActionPreference = 'Continue'
@@ -103,7 +103,7 @@ function WaitReply($id, $word) {
   return $false
 }
 
-Write-Host "kimeru 会社PCチェック（外部送信の前には必ず確認します。Ctrl+C でいつでも中止できます）" -ForegroundColor Green
+Write-Host "kimeru 管理PCチェック（外部送信の前には必ず確認します。Ctrl+C でいつでも中止できます）" -ForegroundColor Green
 
 # ---- Level 0: PowerShell only ----
 Say "T0 環境"
@@ -166,10 +166,10 @@ if ($uia) {
     if (YesNo "   自分とのチャットにテストメッセージを1通送信します（宛先は自分だけ）。よろしいですか") {
       $n = Get-Random -Minimum 100 -Maximum 999
       Write-Host "   数秒間マウス・キーボードに触らないでください"
-      $p1 = Self 'post' @('-Text', "[kimeru #$n] 会社PCテスト\n返信: OK $n")
+      $p1 = Self 'post' @('-Text', "[kimeru #$n] 管理PCテスト\n返信: OK $n")
       $s1 = if ($p1.ok -and $p1.typed) { Self 'send' } else { $p1 }
       if ($s1.ok) {
-        Write-Host "   会社の iPhone の Teams で、自分とのチャットに「OK $n」と返信してください（全角でも可。最大 $WaitSec 秒待ちます）" -ForegroundColor Green
+        Write-Host "   仕事用の iPhone の Teams で、自分とのチャットに「OK $n」と返信してください（全角でも可。最大 $WaitSec 秒待ちます）" -ForegroundColor Green
         Write-Host "   ※ 自分宛てのメッセージなので iPhone に通知は来ないことがあります。Teams アプリで自分とのチャットを開いてください" 
         $got = WaitReply $n 'OK'
         $push = Read-Host "   iPhone に通知は届きましたか？ [y/n]"
@@ -302,7 +302,7 @@ if ($selfOk -and (Want 'T22')) {
     New-Item -ItemType Directory -Force $out22 | Out-Null
     $base = Get-Random -Minimum 100 -Maximum 899
     [IO.File]::WriteAllText((Join-Path $out22 'approvals.json'), "{`"next`": $base, `"items`": {}}")
-    $rec = [ordered]@{ graph = 'company-check'; event_kind = 'ado.workitem.created'; event_id = "t22-$wi"; node = 'request_info'; outcome = 'decide'; needs_human = $true; advice = ''
+    $rec = [ordered]@{ graph = 'check'; event_kind = 'ado.workitem.created'; event_id = "t22-$wi"; node = 'request_info'; outcome = 'decide'; needs_human = $true; advice = ''
       actions = @(@{ type = 'ado.comment'; id = $wi; text = 'kimeru の試験です。このコメントは、承認のあとに 1 回だけ書かれます。' }) }
     [IO.File]::WriteAllText((Join-Path $out22 'queue.jsonl'), (($rec | ConvertTo-Json -Compress -Depth 8) + "`n"), (New-Object Text.UTF8Encoding $false))
     $env:KIMERU_EXECUTE = 'ado.comment'
@@ -483,7 +483,7 @@ if ($py -and (Want 'T14')) {
 
 # ---- T15: GitHub Copilot CLI writes the follow-up text (fictional sample only) ----
 if ($py -and (Want 'T15')) {
-  Say "T15 GitHub Copilot で文面の下書き（架空のサンプル 1 件。会社のデータは送りません）"
+  Say "T15 GitHub Copilot で文面の下書き（架空のサンプル 1 件。業務のデータは送りません）"
   $cop = (Get-Command copilot -ErrorAction SilentlyContinue).Source
   if (-not $cop -and $py) {
     $c = ((Py @('-c', 'from kimeru import writer; print(writer.find_exe("copilot", "KIMERU_COPILOT_EXE") or "")')) -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 1)
@@ -566,13 +566,13 @@ if (Want 'T16') {
   else {
     $why = if ($tj) { "設定=$($tj.setting) 通知センター内=$($tj.inCenter)件" } else { '' }
     $seen = YesNo "   画面右下に「kimeru: テスト通知」が出ましたか（集中モード中は通知センターに入ります）"
-    Rec 'T16' $(if ($seen) { "OK 通知が表示された $why" } else { "NG 通知が見えない $why（DisabledForUser=設定または集中モード / DisabledByGroupPolicy=会社の設定。通知センターに 1 件以上あれば、届いているが画面には出ていない）" })
+    Rec 'T16' $(if ($seen) { "OK 通知が表示された $why" } else { "NG 通知が見えない $why（DisabledForUser=設定または集中モード / DisabledByGroupPolicy=組織の設定。通知センターに 1 件以上あれば、届いているが画面には出ていない）" })
   }
 }
 
 # ---- T17: Microsoft 365 Copilot in Teams (m365-auto writer) ----
 if ($uia -and (Want 'T17')) {
-  Say "T17 Teams の Copilot チャット（画面構造の調査。会社のデータは送りません）"
+  Say "T17 Teams の Copilot チャット（画面構造の調査。業務のデータは送りません）"
   $pr = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'teams-copilot.ps1') -Action probe 2>&1 | Out-String
   $pj = try { $pr.Trim().TrimStart([char]0xFEFF) | ConvertFrom-Json } catch { $null }
   if (-not $pj -or -not $pj.ok) { Rec 'T17-probe' ('NG ' + (Safe-Error $pr)) }
@@ -591,7 +591,7 @@ if ($uia -and (Want 'T17')) {
 
 # ---- Result ----
 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
-$sheet = @("kimeru 会社PCチェック結果 $(Get-Date -Format 'yyyy-MM-dd HH:mm')") + ($Results.GetEnumerator() | ForEach-Object { "{0,-6} {1}" -f $_.Key, $_.Value })
+$sheet = @("kimeru 管理PCチェック結果 $(Get-Date -Format 'yyyy-MM-dd HH:mm')") + ($Results.GetEnumerator() | ForEach-Object { "{0,-6} {1}" -f $_.Key, $_.Value })
 $sheet | Out-File -Encoding utf8 (Join-Path $root 'kimeru-check-result.txt')
 try { $sheet -join "`r`n" | Set-Clipboard; $clip = 'クリップボードにコピーしました' } catch { $clip = 'kimeru-check-result.txt を開いてコピーしてください' }
 Say "結果（$clip）"

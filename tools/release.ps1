@@ -1,9 +1,9 @@
 ﻿<#
 .SYNOPSIS
-  Build the small update zip for the company PC: the committed files at HEAD plus a VERSION line.
+  Build the small update zip for the managed PC: the committed files at HEAD plus a VERSION line.
 .DESCRIPTION
   The first delivery (Python, Kev, Azure CLI, ...) is tools\make-bundle.ps1 -Zip. Later updates only need this
-  (0.2 MB): extract it over C:\kimeru-pc on the company PC and check `Get-Content kimeru\VERSION`.
+  (0.2 MB): extract it over C:\kimeru-pc on the managed PC and check `Get-Content kimeru\VERSION`.
   -CopyTo <folder> also copies the zip there (a synced Google Drive / OneDrive folder, for example).
 #>
 param(

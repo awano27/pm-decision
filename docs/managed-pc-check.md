@@ -1,4 +1,4 @@
-# 会社 PC 動作確認手順
+# 管理された PC 動作確認手順
 
 ## かんたん実行（おすすめ）
 
@@ -10,11 +10,11 @@
    powershell -ExecutionPolicy Bypass -File tools\split-zip.ps1 -Zip C:\develop\kimeru-pc.zip
    ```
    `C:\develop\parts` に分割ファイル（約 8 個）と `JOIN.cmd` ができる。Kev だけ・kimeru だけの更新なら、変わった部分の小さな ZIP を作って上書き展開してもよい。
-2. **会社 PC**: リモートデスクトップで `parts` フォルダを**フォルダごと**好きな場所にコピーする。途中で失敗したら、失敗したファイルだけ取り直す。
+2. **管理された PC**: リモートデスクトップで `parts` フォルダを**フォルダごと**好きな場所にコピーする。途中で失敗したら、失敗したファイルだけ取り直す。
    前回の `C:\kimeru-pc` が残っていれば、先に削除する。
-3. **会社 PC**: `JOIN.cmd` をダブルクリック。結合 → 破損チェック（`NG` と出たら、そのファイルを取り直す）→ `C:\kimeru-pc` へ展開（約 2 分）→ `START.cmd` の順に自動で進む。
+3. **管理された PC**: `JOIN.cmd` をダブルクリック。結合 → 破損チェック（`NG` と出たら、そのファイルを取り直す）→ `C:\kimeru-pc` へ展開（約 2 分）→ `START.cmd` の順に自動で進む。
 4. `START.cmd` が Kev を起動（最小化ウィンドウ。閉じない）し、az のサインインと動作確認に進む。**質問には明示的に答える**（Enter だけだとその項目は「SKIP」になり、確認したことにならない）。
-   - az にサインインしていません → `y`（ブラウザで会社アカウント）
+   - az にサインインしていません → `y`（ブラウザで職場・学校のアカウント）
    - 確認待ち 2 件を自分とのチャットに送信します → `y`。その後、数秒はマウス・キーボードに触らず、iPhone から表示された `OK 番号` と `NG 番号` を **別々のメッセージで** 返信する
    - 自分とのチャットが見つからないとき → Teams で「自分とのチャット」を手で開く（90 秒待つ）
    - ADO の組織名 → `https://dev.azure.com/<組織>/<プロジェクト>` の形で貼ってよい（別テナントの組織なら、サインインを聞かれたら `y`）
@@ -26,18 +26,18 @@
 
 - 従来どおり `C:\kev`・`C:\az` に置いた場合もそのまま動く（`kimeru` の隣 → `C:\kev` / `C:\az` の順に探す）
 - 自動運転を登録したあとは、1 サイクル（5 分）待って `python -m kimeru --out <出力先> schedule status` を実行し、`settings in effect` に writer などの出どころ（file）が出ていることを確かめる
-- 特定の確認だけやり直す: PowerShell で `.\run-company-check.cmd T9`（複数指定可: `T9 T15 T16`。M365 Copilot の出典は `T18`）
-- 準備だけ: `.\prepare-company.cmd` ／ 確認だけ: `.\run-company-check.cmd monday`
+- 特定の確認だけやり直す: PowerShell で `.\run-check.cmd T9`（複数指定可: `T9 T15 T16`。M365 Copilot の出典は `T18`）
+- 準備だけ: `.\prepare-bundle.cmd` ／ 確認だけ: `.\run-check.cmd monday`
 - Kev が遅い（1 件が数分）ときは、Kev の窓に `precision: fp32` と出ているか確認する。bf16 に対応しない CPU では、起動時に自動で fp32（メモリ約 14GB）になる
-- 自動運転（`setup-company.cmd install`）は、Teams を 5 分ごとに切り替える問題を直すまで使わない
+- 自動運転（`setup-managed.cmd install`）は、Teams を 5 分ごとに切り替える問題を直すまで使わない
 
 ### ローカル判断モデル（kev）を使う場合
 
 社外にデータを出さない判断モデル kev（Kev-4B、Apache-2.0。土台の Qwen3.5-4B-Base も Apache-2.0）を、開発 PC で作った持ち込み用フォルダ（約 11GB）で動かす。インストール・管理者権限・ネット接続は不要。
 
-1. 開発 PC の `C:\develop\kev-bundle` を、リモートデスクトップ経由で会社 PC の `C:\kev` にコピーする
+1. 開発 PC の `C:\develop\kev-bundle` を、リモートデスクトップ経由で管理された PC の `C:\kev` にコピーする
 2. `C:\kev\start-kev.cmd` をダブルクリック。`Uvicorn running on http://127.0.0.1:8009` と出たら準備完了（ウィンドウは開いたまま）
-3. kimeru フォルダで `.\run-company-check.cmd monday`（T14 で kev による判断を確認）
+3. kimeru フォルダで `.\run-check.cmd monday`（T14 で kev による判断を確認）
 4. 常用するなら `setx KIMERU_BACKEND kev`（ユーザー環境変数。管理者権限不要）
 
 目安（開発 PC: Ryzen 9 7940HS の CPU のみ、既定の bf16）: メモリ約 10GB、1 件の判断に中央値 2.5 秒・最大 6 秒。
@@ -45,19 +45,19 @@ bf16 命令のない CPU で遅い場合は、`set KEV_DTYPE=fp32` してから 
 
 ### Azure DevOps のチケットを取り込む場合（az のインストール不要版）
 
-1. 開発 PC の `C:\develop\az-bundle\az` を会社 PC の `C:\az` にコピーする（約 260MB、Microsoft 公式の ZIP 版を展開したもの）
-2. `C:\az\bin\az.cmd login` でサインイン（Azure portal と同じ会社アカウント）
-3. `.\run-company-check.cmd monday` の T10 で、組織名・プロジェクト名を入れるとチケットの取り込みと判断まで確認できる
-4. 常用するなら `.\setup-company.cmd install -AdoOrg <組織> -AdoProject <プロジェクト>`
+1. 開発 PC の `C:\develop\az-bundle\az` を管理された PC の `C:\az` にコピーする（約 260MB、Microsoft 公式の ZIP 版を展開したもの）
+2. `C:\az\bin\az.cmd login` でサインイン（Azure portal と同じ職場・学校のアカウント）
+3. `.\run-check.cmd monday` の T10 で、組織名・プロジェクト名を入れるとチケットの取り込みと判断まで確認できる
+4. 常用するなら `.\setup-managed.cmd install -AdoOrg <組織> -AdoProject <プロジェクト>`
 
 `C:\az` 以外に置いた場合は、環境変数 `KIMERU_AZ` に `az.cmd` のパスを入れる。
 
 ### 毎日動く状態にする（確認が OK だったら）
 
 ```powershell
-.\setup-company.cmd install          # Kev の自動起動・KIMERU_BACKEND=kev・5 分ごとの自動運転（管理者権限不要）
-.\setup-company.cmd status           # 状態の確認（Kev の応答・最後のサイクル）
-.\setup-company.cmd remove           # 元に戻す（データは %LOCALAPPDATA%\kimeru に残る）
+.\setup-managed.cmd install          # Kev の自動起動・KIMERU_BACKEND=kev・5 分ごとの自動運転（管理者権限不要）
+.\setup-managed.cmd status           # 状態の確認（Kev の応答・最後のサイクル）
+.\setup-managed.cmd remove           # 元に戻す（データは %LOCALAPPDATA%\kimeru に残る）
 ```
 
 - 自動運転は画面を出さずに動き、記録は `%LOCALAPPDATA%\kimeru` に置く（ZIP を取り直しても消えない）
@@ -68,7 +68,7 @@ bf16 命令のない CPU で遅い場合は、`set KEV_DTYPE=fp32` してから 
 
 ## 手動手順
 
-kimeru が会社の PC（職場アカウントの Teams・会社の iPhone・社内の ADO / Azure）で動くかを段階的に確かめる手順。
+kimeru が管理された PC（職場アカウントの Teams・仕事用の iPhone・組織の ADO / Azure）で動くかを段階的に確かめる手順。
 上から順に進め、NG が出た段階で止めて「結果シート」を返す。
 
 - 所要時間: レベル 0〜1 で 30〜40 分、レベル 2〜3 はそれぞれ 10〜20 分
@@ -172,7 +172,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\teams-self.ps1 -Acti
 **実行中の数秒間はマウス・キーボードに触らない。**
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\teams-self.ps1 -Action post -Text '[kimeru #0] 判断が必要（会社PCテスト）\n返信: OK 0 / NG 0 / 保留 0'
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\teams-self.ps1 -Action post -Text '[kimeru #0] 判断が必要（管理PCテスト）\n返信: OK 0 / NG 0 / 保留 0'
 ```
 
 - `{"ok":true,"typed":true,"sent":false}` で、自分とのチャットの入力欄にテスト文が入っていれば OK
@@ -186,7 +186,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\teams-self.ps1 -Acti
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\teams-self.ps1 -Action send
 ```
 
-2. **会社の iPhone** の Teams に通知が来るか確認（来なくても自分とのチャットに表示されていれば記録して続行）
+2. **仕事用の iPhone** の Teams に通知が来るか確認（来なくても自分とのチャットに表示されていれば記録して続行）
 3. iPhone の Teams で自分とのチャットを開き、`OK 0` と返信する
 4. PC で読み取り:
 
@@ -207,7 +207,7 @@ py --version
 
 どちらかで 3.10 以上が出れば OK（以降 `python` を出た方に読み替える）。
 `Python` とだけ表示される場合は、Windows 標準の「Microsoft Store を開くだけのショートカット」で、Python は入っていない。
-その場合は**かんたん実行**（`run-company-check.cmd`）を使うと、確認のうえ python.org のインストール不要版（zip 展開のみ・管理者権限不要）を
+その場合は**かんたん実行**（`run-check.cmd`）を使うと、確認のうえ python.org のインストール不要版（zip 展開のみ・管理者権限不要）を
 このフォルダの `.python` に置いて続行できる（手動なら以降の `python` を `.\.python\python.exe` に読み替える）。
 
 ### T7 テストと検証（外部通信なし）

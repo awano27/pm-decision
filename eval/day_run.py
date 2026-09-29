@@ -8,7 +8,7 @@ approval posts -> replies -> actions -> morning brief) and checks what a PM woul
   - "修正 N ..." redrafts under the same number; "OK N" runs the approved text; "NG N" runs nothing
   - no text drafted by the writer was executed without an OK
   - the same event dropped twice is decided once
-Prints a timeline and a pass/fail list. No Teams, no company data.
+Prints a timeline and a pass/fail list. No Teams, no real data.
 """
 import argparse
 import json

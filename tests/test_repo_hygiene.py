@@ -2,7 +2,7 @@
 
 Escape sequences written through tooling have turned "\\t", "\\b", "\\v" and "\\r" into real
 TAB/BACKSPACE/VT/CR characters more than once (broken paths like "examples<TAB>eams_chat.json",
-a regex "\\b" that became BACKSPACE). This fails fast instead of on the company PC.
+a regex "\\b" that became BACKSPACE). This fails fast instead of on the managed PC.
 """
 import re
 import unittest

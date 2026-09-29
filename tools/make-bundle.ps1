@@ -1,18 +1,18 @@
 ﻿<#
 .SYNOPSIS
-  On the development PC: build ONE folder to carry to a company PC (Remote Desktop copy).
+  On the development PC: build ONE folder to carry to a managed PC (Remote Desktop copy).
 
     <Out>\kimeru   this repo at HEAD (git archive: committed files only, no private data)
     <Out>\kev      the Kev bundle (start-kev.cmd, Python, torch, model)
     <Out>\az       the no-install Azure CLI ZIP, unpacked
     <Out>\kimeru\.python  python.org's no-install Python (embeddable, signature checked)
 
-    <Out>\START.cmd  the one thing to double-click on the company PC
+    <Out>\START.cmd  the one thing to double-click on the managed PC
 
-  On the company PC: copy <Out> (the whole folder) anywhere, then double-click <Out>\START.cmd.
+  On the managed PC: copy <Out> (the whole folder) anywhere, then double-click <Out>\START.cmd.
 
   -Zip also writes <Out>.zip: ONE file is far faster to copy over Remote Desktop than ~45,000 small
-  ones. On the company PC:  C:\Windows\System32\tar.exe -xf C:\kimeru-pc.zip -C C:\   (built into Windows, faster than Explorer)
+  ones. On the managed PC:  C:\Windows\System32\tar.exe -xf C:\kimeru-pc.zip -C C:\   (built into Windows, faster than Explorer)
 
   Usage: powershell -ExecutionPolicy Bypass -File tools\make-bundle.ps1 [-Out C:\develop\kimeru-pc]
            [-KevSrc C:\develop\kev-bundle] [-AzSrc C:\develop\az-bundle\az]
@@ -44,7 +44,7 @@ Expand-Archive -Path $srcZip -DestinationPath $dst
 Set-Content -Path (Join-Path $dst 'VERSION') -Value $buildId -Encoding ASCII
 Remove-Item $srcZip
 
-# no-install Python inside kimeru, so the company PC never has to fetch it
+# no-install Python inside kimeru, so the managed PC never has to fetch it
 if (-not (Test-Path $PyZip)) {
   New-Item -ItemType Directory -Force (Split-Path $PyZip) | Out-Null
   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -74,15 +74,15 @@ Set-Content -Path (Join-Path $Out 'START.cmd') -Encoding ASCII -Value @(
 $size = [math]::Round(((Get-ChildItem $Out -Recurse -File | Measure-Object Length -Sum).Sum) / 1GB, 1)
 $head = git -C $root rev-parse --short HEAD
 Write-Host "done: $Out (${size}GB, kimeru $head)"
-Write-Host "company PC: copy this folder anywhere, then double-click START.cmd in it"
+Write-Host "managed PC: copy this folder anywhere, then double-click START.cmd in it"
 
 if ($Zip) {
   $zipPath = "$Out.zip"
   if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
-  # built-in bsdtar: zip format, so the company PC needs nothing extra to unpack it
+  # built-in bsdtar: zip format, so the managed PC needs nothing extra to unpack it
   $bsdtar = Join-Path $env:SystemRoot 'System32\tar.exe'   # not Git's GNU tar, which cannot write zip
   & $bsdtar -a -c -f $zipPath -C (Split-Path -Parent $Out) (Split-Path -Leaf $Out)
   if ($LASTEXITCODE -ne 0) { throw 'zip failed' }
   $zs = [math]::Round((Get-Item $zipPath).Length / 1GB, 1)
-  Write-Host "zip:  $zipPath (${zs}GB). company PC: C:\Windows\System32\tar.exe -xf <zip> -C C:\  then C:\$(Split-Path -Leaf $Out)\START.cmd"
+  Write-Host "zip:  $zipPath (${zs}GB). managed PC: C:\Windows\System32\tar.exe -xf <zip> -C C:\  then C:\$(Split-Path -Leaf $Out)\START.cmd"
 }

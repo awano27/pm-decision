@@ -143,8 +143,8 @@ if __name__ == "__main__":
 
 
 class TestCheckRunsIgnoreTheRest(unittest.TestCase):
-    def test_company_check_resets_the_rest_before_a_deliberate_attempt(self):
-        text = (SCRIPT.parent / "company-check.ps1").read_text(encoding="utf-8-sig")
+    def test_managed_check_resets_the_rest_before_a_deliberate_attempt(self):
+        text = (SCRIPT.parent / "check.ps1").read_text(encoding="utf-8-sig")
         i = text.index("# ---- T18:")
         self.assertIn("KIMERU_M365_NO_REST", text[i:i + 3000])
         self.assertIn("m365-auto.json", text[i:i + 3000])

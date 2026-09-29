@@ -10,7 +10,7 @@
 
 | 経路 | 行き先 | 必要なもの |
 |---|---|---|
-| `teams_webhook` | あなたが Teams の Workflows で作った流れ（会社の Microsoft 365 の中） | Workflows の流れの URL |
+| `teams_webhook` | あなたが Teams の Workflows で作った流れ（組織の Microsoft 365 の中） | Workflows の流れの URL |
 | `webhook` | あなたが指定した URL | URL と、本文の形（必要なら） |
 | `outlook` | デスクトップ版の Outlook から、あなた自身へのメール | クラシック版の Outlook にサインイン済みであること |
 
@@ -66,10 +66,10 @@ python -m kimeru config set push_mail_to "<自分のメールアドレス>"
 - 投稿できなかった確認待ちがあるときは、その件数も通知に入ります（投稿できた分とは分けて数えます）。
 - URL は、環境変数だけで受け取ります。設定ファイルには書けません。記録・表示・エラー文にも出ません。
 
-## 試験（会社 PC）
+## 試験（管理された PC）
 
 ```powershell
-.\run-company-check.cmd T21
+.\run-check.cmd T21
 ```
 
 固定の試験の 1 行を送り、iPhone に届いたかどうかを聞かれます。

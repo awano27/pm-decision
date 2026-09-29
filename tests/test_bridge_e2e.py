@@ -1,6 +1,6 @@
 """End-to-end T9 path through the real PowerShellBridge and CLI, with a fake Teams.
 
-Covers what the company PC exercises except the Teams UI: PowerShell argument
+Covers what the managed PC exercises except the Teams UI: PowerShell argument
 passing of long Japanese multi-line posts, JSON round-trips, notify -> reply -> approvals.
 """
 import json
@@ -26,7 +26,7 @@ class TestBridgeE2E(unittest.TestCase):
         self.chat = self.dir / "chat.json"
         os.environ["KIMERU_FAKE_CHAT"] = str(self.chat)
         self.out = self.dir / "out"
-        # the same sample the company check uses: produces queue items with long Japanese advice
+        # the same sample the managed-PC check uses: produces queue items with long Japanese advice
         r = subprocess.run([sys.executable, "-m", "kimeru", "--out", str(self.out), "run",
                             str(ROOT / "examples" / "meeting_minutes.json")], cwd=ROOT, capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stderr)

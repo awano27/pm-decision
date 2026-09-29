@@ -22,6 +22,8 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from . import fsutil
+
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"   # Azure DevOps
 ARM_RESOURCE = "https://management.azure.com/"
 ADO_FIELDS = ["System.Id", "System.WorkItemType", "System.Title", "System.AreaPath", "System.CreatedBy",
@@ -126,14 +128,14 @@ def http_json(method, url, token, body=None, retries=3):
 class State:
     def __init__(self, out):
         self.path = Path(out) / "pull_state.json"
-        self.data = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
+        self.data = fsutil.read_json(self.path, {})
 
     def section(self, name):
         return self.data.setdefault(name, {"since": None, "seen": []})
 
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.data, ensure_ascii=False, indent=1), encoding="utf-8")
+        fsutil.write_atomic(self.path, json.dumps(self.data, ensure_ascii=False, indent=1))
 
 
 def _iso(dt):

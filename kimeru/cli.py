@@ -159,6 +159,8 @@ def main(argv=None):
     p_s.add_argument("--extra", default="", help="extra args for daily, e.g. \"--subscription s\"")
     p_s.add_argument("--ado-org", default="")
     p_s.add_argument("--ado-project", default="")
+    p_r = sub.add_parser("retry", help="put inbox/done/*.error files back into the inbox (after fixing what parked them)")
+    p_r.add_argument("--inbox", default="inbox")
     p_p = sub.add_parser("pull", help="poll ADO / Azure Monitor with your az login into an inbox")
     p_p.add_argument("source", choices=["ado", "alerts", "teams"])
     p_p.add_argument("--include-existing", action="store_true", help="teams: also emit chats already on screen at the first poll")
@@ -172,6 +174,12 @@ def main(argv=None):
 
     if a.cmd == "schedule":
         return schedule(a)
+
+    if a.cmd == "retry":
+        from . import daily
+        n = daily.retry_errors(a.inbox)
+        print(f"retry: {n} file(s) moved back to {a.inbox}")
+        return 0
 
     if a.cmd == "pull":
         from . import pull
@@ -276,7 +284,8 @@ def main(argv=None):
                             subscription=a.subscription, brief_hour=a.brief_hour)
             print(datetime.now().strftime("%H:%M"), json.dumps(r, ensure_ascii=False), flush=True)
             if a.once:   # non-zero when a step failed, so Task Scheduler's "last result" shows it
-                return 1 if any(isinstance(v, str) and v.startswith("error:") for v in r.values()) else 0
+                failed = any(isinstance(v, str) and v.startswith("error:") for v in r.values())
+                return 1 if failed or r.get("waiting") else 0
             time.sleep(a.interval)
     if a.cmd == "run":
         for f in a.files:

@@ -10,7 +10,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from . import actions, brief as brief_mod, events, graph, notify, pull
+from . import actions, brief as brief_mod, events, fsutil, graph, notify, pull
 from .backends import BackendUnavailable
 
 
@@ -41,6 +41,19 @@ def _with_key_points(text):
     if not points:
         return text
     return "\n".join([head, "今日の要点（Copilot）:"] + [f"・{p}" for p in points] + rest)
+
+
+def retry_errors(inbox):
+    """Move inbox/done/*.error back into the inbox (decided events are skipped by dedup). Returns the count."""
+    inbox = Path(inbox)
+    n = 0
+    for f in sorted((inbox / "done").glob("*.error")) if (inbox / "done").exists() else []:
+        target = inbox / f.name[: -len(".error")]
+        if target.exists():
+            continue
+        f.replace(target)
+        n += 1
+    return n
 
 
 def process_inbox(inbox, out, graphs, backend, playbooks, process):
@@ -80,25 +93,46 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
     _step(out, "judge", lambda: process_inbox(inbox, out, graphs, backend, playbooks, process), r)
     _step(out, "notify", lambda: notify.notify(out, bridge, send=send), r)
     _step(out, "notices", lambda: len(notify.notify_notices(out, bridge, send=send)), r)
-    posted = r["notify"] if isinstance(r.get("notify"), list) else []
-    notices = r["notices"] if isinstance(r.get("notices"), int) else 0
-    if send and toaster and (posted or notices):
-        # self-chat posts never notify the PM's own devices: a Windows notification on this PC does
-        _step(out, "toast", lambda: toaster(*notify.toast_text(out, posted, notices)), r)
-    _step(out, "approvals", lambda: [f"#{c['id']}:{c['status']}" for c in notify.collect(out, bridge)], r)
+    r["waiting"] = len(events.inbox_files(Path(inbox)))   # files the judge could not take (down / overloaded)
+    if send and toaster:
+        # self-chat posts never notify the PM's own devices: a Windows notification on this PC does. It is built
+        # from what is posted and not yet announced, so a failure on item 2 never loses the announcement of item 1
+        nums, keys = notify.untoasted(out)
+        if nums or keys:
+            def do_toast():
+                try:
+                    toaster(*notify.toast_text(out, nums, len(keys)))
+                except Exception as e:   # a missing notification must not turn the cycle into a failure
+                    return f"failed: {type(e).__name__}: {str(e)[:120]}"
+                notify.mark_toasted(out, nums, keys)
+                return "shown"
+            _step(out, "toast", do_toast, r)
+    changes = []
+
+    def do_collect():
+        changes.extend(notify.collect(out, bridge))
+        return [f"#{c['id']}:{c['status']}" for c in changes]
+    _step(out, "approvals", do_collect, r)
+    if send and toaster and changes:
+        try:
+            toaster(*notify.ack_text(changes))
+        except Exception:
+            pass
 
     st_path = out / "daily_state.json"
-    st = json.loads(st_path.read_text(encoding="utf-8")) if st_path.exists() else {}
+    st = fsutil.read_json(st_path, {})
     today = now.strftime("%Y-%m-%d")
-    if now.hour >= brief_hour and st.get("brief_date") != today:
+    # while the judge is down the brief would say "nothing to do" and be final for the day: wait for it
+    if now.hour >= brief_hour and st.get("brief_date") != today and not r["waiting"]:
         def do_brief():
             text, ranked = brief_mod.build(out, backend, date=today)
-            text = _with_key_points(text)
+            if len(ranked) >= 2:   # a one-line day needs no summary, and an empty one must not invent one
+                text = _with_key_points(text)
             bridge.post(text, send)
             return len(ranked)
         _step(out, "brief", do_brief, r)
         if not str(r.get("brief", "")).startswith("error") and send:
             st["brief_date"] = today
-            st_path.write_text(json.dumps(st), encoding="utf-8")
+            fsutil.write_atomic(st_path, json.dumps(st))
     _log(out, {"step": "cycle", "report": r})
     return r

@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from kimeru import daily, events, graph, plan
-from kimeru.backends import StubBackend
+from kimeru.backends import BackendUnavailable, StubBackend
 from kimeru.cli import process
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -115,7 +115,7 @@ class TestToast(unittest.TestCase):
             r = run(datetime(2026, 9, 28, 7, 5))
             self.assertEqual(r["toast"], "shown")
             self.assertEqual(shown[-1][0], "kimeru: 確認待ち 1 件")
-            self.assertTrue(shown[-1][1].startswith("#1 "))
+            self.assertEqual(shown[-1][1], "#1")                          # counts and numbers, no message text
             run(datetime(2026, 9, 28, 7, 10))
             self.assertEqual(len(shown), 1)                               # once per new post
 
@@ -124,6 +124,89 @@ class TestToast(unittest.TestCase):
             r = daily.cycle(Path(d) / "out", Path(d) / "inbox", GRAPHS, StubBackend(), PBS, process,
                             bridge=FakeTeams(), send=True, now=datetime(2026, 9, 28, 7, 0))
             self.assertNotIn("toast", r)
+
+
+class TestKnownIssues(unittest.TestCase):
+    def cycle(self, d, t, backend=None, now=datetime(2026, 9, 28, 9, 0), toaster=None, inbox=None):
+        return daily.cycle(Path(d) / "out", inbox or Path(d) / "inbox", GRAPHS, backend or StubBackend(), PBS, process,
+                           bridge=t, send=True, now=now, toaster=toaster)
+
+    def test_toast_survives_a_failed_second_post(self):
+        shown = []
+        with tempfile.TemporaryDirectory() as d:
+            t = FakeTeams()
+            inbox = Path(d) / "inbox"
+            inbox.mkdir()
+            for i, txt in enumerate(("これは何ですか", "あれは何ですか")):
+                (inbox / f"m{i}.json").write_text(json.dumps({"id": f"m{i}", "chatId": "19:c", "createdDateTime": "2026-09-28T08:00:00Z",
+                                                            "from": {"user": {"displayName": "X"}}, "body": {"contentType": "text", "content": txt}}), encoding="utf-8")
+            calls = {"n": 0}
+            orig = t.post
+
+            def flaky(text, send):
+                calls["n"] += 1
+                if calls["n"] == 2:
+                    raise RuntimeError("compose box busy")
+                return orig(text, send)
+            t.post = flaky
+            r = self.cycle(d, t, toaster=lambda a, b: shown.append((a, b)))
+            self.assertTrue(str(r["notify"]).startswith("error"))          # #2 failed after #1 was posted ...
+            self.assertEqual(shown[-1], ("kimeru: 確認待ち 1 件", "#1"))       # ... and #1 is still announced
+            t.post = orig
+            r = self.cycle(d, t, toaster=lambda a, b: shown.append((a, b)), now=datetime(2026, 9, 28, 9, 5))
+            self.assertEqual(shown[-1], ("kimeru: 確認待ち 1 件", "#2"))       # only the new one, once
+
+    def test_failing_toast_is_not_a_failed_cycle(self):
+        def boom(a, b):
+            raise RuntimeError("no toast")
+        with tempfile.TemporaryDirectory() as d:
+            t = FakeTeams()
+            t.chat_list = [one_on_one("おはようございます", "8:00")]
+            self.cycle(d, t, toaster=boom, now=datetime(2026, 9, 28, 7, 0))
+            t.chat_list = [one_on_one("これは何ですか", "8:05")]
+            r = self.cycle(d, t, toaster=boom, now=datetime(2026, 9, 28, 7, 5))
+            self.assertTrue(r["toast"].startswith("failed:"))
+            self.assertFalse(any(isinstance(v, str) and v.startswith("error:") for v in r.values()))
+
+    def test_replies_are_acknowledged_on_the_pc(self):
+        shown = []
+        with tempfile.TemporaryDirectory() as d:
+            t = FakeTeams()
+            t.chat_list = [one_on_one("おはようございます", "8:00")]
+            self.cycle(d, t, toaster=lambda a, b: shown.append((a, b)), now=datetime(2026, 9, 28, 7, 0))
+            t.chat_list = [one_on_one("これは何ですか", "8:05")]
+            self.cycle(d, t, toaster=lambda a, b: shown.append((a, b)), now=datetime(2026, 9, 28, 7, 5))
+            t.timeline.append("R:OK 1。")                                    # a full stop after the number
+            self.cycle(d, t, toaster=lambda a, b: shown.append((a, b)), now=datetime(2026, 9, 28, 7, 10))
+            self.assertEqual(shown[-1], ("kimeru: 返事を受け付けました", "#1 承認"))
+
+    def test_brief_waits_while_the_judge_is_down(self):
+        class Down(StubBackend):
+            def ask(self, state, questions):
+                raise BackendUnavailable("Kev not reachable")
+        with tempfile.TemporaryDirectory() as d:
+            t = FakeTeams()
+            inbox = Path(d) / "inbox"
+            inbox.mkdir()
+            (inbox / "m.json").write_text(json.dumps({"id": "m1", "chatId": "19:c", "createdDateTime": "2026-09-28T08:00:00Z",
+                                                    "from": {"user": {"displayName": "X"}}, "body": {"contentType": "text", "content": "これは何ですか"}}), encoding="utf-8")
+            r = self.cycle(d, t, backend=Down())
+            self.assertEqual(r["waiting"], 1)
+            self.assertNotIn("brief", r)                                       # not final for the day
+            r = self.cycle(d, t, now=datetime(2026, 9, 28, 9, 5))             # judge is back
+            self.assertEqual(r["waiting"], 0)
+            self.assertIn("brief", r)
+
+    def test_retry_puts_parked_files_back(self):
+        with tempfile.TemporaryDirectory() as d:
+            inbox = Path(d)
+            (inbox / "done").mkdir()
+            (inbox / "done" / "a.json.error").write_text("{}", encoding="utf-8")
+            (inbox / "done" / "b.json.error").write_text("{}", encoding="utf-8")
+            (inbox / "b.json").write_text("{}", encoding="utf-8")            # already there: not overwritten
+            self.assertEqual(daily.retry_errors(inbox), 1)
+            self.assertTrue((inbox / "a.json").exists())
+            self.assertTrue((inbox / "done" / "b.json.error").exists())
 
 
 class TestTextMinutes(unittest.TestCase):

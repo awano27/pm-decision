@@ -182,3 +182,23 @@ class TestAdviseNotExecuted(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestAtomicState(unittest.TestCase):
+    def test_a_damaged_approvals_file_recovers_from_the_backup(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_queue(d, REC)
+            notify.notify(d, FakeBridge(), send=True)
+            ap = Path(d) / "approvals.json"
+            notify.Approvals(d).save()                                   # second save leaves the first as .bak
+            ap.write_text('{"next": 2, "items": {"1": {', encoding="utf-8")   # a crash in the middle of a write
+            data = notify.Approvals(d).data
+            self.assertEqual(data["next"], 2)
+            self.assertIn("1", data["items"])
+            ap.write_text("garbage", encoding="utf-8")
+            (Path(d) / "approvals.json.bak").write_text("garbage", encoding="utf-8")
+            self.assertEqual(notify.Approvals(d).data, {"next": 1, "items": {}})   # nothing readable: start clean, no crash
+
+    def test_reply_with_trailing_full_stop_is_understood(self):
+        self.assertEqual(notify.parse_reply("OK 3。"), ("OK", "3"))
+        self.assertEqual(notify.parse_reply("ＯＫ　３！"), ("OK", "3"))
+        self.assertIsNone(notify.parse_reply("OK 3 4"))

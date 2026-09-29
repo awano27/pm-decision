@@ -13,11 +13,11 @@ import subprocess
 import unicodedata
 from pathlib import Path
 
-from . import actions
+from . import actions, fsutil
 from . import writer as writer_mod
 
 HERE = Path(__file__).resolve().parent.parent
-REPLY = re.compile(r"^(OK|NG|保留|聞き返し)\s*#?(\d+)$", re.IGNORECASE)
+REPLY = re.compile(r"^(OK|NG|保留|聞き返し)\s*#?(\d+)\s*[.。!！]*$", re.IGNORECASE)
 REDRAFT = re.compile(r"^修正\s*#?(\d+)\s*[:：]?\s*(\S.*)$")
 
 
@@ -125,11 +125,11 @@ def format_post(n, rec):
 class Approvals:
     def __init__(self, out):
         self.path = Path(out) / "approvals.json"
-        self.data = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {"next": 1, "items": {}}
+        self.data = fsutil.read_json(self.path, {"next": 1, "items": {}})
 
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.data, ensure_ascii=False, indent=1), encoding="utf-8")
+        fsutil.write_atomic(self.path, json.dumps(self.data, ensure_ascii=False, indent=1))
 
     def known(self, key):
         return any(it["key"] == key for it in self.data["items"].values())
@@ -145,21 +145,49 @@ def _key(rec):
     return f"{rec.get('graph')}:{rec.get('event_id')}:{rec.get('node')}"
 
 
-def toast_text(out, posted, notices):
-    """Title and body for the PC notification: counts, plus the first item's short summary."""
+def untoasted(out):
+    """(numbers of pending items posted but not yet announced on the PC, notice keys likewise)."""
     ap = Approvals(out)
+    nums = [int(n) for n, it in ap.data["items"].items()
+            if it["posted"] and it["status"] in ("pending", "held") and not it.get("toasted")]
+    seen = set(ap.data.get("notices_toasted", []))
+    return sorted(nums), [k for k in ap.data.get("notices", []) if k not in seen]
+
+
+def mark_toasted(out, nums, notice_keys):
+    ap = Approvals(out)
+    for n in nums:
+        if str(n) in ap.data["items"]:
+            ap.data["items"][str(n)]["toasted"] = True
+    if notice_keys:
+        ap.data["notices_toasted"] = list(ap.data.get("notices_toasted", [])) + list(notice_keys)
+    ap.save()
+
+
+def toast_text(out, posted, notices):
+    """Title and body for the PC notification. Counts and numbers only; KIMERU_TOAST=detail adds the
+    first item's one-line summary."""
+    import os
     parts = []
     if posted:
         parts.append(f"確認待ち {len(posted)} 件")
     if notices:
         parts.append(f"自動決定の通知 {notices} 件")
-    first = ap.data["items"].get(str(posted[0])) if posted else None
-    what = ""
-    if first:
-        rec = first["record"]
-        what = f"#{posted[0]} " + str(rec.get("summary") or rec.get("advice") or rec.get("graph") or "")[:60]
-    body = (what + (f" ほか {len(posted) - 1} 件" if len(posted) > 1 else "")).strip() or "Teams の自分とのチャットを確認してください"
+    body = ("#" + ", #".join(str(n) for n in posted[:5]) if posted else "") or "Teams の自分とのチャットを確認してください"
+    if os.environ.get("KIMERU_TOAST") == "detail" and posted:
+        rec = (Approvals(out).data["items"].get(str(posted[0])) or {}).get("record", {})
+        body += " " + str(rec.get("summary") or rec.get("advice") or rec.get("graph") or "")[:60]
     return "kimeru: " + " / ".join(parts), body
+
+
+ACK = {"approved": "承認", "rejected": "却下", "held": "保留", "ask_back": "聞き返し",
+       "redrafted": "書き直し", "redraft_failed": "書き直せず"}
+
+
+def ack_text(changes):
+    """One PC notification line for the replies just applied (a reply is never silently swallowed)."""
+    parts = [f"#{c['id']} {ACK.get(c['status'], c['status'])}" for c in changes]
+    return "kimeru: 返事を受け付けました", " / ".join(parts[:6]) + (f" ほか {len(parts) - 6} 件" if len(parts) > 6 else "")
 
 
 def show_toast(title, body):
@@ -230,7 +258,7 @@ def notify(out, bridge, send=False):
             if send and (r.get("typed") is False or r.get("sent") is False):
                 raise RuntimeError(f"#{n} was not posted as planned: {r}")   # stays unposted; retried next cycle
             if send:
-                it["posted"] = True
+                it["posted"], it["toasted"] = True, False
                 ap.save()  # a failure on a later item must not forget what was already sent
             posted.append(int(n))
         if req and not it.get("request_posted"):   # its own message: one long-press copies just this

@@ -75,6 +75,34 @@ function Get-Entries($w) {
   @(Find-All $w $CT::TreeItem) + @(Find-All $w $CT::ListItem) + @(Find-All $w $CT::Button) + @(Find-All $w $CT::TabItem) |
     Where-Object { $_.Current.Name -match $COPILOT }
 }
+$BOXRX = 'Copilot\s*(に|へ)\s*(メッセージ|質問)|Message Copilot|Ask Copilot'
+function Test-FocusOn($rect) {
+  # keyboard focus is on an editable element (not the whole page) that sits inside the composer's region
+  try {
+    $f = $A::FocusedElement
+    $fr = $f.Current.BoundingRectangle
+    $wr = (Get-TeamsWindow).Current.BoundingRectangle
+    $editable = ($f.Current.ControlType -eq $CT::Edit) -or ($f.Current.ControlType -eq $CT::Document -and $f.Current.IsKeyboardFocusable)
+    return ($editable -and $fr.Width -gt 0 -and $fr.Height -lt ($wr.Height * 0.7) -and $rect.IntersectsWith($fr))
+  } catch { return $false }
+}
+function Focus-Box($b) {
+  # never throws: a placeholder (Text) cannot take focus itself, so click it and check where the focus went
+  try { $b.SetFocus() } catch {}
+  Start-Sleep -Milliseconds 200
+  if (Test-FocusOn $script:BoxRect) { return $true }
+  [void](Click $b); Start-Sleep -Milliseconds 300
+  Test-FocusOn $script:BoxRect
+}
+function Read-Box($b) {
+  # the box's own text, or, when the box is only the placeholder, the text of the editor that has the focus in its place
+  $t = ''
+  try { if ($b.Current.ControlType -eq $CT::Edit) { $t = Get-BoxText $b } } catch {}
+  if (-not $t -or $t.Trim().Length -eq 0) {
+    try { if (Test-FocusOn $script:BoxRect) { $t = Get-BoxText ($A::FocusedElement) } } catch {}
+  }
+  [string]$t
+}
 function Find-Box($w, [switch]$Strict) {
   # 1) the usual compose box id or a name that says so; 2) else the lowest editable field in the window
   #    (the compose box sits at the bottom of the pane); 3) else the lowest focusable document
@@ -82,11 +110,24 @@ function Find-Box($w, [switch]$Strict) {
   if ($Strict -or $Action -eq 'ask') {
     # writes: exactly ONE compose-like box may exist in the window. Two (a side chat panel, a meeting chat next to
     # Copilot) or a guess by position could put the request into somebody else's chat, so no guessing here
-    $c = @($edits | Where-Object { $_.Current.BoundingRectangle.Width -gt 0 -and $_.Current.Name -match 'Copilot\s*(に|へ)\s*(メッセージ|質問)|Message Copilot|Ask Copilot' })   # the box's OWN name says Copilot. Ids and the plain placeholder "メッセージを入力" belong to every chat (a meeting chat got a request that way); the top search box says "Copilot で検索..." and does not match
+    $c = @($edits | Where-Object { $_.Current.BoundingRectangle.Width -gt 0 -and $_.Current.Name -match $BOXRX })   # the box's OWN name says Copilot. Ids and the plain placeholder "メッセージを入力" belong to every chat (a meeting chat got a request that way); the top search box says "Copilot で検索..." and does not match
     $script:BoxCandidates = $c.Count
     $mk = { param($x) ([string]$x) -replace '[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){0,4}', '<id>' -replace '\d+', 'N' }
     $script:EditShapes = (@($edits | Where-Object { $_.Current.BoundingRectangle.Width -gt 0 } | Select-Object -First 6 | ForEach-Object { "$(& $mk $_.Current.AutomationId):len$($_.Current.Name.Length)" }) -join ';')
+    if ($c.Count -eq 0) {
+      # the Copilot page may not expose its composer as an Edit: take any visible element whose own name says Copilot
+      # (the placeholder or the editor), one composer showing as nested elements counted once
+      $all = @($w.FindAll('Descendants', [System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
+        $r = $_.Current.BoundingRectangle
+        $r.Width -gt 0 -and $r.Height -gt 0 -and $_.Current.Name -match $BOXRX -and
+        ($_.Current.ControlType -in @($CT::Edit, $CT::Document, $CT::Group, $CT::Text, $CT::Custom, $CT::Pane)) })
+      $keep = @()
+      foreach ($e in $all) { $r = $e.Current.BoundingRectangle; if (-not @($keep | Where-Object { $_.Current.BoundingRectangle.IntersectsWith($r) }).Count) { $keep += $e } }
+      $c = $keep
+      $script:BoxCandidates = $c.Count
+    }
     if ($c.Count -ne 1) { return $null }
+    $script:BoxRect = $c[0].Current.BoundingRectangle
     return $c[0]
   }
   $b = $edits | Where-Object { $_.Current.AutomationId -like 'new-message-*' -or $_.Current.Name -match 'Copilot|メッセージ|message|質問|Ask' } | Select-Object -First 1
@@ -183,7 +224,9 @@ function Get-Diag($w) {
     $tabs = @(Find-All $w $CT::TabItem | Where-Object { $_.Current.BoundingRectangle.Width -gt 0 }).Count
     $ent = @(Get-Entries $w)
     $ed = @(Find-All $w $CT::Edit | Where-Object { $_.Current.BoundingRectangle.Width -gt 0 }).Count
-    "diag: rows=$($rows.Count) selected=$sel selectedCopilot=$selCop tabItems=$tabs copilotEntries=$($ent.Count) visibleEdits=$ed"
+    $an = @($w.FindAll('Descendants', [System.Windows.Automation.Condition]::TrueCondition) | Where-Object { $_.Current.BoundingRectangle.Width -gt 0 -and $_.Current.Name -match $BOXRX } | Select-Object -First 5 | ForEach-Object { ($_.Current.ControlType.ProgrammaticName -replace '^ControlType\.', '') + '/foc=' + $_.Current.IsKeyboardFocusable + '/w=' + [int]$_.Current.BoundingRectangle.Width })
+    $fe = ''; try { $f = $A::FocusedElement; $fe = ($f.Current.ControlType.ProgrammaticName -replace '^ControlType\.', '') + '/w=' + [int]$f.Current.BoundingRectangle.Width } catch {}
+    "diag: anchors=[$($an -join ',')] focused=$fe rows=$($rows.Count) selected=$sel selectedCopilot=$selCop tabItems=$tabs copilotEntries=$($ent.Count) visibleEdits=$ed"
   } catch { 'diag: n/a' }
 }
 
@@ -220,17 +263,19 @@ Show-CopilotPane $w
 $w = Get-TeamsWindow
 $box = Get-Box $w
 # an empty web editor still reads as one invisible character (zero-width space, line break): Squash drops them
-$cur = Get-BoxText $box
+$cur = Read-Box $box
 $sq = Squash $cur
 $phq = Squash ([string]$box.Current.Name)
 if ($sq.Length -gt 2 -and $sq -ne $phq) {
   # (two characters or fewer is an editor artifact, never a draft)
   # text left by our own earlier run may be cleared; anything else could be the person's draft: leave it
   if ($sq.StartsWith('あなたはプロジェクトマネージャーの下書き係')) {   # Squash: an invisible first character (U+FFFC, zero-width) defeats a plain Trim()
-    Assert-Foreground $w; $box.SetFocus(); Start-Sleep -Milliseconds 150; Assert-Foreground $w
+    Assert-Foreground $w
+    if (-not (Focus-Box $box)) { Fail 'the keyboard focus is not in the Copilot compose box; nothing deleted' }
+    Assert-Foreground $w
     [System.Windows.Forms.SendKeys]::SendWait('^a'); Start-Sleep -Milliseconds 100
     [System.Windows.Forms.SendKeys]::SendWait('{DEL}'); Start-Sleep -Milliseconds 300
-    $sq = Squash (Get-BoxText (Get-Box $w))
+    $sq = Squash (Read-Box $box)
   }
   if ($sq.Length -gt 2 -and $sq -ne $phq) {
     # lengths only, never the text
@@ -245,37 +290,37 @@ try { $saved = [System.Windows.Forms.Clipboard]::GetText() } catch {}
 try {
   [System.Windows.Forms.Clipboard]::SetText($prompt)
   Assert-Foreground $w
-  $box = Get-Box $w; $box.SetFocus(); Start-Sleep -Milliseconds 200; [void](Click $box); Start-Sleep -Milliseconds 200
+  $box = Get-Box $w
+  if (-not (Focus-Box $box)) { Fail 'the keyboard focus is not in the Copilot compose box; nothing pasted' }
   Assert-Foreground $w
   [System.Windows.Forms.SendKeys]::SendWait('^v'); Start-Sleep -Milliseconds 500
 } finally {
   if ($saved) { [System.Windows.Forms.Clipboard]::SetText($saved) } else { [System.Windows.Forms.Clipboard]::Clear() }
 }
-$box = Get-Box $w
-if ((Squash (Get-BoxText $box)) -ne (Squash $prompt)) {
-  Assert-Foreground $w; $box.SetFocus(); [System.Windows.Forms.SendKeys]::SendWait('^a'); [System.Windows.Forms.SendKeys]::SendWait('{DEL}')
+if ((Squash (Read-Box $box)) -ne (Squash $prompt)) {
+  Assert-Foreground $w; if (Focus-Box $box) { [System.Windows.Forms.SendKeys]::SendWait('^a'); [System.Windows.Forms.SendKeys]::SendWait('{DEL}') }
   Fail 'the Copilot compose box did not hold exactly the prompt; removed it, nothing sent'
 }
 if (-not (Test-CopilotOpen (Get-TeamsWindow))) { Fail 'window changed before send; aborted' }
 $why = Test-CopilotPane (Get-TeamsWindow)
 if ($why) {
-  Assert-Foreground $w; $box.SetFocus(); [System.Windows.Forms.SendKeys]::SendWait('^a'); [System.Windows.Forms.SendKeys]::SendWait('{DEL}')
+  Assert-Foreground $w; if (Focus-Box $box) { [System.Windows.Forms.SendKeys]::SendWait('^a'); [System.Windows.Forms.SendKeys]::SendWait('{DEL}') }
   Fail "not the Copilot chat ($why); removed the pasted text, nothing sent"
 }
 $btn = Find-All $w $CT::Button | Where-Object { $_.Current.Name -match '^(送信|Send)(\s*\(|$)' -and $_.Current.IsEnabled } | Select-Object -First 1
 if ($btn) { try { $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch { $btn = $null } }
-if (-not $btn) { Assert-Foreground $w; $box.SetFocus(); [System.Windows.Forms.SendKeys]::SendWait('{ENTER}') }
+if (-not $btn) { Assert-Foreground $w; if (-not (Focus-Box $box)) { Fail 'the keyboard focus left the Copilot compose box; nothing sent' }; [System.Windows.Forms.SendKeys]::SendWait('{ENTER}') }
 # the request must actually leave the box; if it is still there after a moment, press Enter once more, and
 # if it still is, remove our own text (a stuck prompt would block every later run) and stop
 $sent = $false
 foreach ($try in 1..3) {
   Start-Sleep -Milliseconds 1500
-  $left = Squash (Get-BoxText (Get-Box $w))
+  $left = Squash (Read-Box $box)
   if ($left.Length -le 2 -or $left -eq $phq -or -not $prompt.StartsWith($left.Substring(0, [Math]::Min(20, $left.Length)))) { $sent = $true; break }
-  if ($try -lt 3) { Assert-Foreground $w; (Get-Box $w).SetFocus(); [System.Windows.Forms.SendKeys]::SendWait('{ENTER}') }
+  if ($try -lt 3) { Assert-Foreground $w; if (Focus-Box $box) { [System.Windows.Forms.SendKeys]::SendWait('{ENTER}') } }
 }
 if (-not $sent) {
-  Assert-Foreground $w; $bx = Get-Box $w; $bx.SetFocus(); [System.Windows.Forms.SendKeys]::SendWait('^a'); [System.Windows.Forms.SendKeys]::SendWait('{DEL}')
+  Assert-Foreground $w; if (Focus-Box $box) { [System.Windows.Forms.SendKeys]::SendWait('^a'); [System.Windows.Forms.SendKeys]::SendWait('{DEL}') }
   Fail 'the request stayed in the Copilot compose box (send button / Enter did not send it); removed it'
 }
 

@@ -44,15 +44,45 @@ kimeru は、この判断を **グラフ（JSON）** として書き出し、判
 - 外部への書き込みは **既定で記録のみ**（実行は、設定した種類だけ・承認のあと）
 
 ```mermaid
-flowchart LR
-    E([💬 Teams<br/>🚨 アラート<br/>🎫 DevOps<br/>📝 議事録]) --> M{規則<br/>重大事象}
-    M -- 重大 --> P1[当番呼び出し・P1<br/>＋ 通知]
-    M -- それ以外 --> J{判断モデル<br/>Kev / Jev}
-    J -- 確信あり --> PL[進め方の型<br/>手順と期限]
-    PL --> W[✍ LLM が<br/>文面とメモを下書き]
-    J -- 迷った --> W
-    W --> A[🙋 自分宛てチャットで承認<br/>OK / NG / 修正 / 聞き返し]
-    A --> D[✅ 記録]
+flowchart TB
+    subgraph IN["① 届く"]
+      direction LR
+      T["💬 Teams"]
+      AL["🚨 アラート"]
+      DV["🎫 DevOps"]
+      MN["📝 議事録"]
+    end
+    subgraph JU["② 判断する"]
+      direction TB
+      RU{"規則<br/>重大事象か？"}
+      MO{"判断モデル<br/>Kev / Jev"}
+      PB["進め方の型<br/>手順と期限"]
+    end
+    subgraph OUT["③ 用意する"]
+      direction TB
+      CR["🔔 当番呼び出し・P1<br/>＋ 通知"]
+      WR["✍ LLM が文面とメモを下書き"]
+    end
+    subgraph AP["④ 決める"]
+      direction TB
+      HU["🙋 承認<br/>OK / NG / 修正 / 聞き返し"]
+      RC["✅ 記録"]
+    end
+    IN --> RU
+    RU -- 重大 --> CR
+    RU -- それ以外 --> MO
+    MO -- 確信あり --> PB --> WR
+    MO -- 迷った --> WR
+    WR --> HU --> RC
+    CR --> RC
+    classDef inp fill:#e8f0fd,stroke:#36c,color:#123
+    classDef jud fill:#fdf3e0,stroke:#d90,color:#321
+    classDef mk fill:#eef7ee,stroke:#2a7,color:#132
+    classDef ap fill:#f3e8fd,stroke:#84c,color:#213
+    class T,AL,DV,MN inp
+    class RU,MO,PB jud
+    class CR,WR mk
+    class HU,RC ap
 ```
 
 > 判断モデルは **型付きの質問に確率で答えるだけ** で、文章は書きません。重大事象は規則が先に決め、モデルの評価が低くても人を呼びます。文面用の LLM を設定しなければ、文面は決まった定型文になります。
@@ -62,8 +92,8 @@ flowchart LR
 ### 3 段の安全網
 
 ```mermaid
-flowchart LR
-    A[イベント] --> B{{"① 規則<br/>重大事象を先に拾う"}}
+flowchart TB
+    A[📥 イベント] --> B{{"① 規則<br/>重大事象を先に拾う"}}
     B -- 該当 --> X([即決定 ＋ 通知])
     B -- 非該当 --> C{{"② 判断モデル<br/>確率で答える"}}
     C -- 確信 --> Y([自動で決定])

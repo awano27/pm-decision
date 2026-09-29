@@ -103,6 +103,18 @@ class TestScriptGuardsPresent(unittest.TestCase):
         self.assertIn("TextPattern", body)
         self.assertIn("ValuePattern", body)
 
+    def test_named_composer_is_identified_by_element_not_by_rectangle(self):
+        # after a long paste the composer grows and can scroll out of view (y = -562 on the real Teams): its old
+        # rectangle proves nothing, so the focus check compares the element itself
+        i = self.text.index("function Test-FocusOn")
+        body = self.text[i:i + 1600]
+        self.assertIn("GetRuntimeId", body)
+        self.assertLess(body.index("GetRuntimeId"), body.index("IntersectsWith"))
+
+    def test_clicks_stay_inside_the_teams_window(self):
+        i = self.text.index("function Click(")
+        self.assertIn("Contains($cx, $cy)", self.text[i:i + 900])
+
     def test_focus_trace_is_recorded(self):
         self.assertIn("Describe-Focus 'afterClick'", self.text)
 

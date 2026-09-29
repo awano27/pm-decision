@@ -113,6 +113,7 @@ function Click($el) {
   if ($r.Width -le 0) { return $false }
   $cx = [int]($r.X + [math]::Min(60, $r.Width / 2)); $cy = [int]($r.Y + $r.Height / 2)
   $script:LastClick = "$cx,$cy"
+  try { $wr = (Get-TeamsWindow).Current.BoundingRectangle; if (-not $wr.Contains($cx, $cy)) { $script:LastClick += ' (outside the window: not clicked)'; return $false } } catch {}
   [void][KC.W]::SetCursorPos($cx, $cy)
   [KC.W]::mouse_event(2, 0, 0, 0, 0); [KC.W]::mouse_event(4, 0, 0, 0, 0); $true
 }
@@ -140,7 +141,18 @@ function Get-Entries($w) {
 }
 $BOXRX = 'Copilot\s*(に|へ)\s*(メッセージ|質問)|Message Copilot|Ask Copilot'
 function Test-FocusOn($rect) {
-  # keyboard focus is on an editable element (not the whole page) that sits inside the composer's region
+  # keyboard focus is in the Copilot composer.
+  # Named composer (an Edit whose own name says Copilot): the focused element must BE that element (same runtime id), or
+  # carry the same automation id and a Copilot name. Its rectangle changes when a long text is pasted (it grows and can
+  # scroll out of view), so the rectangle proves nothing after the paste.
+  if ($script:BoxNamed -and $script:BoxEl) {
+    try {
+      $f = $A::FocusedElement
+      if ((($f.GetRuntimeId()) -join '.') -eq (($script:BoxEl.GetRuntimeId()) -join '.')) { return $true }
+      return ($f.Current.ControlType -eq $CT::Edit -and $script:BoxId -and $f.Current.AutomationId -eq $script:BoxId -and $f.Current.Name -match $BOXRX)
+    } catch { return $false }
+  }
+  # otherwise: an editable element (not the whole page) that sits inside the composer's region
   try {
     $f = $A::FocusedElement
     $fr = $f.Current.BoundingRectangle
@@ -227,6 +239,8 @@ function Find-Box($w, [switch]$Strict) {
     }
     if ($c.Count -ne 1) { return $null }
     $script:BoxRect = $c[0].Current.BoundingRectangle
+    $script:BoxEl = $c[0]
+    $script:BoxId = [string]$c[0].Current.AutomationId
     return $c[0]
   }
   $b = $edits | Where-Object { $_.Current.AutomationId -like 'new-message-*' -or $_.Current.Name -match 'Copilot|メッセージ|message|質問|Ask' } | Select-Object -First 1

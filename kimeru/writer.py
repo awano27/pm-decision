@@ -37,6 +37,19 @@ SYSTEM = (
     "PM の名前で送る文なので、定型文にない期限・件数・完了の約束をしないでください。"
     "作業項目の説明では題名を繰り返さないでください。"
     "自然な敬語で簡潔に書き、指定の JSON だけを出力します。"
+    + "\n\n" + "書き方の決まり（内容は必ず材料から。例の言葉を写さない）:\n"
+    "・全体を日本語で書く。英語のままにするのは、材料にある製品名・ID・値だけ（root cause は「根本原因」のように訳す）。\n"
+    "・定型文を言い換えるだけにしない。材料の具体的なもの（相手の名前、対象、数値、影響）を入れる。\n"
+    "・材料にない部署・役職・承認者・原因・期限・完了を足さない。分からないことは「確認します」と書く。\n"
+    "・「させていただきます」は 1 回まで（「確認いたしまして、ご連絡させていただきます」のように重ねず、「確認してご連絡します」と書く）。「ご依頼ありがとうございます」のような前置きは書かない。\n"
+    "・返信（teams.reply / ado.comment）: 1〜3 文。①受け取ったこと ②今わかっている状況か、PM がこれからすること ③相手に聞くべきことがあれば 1 つだけ。"
+    "相手の質問（例: 延期できるか）には、決められる根拠がないうちは「可否は〇〇を確認してからお返事します」と、何を待っているかを書く。\n"
+    "  良い例: 「延期の件、承知しました。QA の復旧見込みを確認できしだい、可否をお返事します。」（期限や時刻は、材料にあるときだけ書く）\n"
+    "  悪い例: 「ご依頼ありがとうございます。対応させていただきます。確認させていただきます。」（何を待っているか分からない）\n"
+    "・チャネル投稿（teams.post）: 1 行目は【種別】件名。続けて 何が起きたか／影響／今の対応（と、材料にあれば次の連絡）を短い文で。"
+    "英語の警告文は日本語にして、値はそのまま残す（例: 5xx エラー率 23%、10 分継続）。\n"
+    "・作業項目の説明（ado.create）: 動詞で始め、何が残れば完了かを 1 つ書く（2〜4 行。「〜が完了したら完了です」のように同じ言葉を繰り返さず、「比較表ができたら」「連絡が済んだら」のように成果や状態で書く）。題名の繰り返し、「予定してください」「発火」のような不自然な言い方をしない。\n"
+    "・memo の options は 1 案ごとに「案：利点／懸念」の形で、利点と懸念の両方を書く。summary と next は 1 文。"
 )
 
 FIELD = {"teams.reply": "text", "teams.post": "text", "ado.comment": "text", "ado.create": "description"}
@@ -279,7 +292,9 @@ def human_request(res, event, instruction=None):
         lines.append(f"{i}. 足りない情報があれば、送信者に聞き返す返信（3 文以内）")
     if instruction:
         lines.append(f"・直してほしい点: {instruction}")
-    lines += ["・1 件目の文面は、そのまま送れるよう、改行を入れず 1 つの段落で書いてください。",
+    lines += ["・全体を日本語で、そのまま送れる自然な業務の文面にしてください。「させていただきます」は 1 回まで、定型文の言い換えではなく、相手の名前・対象・数値など材料の具体的な内容を入れてください。",
+              "・材料にない部署・役職・承認者・原因・期限・完了は足さず、分からないことは「確認します」と書いてください。",
+              "・1 件目の文面は、そのまま送れるよう、改行を入れず 1 つの段落で書いてください。",
               "・" + GROUNDING + "参照したメールや会議は最後に件名で挙げてください。",
               "・書かれていない期限・件数・完了の約束はしないでください。"]
     return "\n".join(lines)
@@ -436,6 +451,71 @@ def strip_citations(v):
     return v
 
 
+AWKWARD = re.compile(r"発火|予定してください|ことを予定|幸いです|所存|お願い申し上げます|いたしまして")
+HUMBLE = re.compile(r"させていただ")
+CLAIM = re.compile(r"経営判断|経営層|役員|社長|上長の承認|承認を得(?:る|て)|承認済み|確定しました|完了しました|お約束|保証")
+ENGLISH_RUN = re.compile(r"(?<![A-Za-z0-9_-])[A-Za-z]{2,}(?:[ ,][A-Za-z]{2,}){2,}")
+POLISH_FIX = {
+    "awkward": "不自然・堅すぎる言い回し（発火、予定してください、「させていただきます」の重複など）を、普通の業務の日本語に直す",
+    "english": "英語のままの文や語を日本語にする（製品名・ID・値は残す）",
+    "copy": "定型文の言い換えではなく、材料の具体的な内容（名前・対象・数値・影響）を入れて書き直す",
+    "claim": "材料にない権限者・承認・完了の言及を削る",
+}
+
+
+def quality_flags(text, template, material):
+    """What is wrong with a draft as writing (not as safety): awkward / english / copy / claim / japanese."""
+    import difflib
+    flags = []
+    ja = len(re.findall(r"[ぁ-んァ-ヶー一-龠]", text))
+    en = len(re.findall(r"[A-Za-z]", text))
+    if ja + en and ja / (ja + en) < 0.5:
+        flags.append("japanese")
+    if ENGLISH_RUN.search(text):
+        flags.append("english")
+    if template and difflib.SequenceMatcher(None, text, template).ratio() >= 0.8:
+        flags.append("copy")
+    if AWKWARD.search(text) or len(HUMBLE.findall(text)) >= 2:
+        flags.append("awkward")
+    if [m for m in CLAIM.findall(text) if m not in material]:
+        flags.append("claim")
+    return flags
+
+
+def _polish(writer, res, event, d, todo, material):
+    """One second try for the texts that read badly (stiff, English, a copy of the template): the writer gets the exact
+    problems as a correction instruction, and a text is replaced only when the new one is better. CLI writers only:
+    the Teams route would paste into Copilot a second time."""
+    if getattr(writer, "NAME", "") not in ("copilot", "claude"):
+        return d
+    bad = {}
+    for key, a in todo:
+        text = d.get(key)
+        if isinstance(text, str) and text.strip():
+            fl = [f for f in quality_flags(text, a.get("template_text") or a.get(FIELD[a["type"]]) or "", material) if f in POLISH_FIX or f == "japanese"]
+            if fl:
+                bad[key] = fl
+    if not bad:
+        return d
+    fixes = sorted({POLISH_FIX.get(f, POLISH_FIX["english"]) for fl in bad.values() for f in fl})
+    instr = "次の文面だけを直してください（" + "、".join(sorted(bad)) + "）。直す点: " + "；".join(fixes) + "。他の文面はそのままで構いません。"
+    try:
+        d2 = writer.draft(res, event, instr)
+    except Exception:
+        return d
+    if not d2:
+        return d
+    out = dict(d)
+    for key, fl in bad.items():
+        new = d2.get(key)
+        if isinstance(new, str) and new.strip() and not unusable(new):
+            a = dict(todo)[key]
+            tpl = a.get("template_text") or a.get(FIELD[a["type"]]) or ""
+            if len(quality_flags(new, tpl, material)) < len(fl):
+                out[key] = new
+    return out
+
+
 def _item_text(x):
     """A list item as one line: a model may answer {"option": "延期", "note": "..."} instead of a string."""
     if isinstance(x, dict):
@@ -579,6 +659,8 @@ def apply(res, event, writer, instruction=None):
         src = [_item_text(x).strip()[:80] for x in d["sources"] if _item_text(x).strip()]
         if src:
             res["copilot_sources"] = src[:3]
+    if instruction is None:
+        d = _polish(writer, res, event, d, todo, material)
     drafted, refused = [], []
     for key, a in todo:
         text = d.get(key)

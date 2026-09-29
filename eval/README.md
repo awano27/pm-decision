@@ -62,3 +62,12 @@ Japanese PM questions it collapses score answers to the middle. Not used.
 - Do not put your own verdict into the state (e.g. a "（今日）" due label next to an item you ask to rank);
   Jev anchors on it.
 - When a label disagrees with Jev, re-read the question literally before "fixing" the question — the label may be wrong.
+
+## 文面の質（`draft_quality.py`）
+
+```bash
+python eval/draft_quality.py --backend stub --writer copilot --per-kind 3 --show
+python eval/draft_quality.py --fixtures fixtures_holdout.jsonl --per-kind 2
+```
+
+下書きごとに、日本語・英語の混入・定型文の複製・不自然な言い回し・材料にない権限者や完了・具体性・材料にない日付や数値を数えます（判定は LLM ではなく決まった規則なので、プロンプトの変更の前後で比べられます）。`--show` で、定型文と下書きを並べて読めます。最終的な確認は、読んで行ってください。

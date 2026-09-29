@@ -513,3 +513,65 @@ class TestFindExe(unittest.TestCase):
             (links / "copilot.exe").write_text("x")
             with mock.patch.dict(os.environ, {"LOCALAPPDATA": d, "APPDATA": d}), mock.patch("shutil.which", return_value=None):
                 self.assertEqual(writer.find_exe("copilot"), str(links / "copilot.exe"))
+
+
+class TestQualityFlags(unittest.TestCase):
+    MATERIAL = '{"text": "リリースは来週火曜にずらせますか", "author": "Sato"}'
+
+    def test_flags(self):
+        f = writer.quality_flags
+        self.assertEqual(f("延期の件、承知しました。QA の復旧見込みを確認してお返事します。", "受領しました。", self.MATERIAL), [])
+        self.assertIn("awkward", f("障害が発火しています。", "", self.MATERIAL))
+        self.assertIn("awkward", f("確認させていただきます。ご連絡させていただきます。", "", self.MATERIAL))
+        self.assertIn("english", f("error rate for 10 minutes と出ています。", "", self.MATERIAL))
+        self.assertIn("copy", f("受領しました。内容を確認して返信します。", "受領しました。内容を確認して返信します。", self.MATERIAL))
+        self.assertIn("claim", f("経営判断で延期が決まりました。", "", self.MATERIAL))
+        self.assertNotIn("claim", f("経営判断を仰ぎます。", "", '{"text": "経営判断が必要"}'))
+
+
+class PolishWriter:
+    """A CLI-style writer that first answers stiffly, then well when it is told what to fix."""
+    NAME = "copilot"
+
+    def __init__(self):
+        self.calls = []
+
+    def draft(self, res, event, instruction=None):
+        self.calls.append(instruction)
+        if instruction:
+            return {"a1": "延期の件、承知しました。QA の復旧見込みを確認してお返事します。",
+                    "memo": {"summary": "延期の可否を求められている", "next": "QA に復旧見込みを確認する"}}
+        return {"a1": "確認させていただきます。ご連絡させていただきます。",
+                "memo": {"summary": "延期の可否を求められている", "next": "QA に復旧見込みを確認する"}}
+
+
+class TestPolish(unittest.TestCase):
+    def res(self):
+        return {"actions": [{"type": "teams.reply", "to": "Sato", "text": "受領しました。"}]}
+
+    def test_a_stiff_draft_is_written_again_once_with_the_exact_problem(self):
+        w, res = PolishWriter(), self.res()
+        writer.apply(res, {"author": "Sato", "text": "リリースは来週火曜にずらせますか"}, w)
+        self.assertEqual(len(w.calls), 2)
+        self.assertIn("させていただきます", w.calls[1])
+        self.assertEqual(res["actions"][0]["text"], "延期の件、承知しました。QA の復旧見込みを確認してお返事します。")
+
+    def test_a_good_draft_is_not_written_twice(self):
+        class Good(PolishWriter):
+            def draft(self, res, event, instruction=None):
+                self.calls.append(instruction)
+                return {"a1": "延期の件、承知しました。QA の復旧見込みを確認してお返事します。"}
+        w = Good()
+        writer.apply(self.res(), {"author": "Sato", "text": "リリースは来週火曜にずらせますか"}, w)
+        self.assertEqual(len(w.calls), 1)
+
+    def test_an_instruction_from_the_pm_is_never_second_guessed(self):
+        w = PolishWriter()
+        writer.apply(self.res(), {"author": "Sato", "text": "x"}, w, "もっと短く")
+        self.assertEqual(len(w.calls), 1)
+
+    def test_the_teams_route_is_not_retried(self):
+        w = PolishWriter()
+        w.NAME = "m365-auto"
+        writer.apply(self.res(), {"author": "Sato", "text": "x"}, w)
+        self.assertEqual(len(w.calls), 1)

@@ -367,7 +367,7 @@ if ($uia -and $py -and (Want 'T18')) {
     $pr = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'teams-copilot.ps1') -Action probe 2>&1 | Out-String
     $pj = $null; try { $pj = $pr.Trim().TrimStart([char]0xFEFF) | ConvertFrom-Json } catch {}
     if (-not $pj -or -not $pj.ok -or -not $pj.strictCopilotBox -or $pj.paneCheck -ne 'ok') {
-      Rec 'T18' ("SKIP 送信せず: Copilot 専用の入力欄を特定できません 候補=$($pj.strictCandidates) pane=$($pj.paneCheck) title=$($pj.title) edits=[$(@($pj.edits) -join ';')]")
+      Rec 'T18' ("SKIP 送信せず: Copilot 専用の入力欄を特定できません 候補=$($pj.strictCandidates) pane=$($pj.paneCheck) $($pj.diag) title=$($pj.title) edits=[$(@($pj.edits) -join ';')]")
     } else { $go = $true }
   }
   if ($go) {

@@ -269,7 +269,7 @@ class M365AutoWriter(M365PromptWriter):
     NAME = "m365-auto"
     PROMPT_ONLY = False
 
-    def __init__(self, timeout=200, script=None):
+    def __init__(self, timeout=280, script=None):
         from pathlib import Path
         self.timeout = timeout
         self.script = script or str(Path(__file__).resolve().parent.parent / "tools" / "teams-copilot.ps1")
@@ -283,7 +283,8 @@ class M365AutoWriter(M365PromptWriter):
             with open(f, "w", encoding="utf-8-sig") as h:   # BOM: Windows PowerShell 5.1 reads it as UTF-8
                 h.write(prompt)
             r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", self.script,
-                                "-Action", "ask", "-PromptFile", f], capture_output=True, text=True,
+                                "-Action", "ask", "-PromptFile", f, "-TimeoutSec", str(max(60, self.timeout - 30))],
+                               capture_output=True, text=True,
                                encoding="utf-8", errors="replace", timeout=self.timeout,
                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         out = _parse(r.stdout) or {}

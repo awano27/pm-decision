@@ -15,7 +15,7 @@
 param(
   [Parameter(Mandatory = $true)][ValidateSet('probe', 'ask')][string]$Action,
   [string]$PromptFile = '',
-  [int]$TimeoutSec = 150
+  [int]$TimeoutSec = 240
 )
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
@@ -99,7 +99,7 @@ function Get-Box($w) {
   # few seconds before deciding there is no compose box (or more than one)
   $b = Find-Box $w
   for ($i = 0; -not $b -and $i -lt 10; $i++) { Start-Sleep -Seconds 1; $w2 = Get-TeamsWindow; if ($w2) { $b = Find-Box $w2 } }
-  if (-not $b) { Fail "compose box not found, or not the only one (candidates: $script:BoxCandidates; visible edits: $script:EditShapes); nothing pasted. Close side chat panels so only the Copilot chat is open" }
+  if (-not $b) { Fail "compose box not found, or not the only one (candidates: $script:BoxCandidates; visible edits: $script:EditShapes; $(Get-Diag (Get-TeamsWindow))); nothing pasted. Close side chat panels so only the Copilot chat is open" }
   $b
 }
 function Shape($s) {
@@ -161,12 +161,30 @@ function Show-CopilotPane($w) {
   # the window title can still say "Copilot" while another chat is on screen (seen on the real Teams): when the
   # pane check fails, select the Copilot row of the chat list (navigation only) and look again for a few seconds
   if (-not (Test-CopilotPane (Get-TeamsWindow))) { return }
-  foreach ($e in @((Get-Entries $w) | Where-Object { $_.Current.ControlType -in @($CT::TreeItem, $CT::ListItem) })) {
-    try { $e.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() } catch {
-      try { Assert-Foreground $w; [void](Click $e) } catch { continue }
+  foreach ($e in @((Get-Entries $w) | Where-Object { $_.Current.ControlType -in @($CT::TreeItem, $CT::ListItem, $CT::Button) })) {
+    foreach ($how in 'select', 'invoke', 'click') {
+      try {
+        switch ($how) {
+          'select' { $e.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() }
+          'invoke' { $e.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
+          'click' { Assert-Foreground $w; if (-not (Click $e)) { throw 'no rectangle' } }
+        }
+      } catch { continue }
+      for ($i = 0; $i -lt 10; $i++) { Start-Sleep -Milliseconds 500; if (-not (Test-CopilotPane (Get-TeamsWindow))) { return } }
     }
-    for ($i = 0; $i -lt 12; $i++) { Start-Sleep -Milliseconds 500; if (-not (Test-CopilotPane (Get-TeamsWindow))) { return } }
   }
+}
+function Get-Diag($w) {
+  # everything needed to judge a failed run in one go, and none of the text: counts, flags, masked ids
+  try {
+    $rows = @((Find-All $w $CT::TreeItem) + (Find-All $w $CT::ListItem) | Where-Object { $_.Current.BoundingRectangle.Width -gt 0 })
+    $sel = 0; $selCop = 0
+    foreach ($e in $rows) { try { if ($e.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected) { $sel++; if ($e.Current.Name -match $COPILOT) { $selCop++ } } } catch {} }
+    $tabs = @(Find-All $w $CT::TabItem | Where-Object { $_.Current.BoundingRectangle.Width -gt 0 }).Count
+    $ent = @(Get-Entries $w)
+    $ed = @(Find-All $w $CT::Edit | Where-Object { $_.Current.BoundingRectangle.Width -gt 0 }).Count
+    "diag: rows=$($rows.Count) selected=$sel selectedCopilot=$selCop tabItems=$tabs copilotEntries=$($ent.Count) visibleEdits=$ed"
+  } catch { 'diag: n/a' }
 }
 
 $w = Get-TeamsWindow
@@ -187,7 +205,7 @@ if ($Action -eq 'probe') {
   $docs = if ($opened) { @(Find-All $opened $CT::Document | Select-Object -First 5 | ForEach-Object { "Doc:$(& $mask $_.Current.AutomationId):focus=$($_.Current.IsKeyboardFocusable)" }) } else { @() }
   $btns = if ($opened) { @(Find-All $opened $CT::Button | Select-Object -First 30 | ForEach-Object { Shape $_.Current.Name }) } else { @() }
   Out-Json ([ordered]@{ ok = $true; entries = $entries.Count; entryTypes = $kinds; opened = [bool]$opened; title = $shape
-                        composeBox = [bool]$box; strictCopilotBox = [bool]$strictBox; paneCheck = $(if ($opened) { $x = Test-CopilotPane $opened; if ($x) { $x } else { 'ok' } } else { 'n/a' }); strictCandidates = $script:BoxCandidates; boxId = $(if ($box) { (& $mask $box.Current.AutomationId) } else { '' })
+                        composeBox = [bool]$box; diag = $(if ($opened) { Get-Diag $opened } else { '' }); strictCopilotBox = [bool]$strictBox; paneCheck = $(if ($opened) { $x = Test-CopilotPane $opened; if ($x) { $x } else { 'ok' } } else { 'n/a' }); strictCandidates = $script:BoxCandidates; boxId = $(if ($box) { (& $mask $box.Current.AutomationId) } else { '' })
                         sendButton = $send; edits = $edits; docs = $docs; buttons = $btns
                         boxTextLen = $(if ($box) { (Get-BoxText $box).Trim().Length } else { -1 }); boxNameLen = $(if ($box) { ([string]$box.Current.Name).Length } else { -1 }) })
   exit 0
@@ -220,7 +238,7 @@ if ($sq.Length -gt 2 -and $sq -ne $phq) {
   }
 }
 $why = Test-CopilotPane (Get-TeamsWindow)
-if ($why) { Fail "not the Copilot chat ($why); nothing pasted" }
+if ($why) { Fail "not the Copilot chat ($why; $(Get-Diag (Get-TeamsWindow))); nothing pasted" }
 $before = @(Get-Texts $w)
 $saved = $null
 try { $saved = [System.Windows.Forms.Clipboard]::GetText() } catch {}

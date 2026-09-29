@@ -575,3 +575,49 @@ class TestPolish(unittest.TestCase):
         w.NAME = "m365-auto"
         writer.apply(self.res(), {"author": "Sato", "text": "x"}, w)
         self.assertEqual(len(w.calls), 1)
+
+
+class TestCopilotQuota(unittest.TestCase):
+    """A monthly quota does not come back within hours: after the first quota error the CLI is not called again for a while."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.env = mock.patch.dict(os.environ, {"KIMERU_STATE_DIR": self.dir.name}, clear=False)
+        self.env.start()
+        os.environ.pop("KIMERU_WRITER_NO_REST", None)
+
+    def tearDown(self):
+        self.env.stop()
+        self.dir.cleanup()
+
+    def test_quota_error_starts_a_rest_and_later_calls_do_not_start_the_cli(self):
+        w = writer.CopilotWriter(exe="copilot-not-real")
+        calls = []
+
+        def quota(*a, **k):
+            calls.append(1)
+            raise RuntimeError("You have exceeded your monthly quota (Request ID: ABC)")
+
+        with mock.patch.object(writer, "_run", quota):
+            with self.assertRaises(RuntimeError) as first:
+                w.ask_text("x")
+            with self.assertRaises(RuntimeError) as second:
+                w.ask_text("x")
+        self.assertEqual(len(calls), 1)
+        self.assertIn("上限", str(first.exception))
+        self.assertIn("休止", str(second.exception))
+
+    def test_other_errors_do_not_start_a_rest(self):
+        w = writer.CopilotWriter(exe="copilot-not-real")
+        with mock.patch.object(writer, "_run", side_effect=RuntimeError("network unreachable")):
+            with self.assertRaises(RuntimeError):
+                w.ask_text("x")
+        self.assertEqual(writer._rest_left("writer-copilot.json"), 0)
+
+    def test_the_template_is_kept_and_the_reason_is_shown(self):
+        w = writer.CopilotWriter(exe="copilot-not-real")
+        res = {"actions": [{"type": "teams.reply", "to": "Sato", "text": "受領しました。"}]}
+        with mock.patch.object(writer, "_run", side_effect=RuntimeError("You have exceeded your monthly quota")):
+            writer.apply(res, {"author": "Sato", "text": "確認をお願いします"}, w)
+        self.assertEqual(res["actions"][0]["text"], "受領しました。")
+        self.assertIn("上限", res["writer_error"])

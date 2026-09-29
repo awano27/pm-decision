@@ -46,6 +46,7 @@ def main():
     ap.add_argument("--backend", choices=["stub", "jev", "kev"], default="stub")
     ap.add_argument("--writer", default="copilot")
     ap.add_argument("--per-kind", type=int, default=3)
+    ap.add_argument("--skip", type=int, default=0, help="skip the first N events of each kind (events the prompt was tuned on)")
     ap.add_argument("--kinds", default="teams.chat,monitor.alert,ado.workitem.created,meeting.item")
     ap.add_argument("--fixtures", default="fixtures.jsonl")
     ap.add_argument("--out")
@@ -57,7 +58,7 @@ def main():
     graphs = {k: v[0] for k, v in graph.load_dir(ROOT / "graphs", pbs).items()}
     kinds = a.kinds.split(",")
     fx = [json.loads(l) for l in (ROOT / "eval" / a.fixtures).read_text(encoding="utf-8").splitlines() if l.strip()]
-    picked = [x for k in kinds for x in [f for f in fx if f["event"]["kind"] == k][: a.per_kind]]
+    picked = [x for k in kinds for x in [f for f in fx if f["event"]["kind"] == k][a.skip: a.skip + a.per_kind]]
     rows, by_type, flag_count, secs = [], {}, {}, []
     for x in picked:
         ev = x["event"]
@@ -72,6 +73,7 @@ def main():
             if not d.get("drafted_by"):
                 by_type.setdefault(d["type"], [0, 0])[1] += 1
                 flag_count["not_drafted"] = flag_count.get("not_drafted", 0) + 1
+                print(f"[{x['id']}] 下書きなし: {d['type']}  writer_error={str(res.get('writer_error') or '')[:300]}  warning={d.get('writer_warning', '')}", flush=True)
                 continue
             item = {"type": d["type"], "title": d.get("title"), "text": d[writer.FIELD[d["type"]]],
                     "template": d.get("template_text"), "unverified": d.get("unverified", [])}

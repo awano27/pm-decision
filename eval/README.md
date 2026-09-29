@@ -65,6 +65,8 @@ Japanese PM questions it collapses score answers to the middle. Not used.
 
 ## 文面の質（`draft_quality.py`）
 
+> 注意: writer（GitHub Copilot など）を実際に呼びます。12 イベントで約 15 回です。契約の月間の上限を使うので、回す前に残りを確認してください。
+
 ```bash
 python eval/draft_quality.py --backend stub --writer copilot --per-kind 3 --show
 python eval/draft_quality.py --fixtures fixtures_holdout.jsonl --per-kind 2

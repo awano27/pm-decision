@@ -175,6 +175,33 @@ def _run(cmd, prompt, timeout):
     return out
 
 
+QUOTA_ERROR = re.compile(r"exceeded your (?:monthly )?quota|quota (?:has been )?(?:exceeded|reached)|out of (?:premium )?requests", re.I)
+QUOTA_REST = 6 * 3600   # seconds: a plan's monthly quota does not come back within hours; every call meanwhile only fails after ~10 s
+
+
+def _state_file(name):
+    base = os.environ.get("KIMERU_STATE_DIR") or os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "kimeru")
+    return os.path.join(base, name)
+
+
+def _rest_left(name):
+    """Seconds left of a rest recorded in the state file `name`, else 0."""
+    try:
+        with open(_state_file(name), encoding="utf-8") as h:
+            return max(0, int(float(json.load(h).get("until", 0)) - time.time()))
+    except (OSError, ValueError):
+        return 0
+
+
+def _rest_for(name, seconds, reason):
+    try:
+        os.makedirs(os.path.dirname(_state_file(name)), exist_ok=True)
+        with open(_state_file(name), "w", encoding="utf-8") as h:
+            json.dump({"until": time.time() + seconds, "reason": str(reason)[:120]}, h)
+    except OSError:
+        pass
+
+
 def find_exe(name, env_var=None):
     """The CLI's path: KIMERU_<NAME>_EXE, then PATH, then where the Windows installers put it (winget links / packages,
     npm global, ~/.local/bin). A scheduled task or a fresh shell often has a shorter PATH than the one it was tested in."""
@@ -242,6 +269,18 @@ class CopilotWriter:
     def ask_text(self, prompt):
         if not self.exe:
             raise RuntimeError("copilot CLI not found (GitHub Copilot app / `winget install GitHub.Copilot`)")
+        left = _rest_left("writer-copilot.json")
+        if left and os.environ.get("KIMERU_WRITER_NO_REST") != "1":
+            raise RuntimeError(f"GitHub Copilot の月間の上限に達しているため、あと {left // 3600 + 1} 時間ほど下書きを休止します（定型文のまま届きます）")
+        try:
+            return self._ask(prompt)
+        except RuntimeError as e:
+            if QUOTA_ERROR.search(str(e)):
+                _rest_for("writer-copilot.json", QUOTA_REST, "monthly quota")
+                raise RuntimeError("GitHub Copilot の月間の上限に達しました（定型文のまま届きます。上限が戻るか、別の writer に切り替えてください）") from e
+            raise
+
+    def _ask(self, prompt):
         base = [self.exe, "-s", "--available-tools=", "--disable-builtin-mcps", "--no-ask-user",
                 "--no-auto-update", "--log-level", "none"]
         if self.model:

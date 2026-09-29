@@ -366,6 +366,12 @@ powershell -ExecutionPolicy Bypass -File tools\split-zip.ps1 -Zip C:\develop\kim
 架空の 12 イベント（Copilot CLI）で、決まりを入れる前は 76%、入れたあとは 94〜97% でした（LLM の揺れがあります）。別の 8 イベントでは 86%（英語の用語が残る例）。
 これは作者の作ったチェックと小さな標本での数字で、**あなたが「そのまま送れる」と感じる割合ではありません**。実際の業務のメッセージで、`修正 N` の回数を見ながら調整してください。
 
+### GitHub Copilot の利用量
+
+`KIMERU_WRITER=copilot` は、1 イベントにつき Copilot を **1 回**（読みづらい文面があるときは書き直しでもう 1 回）、朝のまとめでさらに 1 回呼びます。
+契約の月間の上限（プラン・モデルで異なります）に達すると、その月は下書きできなくなります。kimeru は上限のエラーを見つけると **6 時間は Copilot を呼ばず**、文面は定型文のまま（理由つきで）届けます。
+評価スクリプト（`eval/drafts.py`、`eval/draft_quality.py`）も同じ上限を使うので、回す前に量（12 イベントで約 15 回）を確認してください。
+
 ### M365 だけの人向けの手順
 
 GitHub Copilot も Claude も使えず、Microsoft 365 Copilot だけが使える場合（`KIMERU_WRITER=m365`）:

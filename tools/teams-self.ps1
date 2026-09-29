@@ -499,6 +499,10 @@ if ($Action -eq 'read') {
         # redraft request for a writer draft (notify.parse_redraft): keep the instruction text
         $entry = 'R:修正 {0} {1}' -f $Matches[1], $Matches[2].Trim()
       }
+      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^下書き\s*#?(\d+)\s*[:：]?\s*(\S.*)$') {
+        # the PM pastes back what Microsoft 365 Copilot wrote, as one line (notify.parse_paste)
+        $entry = 'R:下書き {0} {1}' -f $Matches[1], $Matches[2].Trim()
+      }
       if ($entry -and ($timeline.Count -eq 0 -or $timeline[$timeline.Count - 1] -ne $entry)) { $timeline.Add($entry) }
     }
     $c = $walker.GetFirstChild($el)

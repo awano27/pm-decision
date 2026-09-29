@@ -19,6 +19,8 @@ from . import writer as writer_mod
 HERE = Path(__file__).resolve().parent.parent
 REPLY = re.compile(r"^(OK|NG|保留|聞き返し)\s*#?(\d+)\s*[.。!！]*$", re.IGNORECASE)
 REDRAFT = re.compile(r"^修正\s*#?(\d+)\s*[:：]?\s*(\S.*)$")
+PASTE = re.compile(r"^下書き\s*#?(\d+)\s*[:：]?\s*(\S.*)$")   # the PM brings back what Microsoft 365 Copilot wrote
+MAX_PASTE = 1200
 
 
 def parse_reply(line):
@@ -31,6 +33,12 @@ def parse_redraft(line):
     """("3", "もっと短く") for "修正 3 もっと短く"; None otherwise."""
     m = REDRAFT.match(unicodedata.normalize("NFKC", line).strip())
     return (m.group(1), m.group(2).strip()) if m else None
+def parse_paste(line):
+    """("3", "受領しました。…") for "下書き 3 受領しました。…"; None otherwise."""
+    m = PASTE.match(unicodedata.normalize("NFKC", line).strip())
+    return (m.group(1), m.group(2).strip()) if m else None
+
+
 STATUS = {"OK": "approved", "NG": "rejected", "保留": "held", "聞き返し": "ask_back"}   # 聞き返し: repost, not a decision
 
 
@@ -98,7 +106,7 @@ def format_post(n, rec):
     for a in waiting[:1]:
         lines.append("定型文: " + str(a.get(writer_mod.FIELD[a["type"]]) or ""))
     if rec.get("copilot_request"):
-        lines.append("↓ 次の投稿を Microsoft 365 Copilot に貼ると下書きができます")
+        lines.append(f"↓ 次の投稿を Microsoft 365 Copilot に貼ってください。返ってきた 1 件目の文面は、改行を入れずに 1 行で「下書き {n} 〈文面〉」と返信すると、この投稿に取り込みます")
     tasks = [a for a in drafts if a["type"] == "ado.create"]
     hidden = tasks[2:]   # a phone screen: two work-item descriptions, the rest counted (all are kept and run on OK)
     for a in drafts:
@@ -121,6 +129,7 @@ def format_post(n, rec):
                          ("　⚠ 元の材料に無い日付・数値: " + ", ".join(a["unverified"]) if a.get("unverified") else ""))
     ask = any(a.get("ask_back") for a in drafts)
     lines.append(f"返信: OK {n} / NG {n} / 保留 {n}" + (f" / 修正 {n} <直してほしい点>" if drafts else "")
+                 + (f" / 下書き {n} <Copilot の文面>" if rec.get("copilot_request") else "")
                  + (f" / 聞き返し {n}" if ask else ""))
     return "\n".join(lines)
 
@@ -293,7 +302,7 @@ def fresh_replies(read):
     out = []
     for i, e in enumerate(tl):
         if e.startswith("R:"):
-            r = parse_reply(e[2:]) or parse_redraft(e[2:])
+            r = parse_reply(e[2:]) or parse_redraft(e[2:]) or parse_paste(e[2:])
             num = r and (r[1] if r[0] in STATUS else r[0])
             if num and i > last_post.get(num, len(tl)):
                 out.append(e[2:])
@@ -329,6 +338,39 @@ def _redraft(it, instruction, writer):
     return {"status": "redrafted", "instruction": instruction}
 
 
+def _apply_paste(it, text):
+    """The PM pasted Copilot's text: it becomes the first message the item would send (reply / post / comment).
+    The item is posted again under the same number, with the usual checks (unusable text, dates and numbers
+    that are not in the source). Returns the change to log."""
+    rec = it["record"]
+    it["posted"], it["status"], it["request_posted"] = False, "pending", False
+    text = writer_mod.strip_citations(text)[:MAX_PASTE]
+    target = next((a for a in rec.get("actions", []) if a.get("type") in ("teams.reply", "teams.post", "ado.comment")), None)
+    if target is None:
+        rec["redraft_note"] = "貼り付けた文面を入れる先（返信・投稿・コメント）がありません。前のままです"
+        return {"status": "paste_failed", "why": "no target"}
+    why = writer_mod.unusable(text)
+    if why:
+        rec["redraft_note"] = f"貼り付けた文面は使えません（{why}）。前のままです"
+        return {"status": "paste_failed", "why": why}
+    field = writer_mod.FIELD[target["type"]]
+    target.setdefault("template_text", target.get(field))
+    target[field] = text
+    target["drafted_by"] = "m365（貼り付け）"
+    material = writer_mod._material(rec, rec.get("material_event") or {}, None)
+    bad = writer_mod.unverified(text, material)
+    if bad:
+        target["unverified"] = bad
+    else:
+        target.pop("unverified", None)
+    for a in rec.get("actions", []):
+        a.pop("held_for", None)
+        a.pop("writer_warning", None)
+    rec.pop("copilot_request", None)
+    rec.pop("redraft_note", None)
+    return {"status": "pasted"}
+
+
 def collect(out, bridge, writer=None):
     """Read replies from the self chat and apply them. Returns applied changes."""
     ap = Approvals(out)
@@ -338,6 +380,12 @@ def collect(out, bridge, writer=None):
     writer = writer if writer is not None else writer_mod.get_writer()
     changes = []
     for line in fresh_replies(bridge.read()):
+        ps = parse_paste(line)
+        if ps:
+            it = ap.data["items"].get(ps[0])
+            if it and it["posted"] and it["status"] in ("pending", "held"):
+                changes.append({"id": int(ps[0]), **_apply_paste(it, ps[1])})
+            continue
         rd = parse_redraft(line)
         if rd:
             it = ap.data["items"].get(rd[0])

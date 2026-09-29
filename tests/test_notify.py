@@ -202,3 +202,63 @@ class TestAtomicState(unittest.TestCase):
         self.assertEqual(notify.parse_reply("OK 3。"), ("OK", "3"))
         self.assertEqual(notify.parse_reply("ＯＫ　３！"), ("OK", "3"))
         self.assertIsNone(notify.parse_reply("OK 3 4"))
+
+
+HELD = {"graph": "teams-chat-triage", "event_kind": "teams.chat", "event_id": "t1", "node": "reply",
+        "outcome": "decide", "needs_human": True, "advice": "",
+        "material_event": {"author": "Sato", "text": "リリースは来週火曜にずらせますか"},
+        "copilot_request": "次の件について、私（PM）の名前で送る文面を書いてください。",
+        "actions": [{"type": "teams.reply", "to": "Sato", "text": "受領しました。内容を確認して返信します。",
+                     "held_for": "m365"}]}
+
+
+class TestPasteBack(unittest.TestCase):
+    """The manual Microsoft 365 route: the PM pastes Copilot's text back as one line "下書き N ..."."""
+
+    def run_paste(self, line):
+        import copy
+        with tempfile.TemporaryDirectory() as d:
+            write_queue(d, copy.deepcopy(HELD))
+            notify.notify(d, FakeBridge(), send=True)
+            ch = notify.collect(d, TimelineBridge(["P:1", "R:" + line]))
+            data = json.loads((Path(d) / "approvals.json").read_text(encoding="utf-8"))["items"]["1"]
+            return ch, data
+
+    def test_parse(self):
+        self.assertEqual(notify.parse_paste("下書き 3 ご連絡ありがとうございます。"), ("3", "ご連絡ありがとうございます。"))
+        self.assertEqual(notify.parse_paste("下書き＃3：了解です"), ("3", "了解です"))
+        self.assertIsNone(notify.parse_paste("下書き 3"))
+        self.assertIsNone(notify.parse_paste("OK 3"))
+
+    def test_pasted_text_becomes_the_draft_and_is_reposted(self):
+        ch, it = self.run_paste("下書き 1 ご連絡ありがとうございます。日程の影響を確認して、改めてご連絡します。[1]")
+        self.assertEqual([c["status"] for c in ch], ["pasted"])
+        a = it["record"]["actions"][0]
+        self.assertEqual(a["text"], "ご連絡ありがとうございます。日程の影響を確認して、改めてご連絡します。")   # citation mark removed
+        self.assertEqual(a["drafted_by"], "m365（貼り付け）")
+        self.assertNotIn("held_for", a)
+        self.assertNotIn("copilot_request", it["record"])
+        self.assertFalse(it["posted"])            # posted again under the same number
+        self.assertEqual(it["status"], "pending")
+
+    def test_invented_date_in_pasted_text_is_flagged(self):
+        _, it = self.run_paste("下書き 1 10/5 までに対応します。")
+        self.assertIn("10/5", it["record"]["actions"][0]["unverified"])
+
+    def test_unusable_text_is_refused_and_the_item_keeps_its_state(self):
+        ch, it = self.run_paste("下書き 1 申し訳ありませんが、この内容では返信を作成できません。")
+        self.assertEqual([c["status"] for c in ch], ["paste_failed"])
+        a = it["record"]["actions"][0]
+        self.assertEqual(a["text"], "受領しました。内容を確認して返信します。")
+        self.assertIn("貼り付けた文面は使えません", it["record"]["redraft_note"])
+
+    def test_post_tells_the_pm_how_to_paste_back(self):
+        text = notify.format_post("1", HELD)
+        self.assertIn("下書き 1", text)
+        self.assertIn("1 行", text)
+
+    def test_the_request_asks_for_one_paragraph(self):
+        from kimeru import writer
+        req = writer.human_request({"actions": [{"type": "teams.reply", "text": "x", "held_for": "m365"}]},
+                                   {"author": "Sato", "text": "確認をお願いします"})
+        self.assertIn("改行を入れず", req)

@@ -1,6 +1,6 @@
 [project]
 name = "kimeru"
-version = "0.1.0"
+version = "1.0.0"
 description = "Event-driven decision graphs for PMs, judged by Jev"
 readme = "README.md"
 requires-python = ">=3.10"

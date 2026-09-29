@@ -28,6 +28,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 
 SYSTEM = (
     "あなたはプロジェクトマネージャーの下書き係です。与えられた材料だけを使い、"
@@ -250,7 +251,8 @@ def human_request(res, event, instruction=None):
         lines.append(f"{i}. 足りない情報があれば、送信者に聞き返す返信（3 文以内）")
     if instruction:
         lines.append(f"・直してほしい点: {instruction}")
-    lines += ["・" + GROUNDING + "参照したメールや会議は最後に件名で挙げてください。",
+    lines += ["・1 件目の文面は、そのまま送れるよう、改行を入れず 1 つの段落で書いてください。",
+              "・" + GROUNDING + "参照したメールや会議は最後に件名で挙げてください。",
               "・書かれていない期限・件数・完了の約束はしないでください。"]
     return "\n".join(lines)
 
@@ -269,12 +271,54 @@ class M365AutoWriter(M365PromptWriter):
     NAME = "m365-auto"
     PROMPT_ONLY = False
 
+    COOLDOWN = 1800   # seconds the automatic route rests after a failure (the manual paste-in request is used meanwhile)
+
     def __init__(self, timeout=280, script=None):
         from pathlib import Path
         self.timeout = timeout
         self.script = script or str(Path(__file__).resolve().parent.parent / "tools" / "teams-copilot.ps1")
 
+    def _state_file(self):
+        base = os.environ.get("KIMERU_STATE_DIR") or os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "kimeru")
+        return os.path.join(base, "m365-auto.json")
+
+    def _resting(self):
+        """Seconds left of the rest after a failure, else 0. A failing screen automation would otherwise take the
+        keyboard focus and up to several minutes for every single event."""
+        try:
+            with open(self._state_file(), encoding="utf-8") as h:
+                until = float(json.load(h).get("until", 0))
+        except (OSError, ValueError):
+            return 0
+        return max(0, int(until - time.time()))
+
+    def _rest(self, reason):
+        try:
+            os.makedirs(os.path.dirname(self._state_file()), exist_ok=True)
+            with open(self._state_file(), "w", encoding="utf-8") as h:
+                json.dump({"until": time.time() + self.COOLDOWN, "reason": str(reason)[:120]}, h)
+        except OSError:
+            pass
+
+    def _wake(self):
+        try:
+            os.remove(self._state_file())
+        except OSError:
+            pass
+
     def draft(self, res, event, instruction=None):
+        left = self._resting()
+        if left and os.environ.get("KIMERU_M365_NO_REST") != "1":
+            raise RuntimeError(f"m365-auto は直前の失敗のため {left // 60 + 1} 分ほど休止中です（手動の依頼文に切り替えます）")
+        try:
+            d = self._draft(res, event, instruction)
+        except Exception as e:
+            self._rest(f"{type(e).__name__}: {e}")
+            raise
+        self._wake()
+        return d
+
+    def _draft(self, res, event, instruction=None):
         prompt = (SYSTEM + GROUNDING + "この件に関係する、あなた（PM）の Microsoft 365 上のメール・会議・チャットがあれば読み、内容を踏まえてください。"
                   "見つからないものを推測で書いてはいけません。参照したものは JSON に \"sources\": [\"件名・会議名\", ...] として"
                   "最大 3 件まで加え、何も参照していなければ \"sources\": [] にしてください。" + "\n\n" + _material(res, event, instruction))

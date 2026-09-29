@@ -1,11 +1,17 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from kimeru import graph, notify, plan, writer
 from kimeru.backends import StubBackend
 from kimeru.cli import process
+
+_STATE = tempfile.TemporaryDirectory()
+os.environ["KIMERU_STATE_DIR"] = _STATE.name       # tests never touch the real state directory
+os.environ["KIMERU_M365_NO_REST"] = "1"            # except the class that tests the rest itself
 
 ROOT = Path(__file__).resolve().parent.parent
 PBS = plan.load_playbooks(ROOT / "playbooks")
@@ -439,3 +445,53 @@ class TestWriter(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestM365AutoRest(unittest.TestCase):
+    """After a failure the automatic route rests, so a broken screen automation does not run for every event."""
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.TemporaryDirectory()
+        self.env = mock.patch.dict(os.environ, {"KIMERU_STATE_DIR": self.dir.name}, clear=False)
+        self.env.start()
+        os.environ.pop("KIMERU_M365_NO_REST", None)
+
+    def tearDown(self):
+        self.env.stop()
+        self.dir.cleanup()
+
+    def test_failure_starts_a_rest_and_the_next_call_does_not_touch_teams(self):
+        w = writer.M365AutoWriter()
+        calls = []
+
+        def boom(*a, **k):
+            calls.append(1)
+            raise RuntimeError("no answer")
+
+        with mock.patch.object(w, "_draft", boom):
+            with self.assertRaises(RuntimeError):
+                w.draft({}, {})
+            with self.assertRaises(RuntimeError) as cm:
+                w.draft({}, {})
+        self.assertEqual(len(calls), 1)               # the second call never reached Teams
+        self.assertIn("休止中", str(cm.exception))
+
+    def test_success_ends_the_rest(self):
+        w = writer.M365AutoWriter()
+        with mock.patch.object(w, "_draft", side_effect=RuntimeError("x")):
+            with self.assertRaises(RuntimeError):
+                w.draft({}, {})
+        self.assertGreater(w._resting(), 0)
+        with mock.patch.dict(os.environ, {"KIMERU_M365_NO_REST": "1"}), mock.patch.object(w, "_draft", return_value={"a1": "x"}):
+            self.assertEqual(w.draft({}, {}), {"a1": "x"})
+        self.assertEqual(w._resting(), 0)
+
+    def test_apply_falls_back_to_the_manual_request_while_resting(self):
+        w = writer.M365AutoWriter()
+        w._rest("test")
+        res = {"actions": [{"type": "teams.reply", "to": "Sato", "text": "受領しました。"}]}
+        writer.apply(res, {"author": "Sato", "text": "確認をお願いします"}, w)
+        self.assertIn("copilot_request", res)
+        self.assertEqual(res["actions"][0]["held_for"], "m365")
+        self.assertIn("休止中", res["writer_error"])

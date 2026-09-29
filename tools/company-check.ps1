@@ -21,6 +21,7 @@ $Results = [ordered]@{}   # not $R: PowerShell names are case-insensitive ($r is
 $tmp = Join-Path $env:TEMP ("kimeru-check-" + (Get-Random -Minimum 10000 -Maximum 99999))
 New-Item -ItemType Directory -Force $tmp | Out-Null
 
+if ($Only -contains 'V1') { $Only = @('T9', 'T15', 'T16', 'T19', 'T20') }   # v1.0 set: approval flow, Copilot CLI, toast, Copilot paste test, ask-back / paste-back replies
 if ($Only -contains 'monday') { $Only = @('T9', 'T10', 'T12', 'T13', 'T14', 'T15', 'T16', 'T17') }   # short Monday session (T3/T6/T8 run anyway); T2 dropped: minutes come as .txt (docs/minutes-format.md)
 function Want($t) { -not $Only -or $Only -contains $t }
 function Fails($s) {
@@ -253,6 +254,47 @@ if ($py) {
     $shown = if ($acc -match 'failed: |Traceback|Error') { Fails $acc } else { Short $acc }
     Rec 'T9' ("{0} approvals={1} 2回目={2}" -f $(if ($ok9) { 'OK' } else { 'NG' }), $shown, $(if (-not $again.Trim()) { '（なし＝二重処理なし）' } elseif ($again -match 'failed: |Traceback') { Fails $again } else { Short $again }))
   } else { Rec 'T9' 'SKIP' }
+}
+
+# ---- T20: "聞き返し N" and "下書き N <文面>" are read from the real Teams chat (fictional items) ----
+if ($selfOk -and (Want 'T20')) {
+  Say "T20 聞き返し・下書き（M365 Copilot の文面の貼り戻し）を Teams から読めるか"
+  if (-not (YesNo "   架空の確認待ち2件を自分とのチャットに送信します（宛先は自分だけ）。よろしいですか")) { Rec 'T20' 'SKIP' }
+  else {
+    $out20 = Join-Path $tmp 'out20'
+    New-Item -ItemType Directory -Force $out20 | Out-Null
+    $base = Get-Random -Minimum 100 -Maximum 899
+    [IO.File]::WriteAllText((Join-Path $out20 'approvals.json'), "{`"next`": $base, `"items`": {}}")
+    $recA = [ordered]@{ graph = 'teams-chat-triage'; event_kind = 'teams.chat'; event_id = 'v1-a'; node = 'reply'; outcome = 'decide'; needs_human = $true; advice = ''
+      material_event = @{ author = 'Sato'; text = 'リリースは来週火曜にずらせますか' }
+      actions = @(@{ type = 'teams.reply'; to = 'Sato'; text = '受領しました。内容を確認して返信します。'; ask_back = '延期の希望日と、影響する顧客を教えていただけますか。' }) }
+    $recB = [ordered]@{ graph = 'teams-chat-triage'; event_kind = 'teams.chat'; event_id = 'v1-b'; node = 'reply'; outcome = 'decide'; needs_human = $true; advice = ''
+      material_event = @{ author = 'Ito'; text = '仕様の確認をお願いします' }
+      copilot_request = '次の件について、私（PM）の名前で送る文面を書いてください。（架空の試験）'
+      actions = @(@{ type = 'teams.reply'; to = 'Ito'; text = '受領しました。内容を確認して返信します。'; held_for = 'm365' }) }
+    $q = (@($recA, $recB) | ForEach-Object { $_ | ConvertTo-Json -Compress -Depth 8 }) -join "`n"
+    [IO.File]::WriteAllText((Join-Path $out20 'queue.jsonl'), $q + "`n", (New-Object Text.UTF8Encoding $false))
+    Write-Host "   数秒間マウス・キーボードに触らないでください"
+    $nt = Py @('-m', 'kimeru', '--out', $out20, 'notify', '--send')
+    if ($nt -notmatch 'posted: \[') { Rec 'T20' ('NG 投稿できません ' + (Fails $nt)) }
+    else {
+      Write-Host ("   Teams の自分とのチャットで、次の 2 つを別々に返信してください（最大 {0} 秒）" -f $WaitSec) -ForegroundColor Green
+      Write-Host ("     聞き返し {0}" -f $base) -ForegroundColor Green
+      Write-Host ("     下書き {0} ご連絡ありがとうございます。仕様を確認して、改めてご連絡します。" -f ($base + 1)) -ForegroundColor Green
+      $deadline = (Get-Date).AddSeconds($WaitSec); $okA = $false; $okB = $false
+      while ((Get-Date) -lt $deadline -and -not ($okA -and $okB)) {
+        Start-Sleep -Seconds 10
+        [void](Py @('-m', 'kimeru', '--out', $out20, 'approvals'))
+        try {
+          $ap = Get-Content -Raw -Encoding UTF8 (Join-Path $out20 'approvals.json') | ConvertFrom-Json
+          $ia = $ap.items.PSObject.Properties[[string]$base].Value; $ib = $ap.items.PSObject.Properties[[string]($base + 1)].Value
+          $okA = ($ia.record.actions[0].variant -eq 'ask_back')
+          $okB = ($ib.record.actions[0].drafted_by -like 'm365*')
+        } catch {}
+      }
+      Rec 'T20' ("{0} 聞き返し={1} 下書き={2}" -f $(if ($okA -and $okB) { 'OK' } else { 'NG' }), $(if ($okA) { '読めた' } else { '読めない' }), $(if ($okB) { '読めた' } else { '読めない' }))
+    }
+  }
 }
 
 # ---- Level 2: Azure CLI ----

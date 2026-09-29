@@ -163,7 +163,7 @@ $phq = Squash ([string]$box.Current.Name)
 if ($sq.Length -gt 2 -and $sq -ne $phq) {
   # (two characters or fewer is an editor artifact, never a draft)
   # text left by our own earlier run may be cleared; anything else could be the person's draft: leave it
-  if ($cur.Trim().StartsWith('あなたはプロジェクトマネージャーの下書き係')) {
+  if ($sq.StartsWith('あなたはプロジェクトマネージャーの下書き係')) {   # Squash: an invisible first character (U+FFFC, zero-width) defeats a plain Trim()
     Assert-Foreground $w; $box.SetFocus(); Start-Sleep -Milliseconds 150; Assert-Foreground $w
     [System.Windows.Forms.SendKeys]::SendWait('^a'); Start-Sleep -Milliseconds 100
     [System.Windows.Forms.SendKeys]::SendWait('{DEL}'); Start-Sleep -Milliseconds 300
@@ -195,6 +195,19 @@ if (-not (Test-CopilotOpen (Get-TeamsWindow))) { Fail 'window changed before sen
 $btn = Find-All $w $CT::Button | Where-Object { $_.Current.Name -match '^(送信|Send)(\s*\(|$)' -and $_.Current.IsEnabled } | Select-Object -First 1
 if ($btn) { try { $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch { $btn = $null } }
 if (-not $btn) { Assert-Foreground $w; $box.SetFocus(); [System.Windows.Forms.SendKeys]::SendWait('{ENTER}') }
+# the request must actually leave the box; if it is still there after a moment, press Enter once more, and
+# if it still is, remove our own text (a stuck prompt would block every later run) and stop
+$sent = $false
+foreach ($try in 1..3) {
+  Start-Sleep -Milliseconds 1500
+  $left = Squash (Get-BoxText (Get-Box $w))
+  if ($left.Length -le 2 -or $left -eq $phq -or -not $prompt.StartsWith($left.Substring(0, [Math]::Min(20, $left.Length)))) { $sent = $true; break }
+  if ($try -lt 3) { Assert-Foreground $w; (Get-Box $w).SetFocus(); [System.Windows.Forms.SendKeys]::SendWait('{ENTER}') }
+}
+if (-not $sent) {
+  Assert-Foreground $w; $bx = Get-Box $w; $bx.SetFocus(); [System.Windows.Forms.SendKeys]::SendWait('^a'); [System.Windows.Forms.SendKeys]::SendWait('{DEL}')
+  Fail 'the request stayed in the Copilot compose box (send button / Enter did not send it); removed it'
+}
 
 # wait for the answer. It is JSON carrying our keys ("a1"... / "memo"). Candidates: every new text on the
 # page (nodes) and the page text, each cut after the last line of our own request. Only a text that carries

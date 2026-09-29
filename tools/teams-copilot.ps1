@@ -157,6 +157,18 @@ function Open-Copilot($w) {
   $null
 }
 
+function Show-CopilotPane($w) {
+  # the window title can still say "Copilot" while another chat is on screen (seen on the real Teams): when the
+  # pane check fails, select the Copilot row of the chat list (navigation only) and look again for a few seconds
+  if (-not (Test-CopilotPane (Get-TeamsWindow))) { return }
+  foreach ($e in @((Get-Entries $w) | Where-Object { $_.Current.ControlType -in @($CT::TreeItem, $CT::ListItem) })) {
+    try { $e.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() } catch {
+      try { Assert-Foreground $w; [void](Click $e) } catch { continue }
+    }
+    for ($i = 0; $i -lt 12; $i++) { Start-Sleep -Milliseconds 500; if (-not (Test-CopilotPane (Get-TeamsWindow))) { return } }
+  }
+}
+
 $w = Get-TeamsWindow
 if (-not $w) { Fail 'Teams window not found' }
 
@@ -164,6 +176,7 @@ if ($Action -eq 'probe') {
   $entries = @(Get-Entries $w)
   $kinds = @($entries | ForEach-Object { $_.Current.ControlType.ProgrammaticName -replace '^ControlType\.', '' }) -join ','
   $opened = Open-Copilot $w
+  if ($opened) { Show-CopilotPane $opened; $opened = Get-TeamsWindow }
   $shape = if ($opened) { (($opened.Current.Name -split ' \| ') | ForEach-Object { if ($_ -match '^(Microsoft 365 )?Copilot$|^Microsoft Teams$|^チャット$|^Chat$') { $_ } else { '<text>' } }) -join ' | ' } else { '' }
   $box = $null
   for ($i = 0; $opened -and -not $box -and $i -lt 8; $i++) { $box = Find-Box $opened; if (-not $box) { Start-Sleep -Seconds 1; $opened = Get-TeamsWindow } }
@@ -185,6 +198,8 @@ if (-not (Test-Path $PromptFile)) { Fail 'prompt file not found' }
 $prompt = (Get-Content -Raw -Encoding UTF8 $PromptFile).Trim()
 $w = Open-Copilot $w
 if (-not $w) { Fail 'Copilot chat not found in Teams (no chat-list entry or app button named Copilot)' }
+Show-CopilotPane $w
+$w = Get-TeamsWindow
 $box = Get-Box $w
 # an empty web editor still reads as one invisible character (zero-width space, line break): Squash drops them
 $cur = Get-BoxText $box

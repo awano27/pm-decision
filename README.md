@@ -59,6 +59,25 @@ flowchart LR
 
 ---
 
+### 3 段の安全網
+
+```mermaid
+flowchart LR
+    A[イベント] --> B{{"① 規則<br/>重大事象を先に拾う"}}
+    B -- 該当 --> X([即決定 ＋ 通知])
+    B -- 非該当 --> C{{"② 判断モデル<br/>確率で答える"}}
+    C -- 確信 --> Y([自動で決定])
+    C -- 迷い --> Z{{"③ あなたの承認"}}
+    C -. "Sev0/1 なのに低評価" .-> Z
+    Z -- "OK / 修正" --> R([記録])
+    Z -- NG --> N([却下])
+    style B fill:#fde8e8,stroke:#d33
+    style C fill:#e8f0fd,stroke:#36c
+    style Z fill:#e8f7ee,stroke:#2a7
+```
+
+---
+
 ## ✨ 特徴
 
 | | できること |
@@ -185,6 +204,22 @@ python -m kimeru --backend kev daily --send          # --once なしなら、300
 - **自分とのチャットへの投稿は、自分の iPhone や PC には通知されません。** そこで、確認待ちや通知を投稿したら **PC に Windows の通知** を出します（クリックで自分とのチャットが開く。`KIMERU_TOAST=0` で無効）。iPhone には、Teams の Workflows などで **件数だけ** を届ける経路を選べます（[docs/push-notification.md](docs/push-notification.md)）
 - 確認待ちも新しい投稿も無いサイクルは、自分とのチャットへの切り替えや書き込みをしません（チャット一覧は読みます）。**既定はこのままです。** 設定 `read_full=1` にしたときだけ、必要な件に限って、他のチャットを開いて全文を読みます（下記「Teams の本文を全文で読む」。開いたチャットは、Teams で既読になります）
 
+```mermaid
+sequenceDiagram
+    autonumber
+    participant S as 📥 Teams / ADO / アラート
+    participant K as 🤖 kimeru
+    participant L as ✍ LLM（任意）
+    participant M as 📱 あなた（スマホ）
+    S->>K: 新しいイベント
+    K->>K: 規則 → 判断モデルで判断
+    K->>L: 文面とメモの下書きを依頼
+    L-->>K: 下書き（⚠ 検査つき）
+    K->>M: [kimeru #1] 自分宛てチャットに投稿 ＋ PC 通知
+    M->>K: OK 1 / NG 1 / 修正 1 … / 聞き返し 1
+    K->>K: 行動を記録（既定は記録のみ）
+```
+
 ### 承認の返信
 
 | 返信 | 動き |
@@ -241,6 +276,24 @@ python -m kimeru --backend kev run examples/teams_chat.json
 
 ---
 
+### 本文はどこへ行くか
+
+```mermaid
+flowchart LR
+    subgraph PC["💻 あなたの PC（外に出ない）"]
+      E[イベント] --> KEV[Kev 判断]
+      KEV --> REC[(out/ の記録)]
+    end
+    E -. "writer 設定時のみ" .-> W
+    subgraph EXT["☁ 選んだ writer の送り先"]
+      W["GitHub Copilot / Claude<br/>Codex / Grok / M365 Copilot"]
+    end
+    KEV -. "Jev 選択時のみ" .-> JEV[TypeSafe Jev]
+    REC -. "件数と番号だけ（設定時）" .-> PUSH[スマホ通知]
+    style PC fill:#e8f7ee,stroke:#2a7
+    style EXT fill:#fdf3e0,stroke:#d90
+```
+
 ## 🔒 データの扱い
 
 - **既定は記録のみ。有効にした種類（今は ADO のコメントだけ）だけを、承認のあとに実行する。相手への返信は送らない**: ADO 更新・当番呼び出し・相手への返信は `out/decisions.jsonl` に計画として残るだけです。実際に送るのは、`--send` を付けたときの自分とのチャットへの投稿だけです（相手への返信は、承認すると、送る文面だけが自分とのチャットに返ります。コピーして、あなたが送ります）。ADO のコメントは `kimeru config set execute ado.comment` で有効にしたときだけ、承認（`OK N`）のあとに 1 回だけ書きます（[手順](docs/execute-ado-comment.md)）。通知の経路を設定したときは、**件数と番号だけ**（本文・送信者・件名は含みません）を、あなたが指定した先へ送ります
@@ -269,6 +322,25 @@ python -m kimeru --backend kev run examples/teams_chat.json
 | 🧪 **実験的** | `m365-auto`（Teams 内の Microsoft 365 Copilot の画面操作。画面の作りに依存し、失敗すると 30 分休んで手動の依頼文に切り替わる）|
 | 🔬 **実装済み・実機の確認はこれから** | 設定ファイル・push 通知・承認した ADO コメントの実行・Teams の全文読み取り・判断の速さの調整・`calibrate`（いずれも既定は無効か従来どおり）|
 | ⏳ **これから** | 実データでの評価 / スマホへの通知の実機確認 / `m365-auto` を複数環境で確認して実験的から外す |
+
+```mermaid
+pie showData title Kev-4B の最終的な行動（開発用 99 件・架空のイベント）
+    "正しい行動" : 62
+    "人の確認へ" : 25
+    "安全側の代替行動" : 12
+    "誤った行動" : 0
+```
+
+```mermaid
+flowchart LR
+    A["✅ 使える<br/>取り込み・判断・承認・通知・下書き"] --> B["🔬 実機確認待ち<br/>設定・push・ADO 実行・全文読み取り"]
+    B --> C["🧪 実験的<br/>m365-auto"]
+    C --> D["⏳ これから<br/>実データでの評価"]
+    style A fill:#e8f7ee,stroke:#2a7
+    style B fill:#e8f0fd,stroke:#36c
+    style C fill:#fdf3e0,stroke:#d90
+    style D fill:#f0f0f0,stroke:#888
+```
 
 Kev-4B の評価（架空のイベント。誤った行動 1 件、重大な取りこぼし 0 件）、既知の課題、下書きの質は [docs/evaluation.md](docs/evaluation.md) にあります。あなたの環境の結果は、[1 週間の試し方](docs/trial-week.md) で測って報告できます。
 

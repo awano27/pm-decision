@@ -59,14 +59,14 @@ function Get-Entries($w) {
   @(Find-All $w $CT::TreeItem) + @(Find-All $w $CT::ListItem) + @(Find-All $w $CT::Button) + @(Find-All $w $CT::TabItem) |
     Where-Object { $_.Current.Name -match $COPILOT }
 }
-function Find-Box($w) {
+function Find-Box($w, [switch]$Strict) {
   # 1) the usual compose box id or a name that says so; 2) else the lowest editable field in the window
   #    (the compose box sits at the bottom of the pane); 3) else the lowest focusable document
   $edits = @(Find-All $w $CT::Edit)
-  if ($Action -eq 'ask') {
+  if ($Strict -or $Action -eq 'ask') {
     # writes: exactly ONE compose-like box may exist in the window. Two (a side chat panel, a meeting chat next to
     # Copilot) or a guess by position could put the request into somebody else's chat, so no guessing here
-    $c = @($edits | Where-Object { $_.Current.BoundingRectangle.Width -gt 0 -and ($_.Current.AutomationId -like 'new-message-*' -or $_.Current.AutomationId -like '*-chat-editor-target-element' -or $_.Current.Name -match 'メッセージを(送信|入力)|Message Copilot|Send a message|Type a message') })   # not the top search box ("Copilot で検索または質問する")
+    $c = @($edits | Where-Object { $_.Current.BoundingRectangle.Width -gt 0 -and $_.Current.Name -match 'Copilot\s*(に|へ)\s*(メッセージ|質問)|Message Copilot|Ask Copilot' })   # the box's OWN name says Copilot. Ids and the plain placeholder "メッセージを入力" belong to every chat (a meeting chat got a request that way); the top search box says "Copilot で検索..." and does not match
     $script:BoxCandidates = $c.Count
     $mk = { param($x) ([string]$x) -replace '[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){0,4}', '<id>' -replace '\d+', 'N' }
     $script:EditShapes = (@($edits | Where-Object { $_.Current.BoundingRectangle.Width -gt 0 } | Select-Object -First 6 | ForEach-Object { "$(& $mk $_.Current.AutomationId):len$($_.Current.Name.Length)" }) -join ';')
@@ -153,11 +153,12 @@ if ($Action -eq 'probe') {
   for ($i = 0; $opened -and -not $box -and $i -lt 8; $i++) { $box = Find-Box $opened; if (-not $box) { Start-Sleep -Seconds 1; $opened = Get-TeamsWindow } }
   $send = if ($opened) { [bool](Find-All $opened $CT::Button | Where-Object { $_.Current.Name -match '^(送信|Send)' } | Select-Object -First 1) } else { $false }
   $mask = { param($s) ([string]$s) -replace '[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){0,4}', '<id>' -replace '\d+', 'N' }
-  $edits = if ($opened) { @(Find-All $opened $CT::Edit | Select-Object -First 8 | ForEach-Object { "Edit:$(& $mask $_.Current.AutomationId):len$($_.Current.Name.Length):focus=$($_.Current.IsKeyboardFocusable)" }) } else { @() }
+  $edits = if ($opened) { @(Find-All $opened $CT::Edit | Select-Object -First 8 | ForEach-Object { "Edit:$(& $mask $_.Current.AutomationId):len$($_.Current.Name.Length):copilotNamed=$([bool]($_.Current.Name -match 'Copilot\s*(に|へ)\s*(メッセージ|質問)|Message Copilot|Ask Copilot')):w=$([int]$_.Current.BoundingRectangle.Width):focus=$($_.Current.IsKeyboardFocusable)" }) } else { @() }
+  $strictBox = if ($opened) { Find-Box $opened -Strict } else { $null }
   $docs = if ($opened) { @(Find-All $opened $CT::Document | Select-Object -First 5 | ForEach-Object { "Doc:$(& $mask $_.Current.AutomationId):focus=$($_.Current.IsKeyboardFocusable)" }) } else { @() }
   $btns = if ($opened) { @(Find-All $opened $CT::Button | Select-Object -First 30 | ForEach-Object { Shape $_.Current.Name }) } else { @() }
   Out-Json ([ordered]@{ ok = $true; entries = $entries.Count; entryTypes = $kinds; opened = [bool]$opened; title = $shape
-                        composeBox = [bool]$box; boxId = $(if ($box) { (& $mask $box.Current.AutomationId) } else { '' })
+                        composeBox = [bool]$box; strictCopilotBox = [bool]$strictBox; strictCandidates = $script:BoxCandidates; boxId = $(if ($box) { (& $mask $box.Current.AutomationId) } else { '' })
                         sendButton = $send; edits = $edits; docs = $docs; buttons = $btns
                         boxTextLen = $(if ($box) { (Get-BoxText $box).Trim().Length } else { -1 }); boxNameLen = $(if ($box) { ([string]$box.Current.Name).Length } else { -1 }) })
   exit 0

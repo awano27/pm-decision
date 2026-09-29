@@ -360,6 +360,7 @@ if ($uia -and $py -and (Want 'T18')) {
   Say "T18 M365 Copilot の出典（実際のメール・会議を参照できるか）"
   $topic = Read-Host "   Copilot が参照できる、最近の会議名かメールの件名の一部（Copilot にだけ送ります。結果シートには書きません。Enter でスキップ）"
   if (-not $topic) { Rec 'T18' 'SKIP' }
+  elseif (-not (YesNo "   Teams で Copilot のチャットが開いていて、他のチャットの側パネル・別ウィンドウは閉じていますか（依頼文を貼って送信します）")) { Rec 'T18' 'SKIP' }
   else {
     $d = Py @('eval\drafts.py', '--backend', 'stub', '--writer', 'm365-auto', '--n', '1', '--kinds', 'teams.chat', '--topic', $topic)
     $sum = ($d -split "`n") | Where-Object { $_ -match '^events=' } | Select-Object -First 1

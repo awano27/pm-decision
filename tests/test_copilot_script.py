@@ -84,6 +84,24 @@ class TestScriptGuardsPresent(unittest.TestCase):
         loose = self.text.index("Sort-Object { $_.Current.BoundingRectangle.Y } | Select-Object -Last 1")
         self.assertLess(strict, loose)
 
+    def test_diag_file_is_not_a_stringified_array(self):
+        # the first version joined "$head, $rows" and wrote "System.Object[]" instead of the layout
+        self.assertNotIn("(($head, $rows) -join", self.text)
+        self.assertIn("@($head) + @($script:FocusTrace", self.text)
+
+    def test_dpi_awareness_is_set_before_any_ui_work(self):
+        self.assertIn("SetProcessDpiAwarenessContext", self.text)
+        self.assertLess(self.text.index("SetProcessDpiAwarenessContext"), self.text.index("function Get-TeamsWindow"))
+
+    def test_focus_check_accepts_text_or_value_pattern_elements(self):
+        i = self.text.index("function Test-FocusOn")
+        body = self.text[i:i + 1400]
+        self.assertIn("TextPattern", body)
+        self.assertIn("ValuePattern", body)
+
+    def test_focus_trace_is_recorded(self):
+        self.assertIn("Describe-Focus 'afterClick'", self.text)
+
     def test_diagnostics_are_content_free(self):
         # names are only ever printed for a fixed list of UI words; everything else becomes its length
         self.assertIn('"<$($n.Length)>"', self.text)

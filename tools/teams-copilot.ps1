@@ -28,7 +28,12 @@ Add-Type -Namespace KC -Name W -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr h, int n);
 [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
 [DllImport("user32.dll")] public static extern void mouse_event(int f, int x, int y, int d, int e);
+[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+[DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(System.IntPtr v);
+[DllImport("user32.dll")] public static extern uint GetDpiForSystem();
 '@
+$script:DpiMode = 'unknown'
+try { if ([KC.W]::SetProcessDpiAwarenessContext([IntPtr](-4))) { $script:DpiMode = 'per-monitor-v2' } elseif ([KC.W]::SetProcessDPIAware()) { $script:DpiMode = 'system' } else { $script:DpiMode = 'already-set' } } catch { try { [void][KC.W]::SetProcessDPIAware(); $script:DpiMode = 'system' } catch { $script:DpiMode = 'n/a' } }
 $COPILOT = '^(Microsoft 365 )?Copilot(\s|$|,|（|\()'
 
 function Out-Json($o) { $o | ConvertTo-Json -Compress -Depth 5 }
@@ -44,15 +49,17 @@ function Write-DiagFile($why) {
     $rows = @()
     foreach ($e in @($w.FindAll('Descendants', [System.Windows.Automation.Condition]::TrueCondition))) {
       $r = $e.Current.BoundingRectangle
-      if ($r.Width -le 0 -or $r.Height -le 0 -or $r.Y -lt ($wr.Y + $wr.Height * 0.5)) { continue }
+      if ($r.Width -le 0 -or $r.Height -le 0 -or $r.Y -lt ($wr.Y + $wr.Height * 0.4)) { continue }
       $n = [string]$e.Current.Name
       $nm = if ($n -match '^(Copilot|送信|Send|添付|音声|新しいチャット|.{0,12}メッセージ.{0,12}|Message Copilot|Ask Copilot)$') { $n } else { "<$($n.Length)>" }
       $rows += ("{0}|{1}|{2}|foc={3}|x={4},y={5},w={6},h={7}" -f ($e.Current.ControlType.ProgrammaticName -replace '^ControlType\.', ''), (& $mk $e.Current.AutomationId), $nm, $e.Current.IsKeyboardFocusable, [int]$r.X, [int]$r.Y, [int]$r.Width, [int]$r.Height)
       if ($rows.Count -ge 80) { break }
     }
     New-Item -ItemType Directory -Force (Split-Path $DiagFile) | Out-Null
-    $head = "reason=$($why.Substring(0, [Math]::Min(200, $why.Length))) window=$([int]$wr.Width)x$([int]$wr.Height)"
-    [IO.File]::WriteAllText($DiagFile, (($head, $rows) -join "`r`n"), (New-Object Text.UTF8Encoding $false))
+    $dpi = try { [KC.W]::GetDpiForSystem() } catch { 0 }
+    $head = "reason=$($why.Substring(0, [Math]::Min(200, $why.Length))) window=$([int]$wr.Width)x$([int]$wr.Height) dpi=$dpi mode=$script:DpiMode rows=$($rows.Count) lastClick=$script:LastClick"
+    $lines = @($head) + @($script:FocusTrace | ForEach-Object { "focus: $_" }) + @($rows)
+    [IO.File]::WriteAllText($DiagFile, ($lines -join "`r`n"), (New-Object Text.UTF8Encoding $false))
   } catch {}
 }
 function Fail($msg) { Write-DiagFile ([string]$msg); Out-Json @{ ok = $false; error = "$msg [diagfile: $DiagFile]" }; exit 2 }
@@ -104,7 +111,9 @@ function Assert-Foreground($w) {
 function Click($el) {
   $r = $el.Current.BoundingRectangle
   if ($r.Width -le 0) { return $false }
-  [void][KC.W]::SetCursorPos([int]($r.X + [math]::Min(60, $r.Width / 2)), [int]($r.Y + $r.Height / 2))
+  $cx = [int]($r.X + [math]::Min(60, $r.Width / 2)); $cy = [int]($r.Y + $r.Height / 2)
+  $script:LastClick = "$cx,$cy"
+  [void][KC.W]::SetCursorPos($cx, $cy)
   [KC.W]::mouse_event(2, 0, 0, 0, 0); [KC.W]::mouse_event(4, 0, 0, 0, 0); $true
 }
 function Test-CopilotOpen($w) { $w -and ($w.Current.Name -match '(^|\| )(Microsoft 365 )?Copilot( \||$)') }
@@ -136,16 +145,33 @@ function Test-FocusOn($rect) {
     $f = $A::FocusedElement
     $fr = $f.Current.BoundingRectangle
     $wr = (Get-TeamsWindow).Current.BoundingRectangle
-    $editable = ($f.Current.ControlType -eq $CT::Edit) -or ($f.Current.ControlType -eq $CT::Document -and $f.Current.IsKeyboardFocusable)
+    $ct = $f.Current.ControlType
+    $hasPattern = $false
+    foreach ($pt in @([System.Windows.Automation.TextPattern]::Pattern, [System.Windows.Automation.ValuePattern]::Pattern)) { try { [void]$f.GetCurrentPattern($pt); $hasPattern = $true } catch {} }
+    $editable = ($ct -eq $CT::Edit) -or ($ct -eq $CT::Document -and $f.Current.IsKeyboardFocusable) -or
+                (($ct -eq $CT::Group -or $ct -eq $CT::Custom -or $ct -eq $CT::Pane) -and $hasPattern)
     return ($editable -and $fr.Width -gt 0 -and $fr.Height -lt ($wr.Height * 0.7) -and $rect.IntersectsWith($fr))
   } catch { return $false }
 }
+function Describe-Focus($tag) {
+  try {
+    $f = $A::FocusedElement
+    $r = $f.Current.BoundingRectangle
+    $pat = @(); foreach ($x in @(@('text', [System.Windows.Automation.TextPattern]::Pattern), @('value', [System.Windows.Automation.ValuePattern]::Pattern))) { try { [void]$f.GetCurrentPattern($x[1]); $pat += $x[0] } catch {} }
+    $id = ([string]$f.Current.AutomationId) -replace '[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){0,4}', '<id>' -replace '\d+', 'N'
+    "$tag type=$($f.Current.ControlType.ProgrammaticName -replace '^ControlType\.', '') id=$id nameLen=$(([string]$f.Current.Name).Length) foc=$($f.Current.IsKeyboardFocusable) rect=$([int]$r.X),$([int]$r.Y),$([int]$r.Width),$([int]$r.Height) patterns=$($pat -join '+') box=$([int]$script:BoxRect.X),$([int]$script:BoxRect.Y),$([int]$script:BoxRect.Width),$([int]$script:BoxRect.Height)"
+  } catch { "$tag (focus unreadable)" }
+}
 function Focus-Box($b) {
   # never throws: a placeholder (Text) cannot take focus itself, so click it and check where the focus went
-  try { $b.SetFocus() } catch {}
+  $script:FocusTrace = @()
+  $script:FocusTrace += (Describe-Focus 'before')
+  try { $b.SetFocus() } catch { $script:FocusTrace += 'SetFocus threw' }
   Start-Sleep -Milliseconds 200
+  $script:FocusTrace += (Describe-Focus 'afterSetFocus')
   if (Test-FocusOn $script:BoxRect) { return $true }
   [void](Click $b); Start-Sleep -Milliseconds 300
+  $script:FocusTrace += (Describe-Focus 'afterClick')
   Test-FocusOn $script:BoxRect
 }
 function Read-Box($b) {
@@ -393,7 +419,7 @@ if ($DryRun) {
   Assert-Foreground $w; if (Focus-Box $box) { [System.Windows.Forms.SendKeys]::SendWait('^a'); [System.Windows.Forms.SendKeys]::SendWait('{DEL}') }
   Start-Sleep -Milliseconds 500
   $rest = (Squash (Read-Box $box)).Length
-  $script:DryInfo = "boxType=$($box.Current.ControlType.ProgrammaticName -replace '^ControlType\.', '') how=$(if ($script:BoxHow) { $script:BoxHow } else { 'named' }) focus=ok removed=$($rest -le 2) sendButton=$([bool](Find-All $w $CT::Button | Where-Object { $_.Current.Name -match '^(送信|Send)' } | Select-Object -First 1))"
+  $script:DryInfo = "dpiMode=$script:DpiMode focus=[$($script:FocusTrace -join ' ; ')] boxType=$($box.Current.ControlType.ProgrammaticName -replace '^ControlType\.', '') how=$(if ($script:BoxHow) { $script:BoxHow } else { 'named' }) focus=ok removed=$($rest -le 2) sendButton=$([bool](Find-All $w $CT::Button | Where-Object { $_.Current.Name -match '^(送信|Send)' } | Select-Object -First 1))"
   return
 }
 $btn = Find-All $w $CT::Button | Where-Object { $_.Current.Name -match '^(送信|Send)(\s*\(|$)' -and $_.Current.IsEnabled } | Select-Object -First 1

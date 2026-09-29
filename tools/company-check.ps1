@@ -396,8 +396,27 @@ if ($py -and (Want 'T14')) {
 if ($py -and (Want 'T15')) {
   Say "T15 GitHub Copilot で文面の下書き（架空のサンプル 1 件。会社のデータは送りません）"
   $cop = (Get-Command copilot -ErrorAction SilentlyContinue).Source
-  if (-not $cop -and $py) { $cop = ((Py @('-c', 'from kimeru import writer; print(writer.find_exe("copilot", "KIMERU_COPILOT_EXE") or "")')) -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 1) }
-  if (-not $cop) { Rec 'T15' 'SKIP copilot コマンドなし（GitHub Copilot アプリ / winget install GitHub.Copilot）' }
+  if (-not $cop -and $py) {
+    $c = ((Py @('-c', 'from kimeru import writer; print(writer.find_exe("copilot", "KIMERU_COPILOT_EXE") or "")')) -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 1)
+    if ($c -and (Test-Path ([string]$c).Trim())) { $cop = ([string]$c).Trim() }
+  }
+  if (-not $cop) {
+    # not on PATH and not in the usual installer folders: look for it (bounded, read-only)
+    $roots = @($env:LOCALAPPDATA, $env:APPDATA, $env:ProgramFiles, ${env:ProgramFiles(x86)}, (Join-Path $env:USERPROFILE '.local')) | Where-Object { $_ -and (Test-Path $_) }
+    $hits = @(foreach ($r in $roots) { Get-ChildItem -Path $r -Filter 'copilot*' -Recurse -Depth 5 -File -ErrorAction SilentlyContinue |
+      Where-Object { $_.Extension -in '.exe', '.cmd', '.bat', '.ps1' } | Select-Object -First 4 -ExpandProperty FullName })
+    $mask = { param($x) ([string]$x).Replace($env:USERPROFILE, '%USERPROFILE%') }
+    if ($hits.Count) {
+      $cop = $hits[0]
+      $env:KIMERU_COPILOT_EXE = $cop
+      Write-Host ("   copilot が見つかりました: " + (& $mask $cop)) -ForegroundColor Green
+      Write-Host ("   これから常に使うなら:  setx KIMERU_COPILOT_EXE `"" + $cop + "`"") -ForegroundColor Green
+    } else {
+      $wg = try { (& winget --version 2>&1 | Out-String).Trim() } catch { 'なし' }
+      Rec 'T15' ("SKIP copilot が見つかりません（PATH・winget・npm・アプリ内を検索済み、winget=$wg）。GitHub Copilot CLI: winget install GitHub.Copilot")
+    }
+  }
+  if (-not $cop) { }
   elseif (-not (YesNo "   架空のチャット 1 件の返信とタスク説明を GitHub Copilot に書かせますか")) { Rec 'T15' 'SKIP' }
   else {
     $d = Py @('eval\drafts.py', '--backend', 'stub', '--writer', 'copilot', '--n', '1', '--kinds', 'teams.chat')

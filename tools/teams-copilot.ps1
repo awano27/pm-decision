@@ -66,7 +66,7 @@ function Find-Box($w) {
   if ($Action -eq 'ask') {
     # writes: exactly ONE compose-like box may exist in the window. Two (a side chat panel, a meeting chat next to
     # Copilot) or a guess by position could put the request into somebody else's chat, so no guessing here
-    $c = @($edits | Where-Object { $_.Current.BoundingRectangle.Width -gt 0 -and ($_.Current.AutomationId -like 'new-message-*' -or $_.Current.AutomationId -like '*-chat-editor-target-element' -or $_.Current.Name -match 'Copilot|メッセージ|message|質問|Ask') })
+    $c = @($edits | Where-Object { $_.Current.BoundingRectangle.Width -gt 0 -and ($_.Current.AutomationId -like 'new-message-*' -or $_.Current.AutomationId -like '*-chat-editor-target-element' -or $_.Current.Name -match 'メッセージを(送信|入力)|Message Copilot|Send a message|Type a message') })   # not the top search box ("Copilot で検索または質問する")
     $script:BoxCandidates = $c.Count
     $mk = { param($x) ([string]$x) -replace '[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){0,4}', '<id>' -replace '\d+', 'N' }
     $script:EditShapes = (@($edits | Where-Object { $_.Current.BoundingRectangle.Width -gt 0 } | Select-Object -First 6 | ForEach-Object { "$(& $mk $_.Current.AutomationId):len$($_.Current.Name.Length)" }) -join ';')
@@ -79,7 +79,10 @@ function Find-Box($w) {
   $b
 }
 function Get-Box($w) {
+  # the web view builds its accessibility tree lazily (the probe retries for the same reason): look again for a
+  # few seconds before deciding there is no compose box (or more than one)
   $b = Find-Box $w
+  for ($i = 0; -not $b -and $i -lt 10; $i++) { Start-Sleep -Seconds 1; $w2 = Get-TeamsWindow; if ($w2) { $b = Find-Box $w2 } }
   if (-not $b) { Fail "compose box not found, or not the only one (candidates: $script:BoxCandidates; visible edits: $script:EditShapes); nothing pasted. Close side chat panels so only the Copilot chat is open" }
   $b
 }

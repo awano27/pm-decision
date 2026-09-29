@@ -275,8 +275,9 @@ class M365AutoWriter(M365PromptWriter):
         self.script = script or str(Path(__file__).resolve().parent.parent / "tools" / "teams-copilot.ps1")
 
     def draft(self, res, event, instruction=None):
-        prompt = (SYSTEM + GROUNDING + "参照したメールや会議があれば、JSON に \"sources\": [\"件名・会議名\", ...] として"
-                  "最大 3 件まで加えてください。" + "\n\n" + _material(res, event, instruction))
+        prompt = (SYSTEM + GROUNDING + "この件に関係する、あなた（PM）の Microsoft 365 上のメール・会議・チャットがあれば読み、内容を踏まえてください。"
+                  "見つからないものを推測で書いてはいけません。参照したものは JSON に \"sources\": [\"件名・会議名\", ...] として"
+                  "最大 3 件まで加え、何も参照していなければ \"sources\": [] にしてください。" + "\n\n" + _material(res, event, instruction))
         with tempfile.TemporaryDirectory() as d:
             f = os.path.join(d, "prompt.txt")
             with open(f, "w", encoding="utf-8-sig") as h:   # BOM: Windows PowerShell 5.1 reads it as UTF-8

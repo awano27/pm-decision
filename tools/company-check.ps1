@@ -365,7 +365,8 @@ if ($uia -and $py -and (Want 'T18')) {
     $d = Py @('eval\drafts.py', '--backend', 'stub', '--writer', 'm365-auto', '--n', '1', '--kinds', 'teams.chat', '--topic', $topic)
     $sum = ($d -split "`n") | Where-Object { $_ -match '^events=' } | Select-Object -First 1
     $m = [regex]::Match([string]$sum, 'texts=(\d+) drafted=(\d+) held=\d+ sources=(\d+) failed_events=(\d+)')
-    $err = ((($d -split "`n") | Where-Object { $_ -match 'ERROR ' } | Select-Object -First 1) -replace '.*ERROR ', '').Replace($topic, '<件名>')
+    $err = [string](($d -split "`n") | Where-Object { $_ -match 'ERROR ' } | Select-Object -First 1)
+    $err = ($err -replace '.*ERROR ', '').Replace($topic, '<件名>')
     if ($err.Length -gt 300) { $err = $err.Substring(0, 300) }
     if (-not $m.Success) { Rec 'T18' 'NG 実行できませんでした（件名は記録しません）' }
     elseif ($m.Groups[4].Value -ne '0') { Rec 'T18' ("NG writer が失敗: " + $err) }

@@ -230,7 +230,7 @@ python -m kimeru --backend kev run examples/teams_chat.json
 |---|---|---|---|
 | `copilot` | GitHub Copilot CLI（本人のサインイン。会社契約） | GitHub Copilot | 自動（1 件 10〜20 秒） |
 | `m365` | あなたが Microsoft 365 Copilot に貼る | 会社の M365（手で貼る） | 半手動。承認の投稿の後に **「Copilot 用」の依頼文** が別投稿で届く |
-| `m365-auto` | Teams 内の Copilot チャットを画面操作 | 会社の M365 | 自動。**実機で未確認**。失敗したら `m365` に戻る |
+| `m365-auto` | Teams 内の Copilot チャットを画面操作 | 会社の M365 | 自動（会社 PC で確認済み、1 件約 20 秒）。失敗したら `m365` に戻る。Copilot の画面は状態で作りが変わるため、環境によって調整が要る場合があります |
 | `claude` | Claude Code CLI（本人のログイン） | Anthropic | 自動 |
 | （未設定） | 定型文 | どこにも送らない | — |
 
@@ -294,10 +294,10 @@ powershell -ExecutionPolicy Bypass -File tools\split-zip.ps1 -Zip C:\develop\kim
 | Kev による判断（CPU のみ、fp32） | ✅ 1 イベント約 45 秒 | ✅ 約 20 秒（bf16） |
 | GitHub Copilot による文面・メモの下書き | ✅ | ✅ |
 | ADO の取り込み（別テナントの組織） | ✅ | — |
-| 承認の流れ（投稿 → iPhone から OK/NG → 記録） | 一部（1 件目の投稿と OK の読み取りまで。2 件目の投稿の不具合は修正済み） | ✅ 通し（修正・OK・NG・二重処理の防止） |
-| PC への Windows 通知 | 未確認 | ✅ |
+| 承認の流れ（投稿 → iPhone から OK/NG → 記録） | ✅ 2 件の投稿、OK と NG の読み取り、二重処理の防止 | ✅ 通し（修正・OK・NG・二重処理の防止） |
+| PC への Windows 通知 | ✅ | ✅ |
 | `聞き返し N` を Teams の画面から読み取る | 未確認 | 未確認（テストでは確認済み） |
-| `m365-auto`（Teams 内の Copilot を画面操作） | 未確認 | 個人用 Teams には Copilot チャットがなく不可 |
+| `m365-auto`（Teams 内の Microsoft 365 Copilot を画面操作。6 件の文面とメモを 1 回で返す） | ✅ 約 22 秒 | 個人用 Teams には Copilot チャットがなく不可 |
 | 5 分ごとの自動運転（`schedule install`）。writer の設定が引き継がれるかも | 未確認 | 未確認 |
 
 ### Kev-4B の評価
@@ -433,7 +433,8 @@ python eval/day_run.py --backend kev --writer copilot                 # PM の 1
 - [x] 文面と判断メモを Copilot に下書きさせ、承認・修正・聞き返しを返信で行う
 - [x] 会社 PC に、フォルダ 1 つを持ち込んで動かす（分割コピーと `JOIN.cmd`）
 - [ ] Teams 連携の堅牢化: 本文の全文取得・プレビューの重複排除・操作中は割り込まない
-- [ ] Microsoft 365 Copilot の画面操作（`m365-auto`）を、会社 PC で確かめる
+- [x] Microsoft 365 Copilot の画面操作（`m365-auto`）を、会社 PC で確かめる
+- [ ] `m365-auto` が参照したメール・会議の出典（`sources`）を返すか確かめる
 - [ ] iPhone への通知（自分宛ての Teams 投稿は通知されない）
 - [ ] 実データ（匿名化した会社のイベント）での評価
 - [ ] 実行器を action 種別ごとに opt-in で解放（最初は ADO コメント）

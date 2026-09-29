@@ -254,7 +254,7 @@ python -m kimeru --backend kev run examples/teams_chat.json
 | `m365` | あなたが Microsoft 365 Copilot に貼る | 会社の M365（手で貼る） | **M365 だけの人はこちら（推奨）**。承認の投稿の後に **「Copilot 用」の依頼文** が別投稿で届く。返ってきた文面は `下書き N <文面>` と 1 行で返信すると取り込まれる（[下記](#m365-だけの人向けの手順)） |
 | `m365-auto`（**実験的**） | Teams 内の Copilot チャットを画面操作 | 会社の M365 | 自動（画面の作りに依存し、環境ごとの確認が要る）。失敗したら `m365` の依頼文に切り替わり、30 分は自動を休む。貼り付け先を多重に確認し、少しでも疑わしければ何も貼らずに止まる（[SECURITY.md](SECURITY.md)） |
 | `claude` | Claude Code CLI（本人のログイン） | Anthropic | 自動 |
-| `codex` | OpenAI Codex CLI（`codex exec`。本人の ChatGPT / API のログイン） | OpenAI | 自動（1 件約 30 秒） |
+| `codex` | OpenAI Codex CLI（`codex exec`。本人の ChatGPT / API のログイン）。**モデルは `gpt-6-luna`（推論 `low`）に固定**。使える名前は `codex debug models` で見られる | OpenAI | 自動（1 件約 12 秒。`gpt-6-sol`・推論最大の約 30 秒と、下書きの質は同程度） |
 | `grok` | xAI Grok CLI（`grok --prompt-file`。本人のログイン） | xAI | 自動（**遅い**: 1 件 1〜3 分） |
 | `cmd` | 任意の CLI（`KIMERU_WRITER_CMD="ollama run <モデル>"` など。プロンプトを標準入力で渡し、答えを標準出力から読む） | コマンド次第（ローカルのモデルなら PC の外に出ない） | 自動 |
 | （未設定） | 定型文 | どこにも送らない | — |
@@ -420,7 +420,9 @@ python -m kimeru schedule install|remove|status   # タスクスケジューラ�
 | `KIMERU_KEV_URL` | Kev の接続先（既定 `http://127.0.0.1:8009/v1`） |
 | `TYPESAFE_API_KEY` | Jev を使うときのキー |
 | `KIMERU_WRITER` | 文面の下書き（`copilot` / `codex` / `grok` / `claude` / `cmd` / `m365` / `m365-auto`。未設定なら定型文） |
-| `KIMERU_WRITER_MODEL` | writer のモデル名（省略可） |
+| `KIMERU_WRITER_MODEL` | writer のモデル名（`copilot` / `claude`。省略可） |
+| `KIMERU_CODEX_MODEL` / `KIMERU_CODEX_EFFORT` | `codex` のモデル名（既定 `gpt-6-luna`）と推論の強さ（既定 `low`）。空にすると Codex の設定（`~/.codex/config.toml`）に従う |
+| `KIMERU_GROK_MODEL` | `grok` のモデル名（省略可） |
 | `KIMERU_TOAST` | `0` で PC の Windows 通知を止める |
 | `KIMERU_AZ` | `az.cmd` の場所（`kimeru` の隣の `az`、`C:\az` も探します） |
 | `KIMERU_SELF_MARKER` | 自分とのチャットの表示が「(あなた)」でないときの言葉（例: `自分`） |

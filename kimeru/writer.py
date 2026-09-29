@@ -299,9 +299,14 @@ class CodexWriter:
     """OpenAI Codex CLI, one non-interactive turn: read-only sandbox, no session kept, empty folder; the answer is read
     from the file Codex writes (its stdout also carries progress lines)."""
     NAME = "codex"
+    # Fixed on purpose: without -m, Codex uses whatever ~/.codex/config.toml says (here: the largest model at maximum
+    # reasoning, slow and heavy for a 3-sentence reply). `codex debug models` lists the names this login can use.
+    DEFAULT_MODEL = "gpt-6-luna"
+    DEFAULT_EFFORT = "low"
 
-    def __init__(self, model=None, timeout=240, exe=None):
-        self.model = model or os.environ.get("KIMERU_CODEX_MODEL", "")
+    def __init__(self, model=None, timeout=240, exe=None, effort=None):
+        self.model = model if model is not None else os.environ.get("KIMERU_CODEX_MODEL", self.DEFAULT_MODEL)
+        self.effort = effort if effort is not None else os.environ.get("KIMERU_CODEX_EFFORT", self.DEFAULT_EFFORT)
         self.timeout = timeout
         self.exe = exe or find_exe("codex", "KIMERU_CODEX_EXE")
 
@@ -314,7 +319,8 @@ class CodexWriter:
         with tempfile.TemporaryDirectory() as d:
             out = os.path.join(d, "answer.txt")
             cmd = [self.exe, "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "--color", "never",
-                   "-o", out] + (["-m", self.model] if self.model else []) + ["-"]
+                   "-o", out] + (["-m", self.model] if self.model else []) \
+                + (["-c", f'model_reasoning_effort="{self.effort}"'] if self.effort else []) + ["-"]
             text = _run(cmd, prompt, self.timeout)
             try:
                 with open(out, encoding="utf-8") as h:

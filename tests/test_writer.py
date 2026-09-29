@@ -690,3 +690,37 @@ class TestOtherCliWriters(unittest.TestCase):
             writer.apply({"actions": [{"type": "teams.reply", "to": "Sato", "text": "受領しました。"}]},
                          {"author": "Sato", "text": "リリースは来週火曜にずらせますか"}, w)
             self.assertEqual(len(w.calls), 2, name)
+
+
+class TestCodexModelIsPinned(unittest.TestCase):
+    def cmd_of(self, **kw):
+        seen = {}
+
+        def fake_run(cmd, prompt, timeout):
+            seen["cmd"] = cmd
+            return "x"
+
+        w = writer.CodexWriter(exe="codex-not-real", **kw)
+        with mock.patch.object(writer, "_run", fake_run):
+            w.ask_text("p")
+        return seen["cmd"]
+
+    def test_default_is_luna_with_low_effort(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("KIMERU_CODEX_MODEL", None)
+            os.environ.pop("KIMERU_CODEX_EFFORT", None)
+            cmd = self.cmd_of()
+        self.assertEqual(cmd[cmd.index("-m") + 1], "gpt-6-luna")
+        self.assertIn('model_reasoning_effort="low"', cmd)
+
+    def test_env_overrides(self):
+        with mock.patch.dict(os.environ, {"KIMERU_CODEX_MODEL": "gpt-6-sol", "KIMERU_CODEX_EFFORT": "medium"}):
+            cmd = self.cmd_of()
+        self.assertEqual(cmd[cmd.index("-m") + 1], "gpt-6-sol")
+        self.assertIn('model_reasoning_effort="medium"', cmd)
+
+    def test_empty_env_leaves_the_choice_to_codex(self):
+        with mock.patch.dict(os.environ, {"KIMERU_CODEX_MODEL": "", "KIMERU_CODEX_EFFORT": ""}):
+            cmd = self.cmd_of()
+        self.assertNotIn("-m", cmd)
+        self.assertFalse([a for a in cmd if "model_reasoning_effort" in a])

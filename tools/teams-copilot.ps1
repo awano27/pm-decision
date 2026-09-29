@@ -84,7 +84,7 @@ function Get-BoxText($b) {
 }
 function Squash($s) {
   # blanks and invisible format characters, incl. U+FFFC (object marker) that an empty web editor can hold
-  ([string]$s) -replace '[\s ­​-‏⁠﻿￼]', ''
+  ([string]$s) -replace '[\s ­​-‏⁠﻿\uFFFC]', ''
 }
 function Get-PageText($w) {
   # the whole web page as one text (the chat is a web view): the longest Document text in the window
@@ -246,5 +246,8 @@ if ($dbg) {
   $tail = ((After-Marker $page) -replace '[\uFFFC\s]+', ' ').Trim()
   $dump += "pageTailVisible:len$($tail.Length):" + $tail.Substring(0, [math]::Min(150, $tail.Length))
 }
-Out-Json @{ ok = $false; error = "no answer carrying our keys within $TimeoutSec s"; debug = $dump }
+# lengths and flags only, never text: how much new text appeared, whether Copilot still looked busy, whether a JSON-like brace was seen
+$tl = ((After-Marker $page) -replace '[\uFFFC\s]+', ' ').Trim()
+$shape = "newNodes=$($nodes.Count) tailLen=$($tl.Length) busy=$(Test-Busy $w) brace=$($tl.Contains('{')) keys=$([bool]($tl -match $keyRx))"
+Out-Json @{ ok = $false; error = "no answer carrying our keys within $TimeoutSec s ($shape)"; debug = $dump }
 exit 2

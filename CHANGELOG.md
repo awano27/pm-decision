@@ -2,6 +2,15 @@
 
 ## 未リリース
 
+### できないことの改善（A〜F）
+
+- 設定ファイル（`config.json`）と `kimeru config`。自動運転が設定を引き継ぐ。`schedule status`
+- push 通知（件数のみ）、承認した `ado.comment` の実行（二重実行の防止・`再実行 N`）
+- Teams の本文の全文読み取り（`read_full`、既定は無効。確認は選択と題名の両方）
+- 判断の速さ: 優先順・時間の上限・plan の簡略化・質問の一括化・`perf` の記録・`eval/measure_speed.py`
+- `kimeru review` / `calibrate` / `digest --week --share`、試験運用の手順と Issue 様式
+- 実機の確認項目 `T21`〜`T24` を追加
+
 - **要件の検討の依頼**（「新機能の要件を検討してもらえますか」）を、独立した意図と進め方（`playbooks/requirements_review.json`、6 ステップ）で扱う。返信は目的・対象ユーザーを聞く形で下書きされる（[シナリオ](docs/scenarios/requirements-review.md)）
 
 - 文面の質: 書き方の決まり（種別ごとの構成・良い例と悪い例）、読みづらい文面の 1 回だけの書き直し、質の評価（`eval/draft_quality.py`）

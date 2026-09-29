@@ -100,6 +100,9 @@ Write-Host "kimeru 会社PCチェック（外部送信の前には必ず確認�
 Say "T0 環境"
 $lang = [string]$ExecutionContext.SessionState.LanguageMode
 $teamsVer = (Get-AppxPackage -Name MSTeams -ErrorAction SilentlyContinue).Version
+$verFile = Join-Path $root 'VERSION'
+$build = if (Test-Path $verFile) { (Get-Content -TotalCount 1 $verFile).Trim() } else { '不明（VERSION なし: 古い版の可能性）' }
+Rec 'build' $build
 Rec 'T0' ("PS={0} LanguageMode={1} Teams={2}" -f $PSVersionTable.PSVersion, $lang, ($(if ($teamsVer) { $teamsVer } else { 'new Teams なし' })))
 $uia = $lang -eq 'FullLanguage'
 if (-not $uia) { Rec 'T1-T5' 'SKIP（ConstrainedLanguage: 組織ポリシーで画面操作不可）' }

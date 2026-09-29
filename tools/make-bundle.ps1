@@ -37,9 +37,11 @@ New-Item -ItemType Directory -Force $Out | Out-Null
 $srcZip = Join-Path $env:TEMP 'kimeru-bundle.zip'
 git -C $root archive --format=zip -o $srcZip HEAD
 if ($LASTEXITCODE -ne 0) { throw 'git archive failed' }
+$buildId = "kimeru $(git -C $root rev-parse --short HEAD) built $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
 $dst = Join-Path $Out 'kimeru'
 if (Test-Path $dst) { Remove-Item -Recurse -Force $dst }
 Expand-Archive -Path $srcZip -DestinationPath $dst
+Set-Content -Path (Join-Path $dst 'VERSION') -Value $buildId -Encoding ASCII
 Remove-Item $srcZip
 
 # no-install Python inside kimeru, so the company PC never has to fetch it

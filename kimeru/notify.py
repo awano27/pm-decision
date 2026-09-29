@@ -82,6 +82,8 @@ def format_post(n, rec):
             lines.append("・選択肢: " + " / ".join(memo["options"]))
         if memo.get("next"):
             lines.append(f"・次の一手: {memo['next']}")
+        if rec.get("memo_unverified"):
+            lines.append("⚠ メモに、元の材料に無い日付・数値・人名: " + ", ".join(rec["memo_unverified"]))
     if rec.get("copilot_sources"):
         lines.append("Copilot が参照: " + " / ".join(rec["copilot_sources"]))
     drafts = [a for a in rec.get("actions", []) if a.get("drafted_by")]
@@ -106,7 +108,8 @@ def format_post(n, rec):
                  + (f"「{a['title']}」" if a.get("title") else ""))
         lines.append(f"{label}の下書き（{a['drafted_by']}）:\n{a[writer_mod.FIELD[a['type']]]}")
         if a.get("unverified"):
-            lines.append("⚠ 元の材料に無い日付・数値: " + ", ".join(a["unverified"]))
+            lines.append("⚠ 元の材料に無い日付・数値・人名: " + ", ".join(a["unverified"])
+                         + ("（メール・会議由来なら、元の内容を確認してください）" if str(a.get("drafted_by", "")).startswith("m365") else ""))
         if a.get("ask_back"):
             lines.append(f"聞き返すなら（「聞き返し {n}」でこちらを送る）:" + chr(10) + a["ask_back"])
             if a.get("ask_back_unverified"):

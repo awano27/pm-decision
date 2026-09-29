@@ -49,7 +49,13 @@ LABEL = {"teams.reply": "返信", "teams.post": "チャネル投稿", "ado.comme
 EVENT_FIELDS = ("author", "text", "item", "meeting", "title", "description", "work_item_type",
                 "rule", "severity", "condition")
 MAX_FIELD = 2000
-TOKENS = re.compile(r"\d+[/月]\d+日?|\d{1,2}:\d{2}|#\d+|@\S+|\d+(?:\.\d+)?\s*(?:%|件|日|時間|人|円|万|週間)")
+TOKENS = re.compile(
+    r"\d{1,2}[/月]\d{1,2}日?|\d{1,2}:\d{2}|#\d+|@\S+|[A-Z][A-Z0-9]{1,9}-\d+|Sev\s?\d|"
+    r"\d+(?:\.\d+)?\s*(?:%|営業日|週間|時間|か月|ヶ月|カ月|件|日|人|円|万|回|個|名|分|台|秒|時)|"
+    r"[一二三四五六七八九十]+\s*(?:営業日|週間|時間|件|日|人|円|万|回|個|名|分|台)|"
+    r"[月火水木金土日]曜日?|(?:明後日|明日|本日|今日|再来週|来週|今週|来月|今月|月末|週明け|今夜|今朝)|"
+    r"(?:[一-龠ァ-ヶ][一-龠ァ-ヶA-Za-z]{0,7})さん")
+NOT_NAMES = ("皆", "みな", "お客", "各", "先方", "皆様", "担当者", "関係者", "お世話", "お疲れ", "ご担当", "どなた")
 
 
 def targets(res):
@@ -308,19 +314,39 @@ def get_writer(name=None):
     return WRITERS[name]()
 
 
+KANJI_DIGIT = dict(zip("一二三四五六七八九十", "12345678910".replace("10", "0")))
+
+
 def _canon(s):
-    """Same date / number written differently compares equal: NFKC, 10月1日 -> 10/1, no spaces."""
+    """Same fact written another way compares equal: NFKC, 10月1日 -> 10/1, 火曜日 -> 火曜, 本日 -> 今日,
+    三件 -> 3件, no blanks."""
     import unicodedata
     s = unicodedata.normalize("NFKC", s or "")
     s = re.sub(r"(\d{1,2})月(\d{1,2})日?", r"\1/\2", s)
+    s = s.replace("曜日", "曜").replace("本日", "今日")
+    for en, ja in (("minutes?|mins?", "分"), ("hours?|hrs?", "時間"), ("seconds?|secs?", "秒"), ("weeks?", "週間"), ("days?", "日")):
+        s = re.sub(rf"(\d+)\s*(?:{en})(?![A-Za-z])", lambda m, ja=ja: m.group(1) + ja, s, flags=re.I)   # 10 minutes == 10分
+    s = re.sub(r"([一二三四五六七八九])(?=\s*(?:営業日|週間|時間|件|日|人|円|万|回|個|名|分|台))", lambda m: KANJI_DIGIT[m.group(1)], s)
+    s = re.sub(r"十(?=\s*(?:営業日|週間|時間|件|日|人|円|万|回|個|名|分|台))", "10", s)
     return re.sub(r"\s+", "", s)
 
 
-def unverified(text, material):
-    """Dates / numbers / ids in a draft that the material does not contain."""
-    m = _canon(material)
-    return sorted({t for t in TOKENS.findall(text or "") if _canon(t) not in m})
+def _covered(token, mat):
+    c = _canon(token)
+    if re.fullmatch(r"\d{1,2}日", c):   # a bare day: any date ending in it (10/15) or the same day
+        n = c[:-1]
+        return bool(re.search(rf"(?<!\d){n}日|/{n}(?!\d)", mat))
+    if c.endswith("さん"):
+        stem = c[:-2]
+        return stem in NOT_NAMES or stem in mat or any(stem.endswith(x) for x in NOT_NAMES)
+    return bool(re.search(r"(?<!\d)" + re.escape(c) + r"(?!\d)", mat, re.I))
 
+
+def unverified(text, material):
+    """Dates / numbers / ids / people in a draft that the material does not contain (digit boundaries
+    respected: 3件 is not covered by 13件; 火曜日 equals 火曜; 15日 is covered by 10/15)."""
+    m = _canon(material)
+    return sorted({t for t in TOKENS.findall(text or "") if not _covered(t, m)})
 
 def _item_text(x):
     """A list item as one line: a model may answer {"option": "延期", "note": "..."} instead of a string."""
@@ -357,24 +383,48 @@ def summarize_day(writer, lines):
     return [str(x).strip()[:120] for x in (d.get("lines") or []) if str(x).strip()][:3]
 
 
-REFUSAL = re.compile(r"申し訳(ありません|ございません)|お手伝いできません|(作成|回答|対応)(でき|いたしかね)ません|"
-                     r"I can(no|')t|I'm sorry|As an AI", re.I)
-META = re.compile(r"JSON|プロンプト|(与えられた|提供された|いただいた)材料|材料(には|に)(ない|記載)|kimeru|"
-                  r"(上記|この)の?指示|(どの|何を).{0,20}(書け|作成すれ)ば|(情報|詳細)を(教えて|いただけ).{0,20}(作成|お書き)")
-BROKEN = re.compile(r"[{}]|```")
+# What makes a drafted text unusable. Labeled examples: tests/text_check_cases.py. The patterns aim at the
+# text refusing or talking about its own instructions, not at ordinary business Japanese: an apology
+# ("ご迷惑をおかけして申し訳ございません"), a refusal of a colleague's request ("本日は別件で対応できません"),
+# a technical word (JSON, プロンプト, {environment}) or the tool's name are all fine.
+REFUSAL = re.compile(
+    r"(申し訳|恐れ入り)[^。]{0,12}(ありません|ございません|ますが)[^。]{0,40}(作成|回答|お答え|お手伝い|提供|生成|出力|返信)[^。]{0,10}"
+    r"(でき(ません|ない)|いたしかねます)|お手伝い(でき|いたしかね)|お答え(でき|いたしかね)|"
+    r"この(内容|依頼|リクエスト)(では|には|は)[^。]{0,20}(できません|お答え|お手伝い)|"
+    r"I\s*(can(no|')t|am unable|'m unable)|I'?m sorry|Sorry, I|As an AI|I apologi[sz]e", re.I)
+META = re.compile(
+    r"(与えられた|提供された)(材料|情報|内容)|いただいた材料|上記の(材料|指示)|材料(には|に)(ない|なく|記載|含まれ)|"
+    r"(上記|この)の?指示に従|(どの|何の|どんな)(件|内容|こと).{0,12}(書け|作成すれ|教えて)|"
+    r"JSON(を|で)(出力|返)|プロンプト(の内容|を確認|に従|どおり|通り)|(出力|回答)形式(に従|どおり|通り)")
+PLACEHOLDER = re.compile(
+    r"[○◯〇]{1,}|(?<![A-Za-z])[Xx]{3,}(?![A-Za-z])|\[[^\]]*(名|日付|日時|担当者|氏名|件名|内容|ここ)[^\]]*\]|"
+    r"<[^>\s]{1,10}>|\{[^}]*[ぁ-んァ-ヶ一-龠][^}]*\}")
+PREAMBLE = re.compile(r"^\s*((以下|こちら|下記)(が|は|に|の)[^。:：]{0,14}(返信|下書き|回答|文面|案|コメント|説明)|"
+                      r"(Here is|Here's|Sure|Certainly|Of course)\b)", re.I)
+BROKEN = re.compile(r'^\s*(\{\s*"|\[\s*[\{"])|```|"[A-Za-z_]\w*"\s*:')
+KANA = re.compile(r"[ぁ-んァ-ヶー]")
 
 
 def unusable(text):
-    """Why a drafted text must not be used, or "": a refusal, a question back to the PM or the
-    assistant talking about its instructions, or broken output (JSON / code fences)."""
+    """Why a drafted text must not be used, or "": empty, too short, a refusal, a wrong language, a
+    template left unfilled, a lead-in sentence, talk about the instructions, or broken output."""
     if not has_content(text):
         return "空の返事"
-    if REFUSAL.search(text):
-        return "断りの返事"
-    if META.search(text):
-        return "PM への聞き返し・指示への言及"
     if BROKEN.search(text):
         return "壊れた返事"
+    visible = len(re.sub(r"[\s\W_]", "", text))
+    if visible < 5:
+        return "短すぎる返事"
+    if REFUSAL.search(text):
+        return "断りの返事"
+    if not KANA.search(text) and visible >= 8:   # Japanese sentences carry kana; English or Chinese ones do not
+        return "日本語ではない返事"
+    if PLACEHOLDER.search(text):
+        return "穴埋めのまま"
+    if PREAMBLE.search(text):
+        return "前置きつきの返事"
+    if META.search(text):
+        return "PM への聞き返し・指示への言及"
     return ""
 
 
@@ -414,8 +464,20 @@ def apply(res, event, writer, instruction=None):
         # key names only (never values): enough to see what shape came back
         return fallback("返事に下書きが無い（返ったキー: " + ", ".join(sorted(str(k) for k in d)[:6]) + "）")
     memo = _memo(d.get("memo"))
+    for k in ("summary", "next"):   # the same checks as a draft: a refusal is not a summary
+        if k in memo and unusable(memo[k]) not in ("", "短すぎる返事"):
+            memo.pop(k)
+    for k in ("missing", "options"):
+        if k in memo:
+            memo[k] = [x for x in memo[k] if unusable(x) in ("", "短すぎる返事")]
+            if not memo[k]:
+                memo.pop(k)
     if memo:
         res["memo"] = memo
+        bad = unverified(" ".join(str(v) for k, v in memo.items() if k != "ask_back" and isinstance(v, str))
+                         + " " + " ".join(x for k in ("missing", "options") for x in memo.get(k, [])), material)
+        if bad:   # the memo is the most prominent text and the least checked: invented dates / numbers / people
+            res["memo_unverified"] = bad
         ask = memo.pop("ask_back", "")
         reply = next((a for _, a in todo if a["type"] == "teams.reply"), None)
         if ask and reply is not None and not unusable(ask):

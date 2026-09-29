@@ -113,7 +113,21 @@ def _fmt(r):
     return "\n".join(lines)
 
 
+def _safe_streams():
+    """Output must never crash the run: a piped stdout on Windows is cp1252 / cp932 and cannot encode "→" or Japanese.
+    Piped output (a scheduler, another program) is UTF-8; a console keeps its encoding but substitutes what it cannot show."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if stream.isatty():
+                stream.reconfigure(errors="replace")
+            else:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main(argv=None):
+    _safe_streams()
     ap = argparse.ArgumentParser(prog="kimeru")
     ap.add_argument("--graphs", default=str(HERE / "graphs"))
     ap.add_argument("--playbooks", default=str(DEFAULT_PLAYBOOKS))

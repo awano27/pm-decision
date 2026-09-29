@@ -8,7 +8,7 @@ kimeru は PM の Teams・ADO のメッセージを読み、判断の下書き�
 |---|---|---|
 | 判断（Kev） | **PC の外に出ない** | 判断モデルはローカルで動き、ローカル宛ての通信はプロキシを経由しない |
 | 判断（Jev） | TypeSafe の API | 利用規約に従い、性能数値は公開しない |
-| 文面の下書き（`copilot` / `claude`） | GitHub Copilot / Claude | 判断対象のメッセージの本文・送信者・チケットの説明を送る。会社が認めた経路だけを使う |
+| 文面の下書き（`copilot` / `claude` / `codex` / `grok`） | GitHub Copilot / Anthropic / OpenAI / xAI（サインインしているアカウントの契約に従う） | 判断対象のメッセージの本文・送信者・チケットの説明を送る。会社が認めた経路だけを使う |
 | 文面の下書き（`m365-auto` / `m365`） | Microsoft 365 Copilot（自分のテナント内） | 依頼文を Teams の Copilot チャットに入れる |
 | 実際の書き込み | **自分とのチャットへの投稿だけ** | ADO 更新・当番呼び出し・相手への返信は `out/decisions.jsonl` に計画として残るのみ |
 | 記録 | ローカル（`out/`、自動運転では `%LOCALAPPDATA%\kimeru`） | 同僚のメッセージの一部や下書きを含む。PC の外に出さない |

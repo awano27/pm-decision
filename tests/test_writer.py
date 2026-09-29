@@ -621,3 +621,72 @@ class TestCopilotQuota(unittest.TestCase):
             writer.apply(res, {"author": "Sato", "text": "確認をお願いします"}, w)
         self.assertEqual(res["actions"][0]["text"], "受領しました。")
         self.assertIn("上限", res["writer_error"])
+
+
+class TestOtherCliWriters(unittest.TestCase):
+    """GPT (Codex CLI), Grok and any other command: the same draft contract, only the command line differs."""
+
+    def test_registry_and_names(self):
+        for name in ("codex", "grok", "cmd"):
+            self.assertEqual(writer.get_writer(name).NAME, name)
+
+    def test_codex_reads_the_answer_file_and_keeps_the_sandbox_read_only(self):
+        seen = {}
+
+        def fake_run(cmd, prompt, timeout):
+            seen["cmd"], seen["prompt"] = cmd, prompt
+            with open(cmd[cmd.index("-o") + 1], "w", encoding="utf-8") as h:
+                h.write('{"a1": "承知しました。"}')
+            return "progress lines that are not the answer"
+
+        w = writer.CodexWriter(exe="codex-not-real", model="gpt-x")
+        with mock.patch.object(writer, "_run", fake_run):
+            out = w.ask_text("PROMPT")
+        self.assertEqual(out, '{"a1": "承知しました。"}')
+        self.assertEqual(seen["prompt"], "PROMPT")
+        for flag in ("exec", "--ephemeral", "--skip-git-repo-check", "read-only", "-m", "gpt-x"):
+            self.assertIn(flag, seen["cmd"])
+        self.assertEqual(seen["cmd"][-1], "-")          # the prompt is read from stdin
+
+    def test_codex_falls_back_to_stdout_when_no_file_was_written(self):
+        w = writer.CodexWriter(exe="codex-not-real")
+        with mock.patch.object(writer, "_run", return_value="the answer"):
+            self.assertEqual(w.ask_text("x"), "the answer")
+
+    def test_grok_gets_the_prompt_as_a_file_with_one_turn_and_no_web(self):
+        seen = {}
+
+        def fake_run(cmd, prompt, timeout):
+            seen["cmd"] = cmd
+            with open(cmd[cmd.index("--prompt-file") + 1], encoding="utf-8") as h:
+                seen["file"] = h.read()
+            return '{"a1": "x"}'
+
+        w = writer.GrokWriter(exe="grok-not-real")
+        with mock.patch.object(writer, "_run", fake_run):
+            w.ask_text("PROMPT テキスト")
+        self.assertEqual(seen["file"], "PROMPT テキスト")
+        for flag in ("--max-turns", "1", "--disable-web-search", "plain"):
+            self.assertIn(flag, seen["cmd"])
+
+    def test_missing_cli_is_reported_not_crashed(self):
+        for w in (writer.CodexWriter(), writer.GrokWriter(), writer.CmdWriter(command="")):
+            if hasattr(w, "exe"):
+                w.exe = None                      # the CLI is not installed
+            with self.assertRaises(RuntimeError):
+                w.ask_text("x")
+
+    def test_cmd_writer_runs_any_command_with_the_prompt_on_stdin(self):
+        import sys
+        w = writer.CmdWriter(command="placeholder")
+        w.argv = [sys.executable, "-c", "import sys; print(sys.stdin.read().upper())"]
+        self.assertEqual(w.ask_text("abc").strip(), "ABC")
+        self.assertEqual(writer.CmdWriter('ollama run "qwen 2.5"').argv, ["ollama", "run", "qwen 2.5"])
+
+    def test_the_rewrite_pass_applies_to_every_cli_writer(self):
+        for name in ("codex", "grok", "cmd"):
+            w = PolishWriter()
+            w.NAME = name
+            writer.apply({"actions": [{"type": "teams.reply", "to": "Sato", "text": "受領しました。"}]},
+                         {"author": "Sato", "text": "リリースは来週火曜にずらせますか"}, w)
+            self.assertEqual(len(w.calls), 2, name)

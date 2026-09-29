@@ -4,6 +4,7 @@
 
 - 文面の質: 書き方の決まり（種別ごとの構成・良い例と悪い例）、読みづらい文面の 1 回だけの書き直し、質の評価（`eval/draft_quality.py`）
 - GitHub Copilot の月間の上限に達したら 6 時間は呼ばず、定型文を理由つきで届ける
+- writer に OpenAI Codex CLI（`codex`）、xAI Grok CLI（`grok`）、任意の CLI（`cmd`）を追加。開発 PC での評価を Copilot の上限に頼らずに回せる
 
 ## 1.0.0
 

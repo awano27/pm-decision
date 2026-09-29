@@ -31,6 +31,15 @@ def _tokens(text):
     return {t for t in TOKEN.findall(text or "")}
 
 
+def has_tradeoff(option):
+    """An option names both what is good and what is worrying: with the words (利点 / 懸念 / ただし / 一方 ...) or as
+    「案：良い点／気になる点」 (the shape the prompt asks for)."""
+    if re.search(r"利点|懸念|リスク|メリット|デメリット|ただし|一方|反面|が、|ものの", option):
+        return True
+    m = re.search(r"[：:](.+?)[／/](.+)", option)
+    return bool(m and len(m.group(1).strip()) >= 4 and len(m.group(2).strip()) >= 4)
+
+
 def check(item, material_text):
     text, tpl = item["text"], item.get("template") or ""
     flags = writer.quality_flags(text, tpl, material_text)
@@ -101,7 +110,7 @@ def main():
             memo_flags = []
             if len(opts) == 1:
                 memo_flags.append("options_few")
-            if opts and not all(re.search(r"利点|懸念|リスク|メリット|デメリット|ただし|一方|反面|が、|ものの", o) for o in opts):
+            if opts and not all(has_tradeoff(o) for o in opts):
                 memo_flags.append("options_no_tradeoff")
             if not mm.get("next"):
                 memo_flags.append("next_missing")

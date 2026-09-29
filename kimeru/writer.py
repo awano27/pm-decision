@@ -10,6 +10,9 @@ the full text in the self chat (notify.py) and answers OK / NG / 修正 N <指�
 
   KIMERU_WRITER=copilot   GitHub Copilot CLI (`copilot`, the user's own sign-in; company contract)
   KIMERU_WRITER=claude    Claude Code CLI (`claude -p`, the user's own login)
+  KIMERU_WRITER=codex     OpenAI Codex CLI (`codex exec`, the user's own ChatGPT / API login)
+  KIMERU_WRITER=grok      xAI Grok CLI (`grok --prompt-file`, the user's own login)
+  KIMERU_WRITER=cmd       any other CLI: KIMERU_WRITER_CMD="<command that reads the prompt on stdin and prints the answer>"
   KIMERU_WRITER=m365      no LLM call: the approval post is followed by a ready-to-paste request for
                           Microsoft 365 Copilot ("[kimeru #N Copilot 用]"); the PM pastes it and sends
                           the answer by hand (Copilot may use their mail and meetings as context)
@@ -292,6 +295,83 @@ class CopilotWriter:
         return _run(base, prompt, self.timeout)
 
 
+class CodexWriter:
+    """OpenAI Codex CLI, one non-interactive turn: read-only sandbox, no session kept, empty folder; the answer is read
+    from the file Codex writes (its stdout also carries progress lines)."""
+    NAME = "codex"
+
+    def __init__(self, model=None, timeout=240, exe=None):
+        self.model = model or os.environ.get("KIMERU_CODEX_MODEL", "")
+        self.timeout = timeout
+        self.exe = exe or find_exe("codex", "KIMERU_CODEX_EXE")
+
+    def draft(self, res, event, instruction=None):
+        return _parse_best(self.ask_text(SYSTEM + "\n\n" + _material(res, event, instruction)), _wanted(res))
+
+    def ask_text(self, prompt):
+        if not self.exe:
+            raise RuntimeError("codex CLI not found (npm i -g @openai/codex)")
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "answer.txt")
+            cmd = [self.exe, "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "--color", "never",
+                   "-o", out] + (["-m", self.model] if self.model else []) + ["-"]
+            text = _run(cmd, prompt, self.timeout)
+            try:
+                with open(out, encoding="utf-8") as h:
+                    return h.read() or text
+            except OSError:
+                return text
+
+
+class GrokWriter:
+    """xAI Grok CLI, headless single turn: the prompt is a file, no web search, one agent turn."""
+    NAME = "grok"
+
+    def __init__(self, model=None, timeout=240, exe=None):
+        self.model = model or os.environ.get("KIMERU_GROK_MODEL", "")
+        self.timeout = timeout
+        self.exe = exe or find_exe("grok", "KIMERU_GROK_EXE")
+
+    def draft(self, res, event, instruction=None):
+        return _parse_best(self.ask_text(SYSTEM + "\n\n" + _material(res, event, instruction)), _wanted(res))
+
+    def ask_text(self, prompt):
+        if not self.exe:
+            raise RuntimeError("grok CLI not found")
+        with tempfile.TemporaryDirectory() as d:
+            f = os.path.join(d, "prompt.txt")
+            with open(f, "w", encoding="utf-8") as h:
+                h.write(prompt)
+            cmd = [self.exe, "--prompt-file", f, "--output-format", "plain", "--max-turns", "1", "--disable-web-search"]
+            if self.model:
+                cmd += ["-m", self.model]
+            return _run(cmd, "", self.timeout)
+
+
+class CmdWriter:
+    """Any other command-line LLM (Gemini, a local Ollama model, ...): KIMERU_WRITER_CMD is the command; the prompt goes in
+    on stdin and the answer is read from stdout. Example: KIMERU_WRITER_CMD="ollama run qwen2.5:14b"."""
+    NAME = "cmd"
+
+    def __init__(self, command=None, timeout=240):
+        import shlex
+        self.command = command if command is not None else os.environ.get("KIMERU_WRITER_CMD", "")
+        self.timeout = timeout
+        self.argv = shlex.split(self.command, posix=(os.name != "nt")) if self.command else []
+        self.argv = [a[1:-1] if len(a) > 1 and a[0] == a[-1] and a[0] in "\"'" else a for a in self.argv]
+
+    def draft(self, res, event, instruction=None):
+        return _parse_best(self.ask_text(SYSTEM + "\n\n" + _material(res, event, instruction)), _wanted(res))
+
+    def ask_text(self, prompt):
+        if not self.argv:
+            raise RuntimeError("KIMERU_WRITER_CMD is not set (the command that reads the prompt on stdin and prints the answer)")
+        return _run(self.argv, prompt, self.timeout)
+
+
+CLI_WRITERS = ("copilot", "claude", "codex", "grok", "cmd")   # one process per draft: a rewrite pass is cheap enough
+
+
 GROUNDING = "あなたが参照できる私のメールや会議に関連する内容があれば、事実の確認に使ってかまいません。"
 
 
@@ -430,7 +510,8 @@ class M365AutoWriter(M365PromptWriter):
         return strip_citations(d)
 
 
-WRITERS = {"claude": ClaudeWriter, "copilot": CopilotWriter, "m365": M365PromptWriter, "m365-auto": M365AutoWriter}
+WRITERS = {"claude": ClaudeWriter, "copilot": CopilotWriter, "codex": CodexWriter, "grok": GrokWriter, "cmd": CmdWriter,
+           "m365": M365PromptWriter, "m365-auto": M365AutoWriter}
 
 
 def get_writer(name=None):
@@ -525,7 +606,7 @@ def _polish(writer, res, event, d, todo, material):
     """One second try for the texts that read badly (stiff, English, a copy of the template): the writer gets the exact
     problems as a correction instruction, and a text is replaced only when the new one is better. CLI writers only:
     the Teams route would paste into Copilot a second time."""
-    if getattr(writer, "NAME", "") not in ("copilot", "claude"):
+    if getattr(writer, "NAME", "") not in CLI_WRITERS:
         return d
     bad = {}
     for key, a in todo:

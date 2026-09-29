@@ -281,7 +281,9 @@ class M365AutoWriter(M365PromptWriter):
                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         out = _parse(r.stdout) or {}
         if not out.get("ok"):
-            raise RuntimeError(out.get("error") or (r.stdout + r.stderr).strip()[:200])
+            dbg = out.get("debug")   # only present when KIMERU_DEBUG_WRITER=1 (a fictional sample)
+            raise RuntimeError((out.get("error") or (r.stdout + r.stderr).strip()[:200])
+                               + (" | " + " ; ".join(str(x) for x in dbg) if dbg else ""))
         answer = out.get("text", "")
         cut = answer.rfind("（JSON だけ）")   # the last line of our own request
         answer = answer[cut + len("（JSON だけ）"):] if cut >= 0 else answer
@@ -386,7 +388,7 @@ def apply(res, event, writer, instruction=None):
     material = _material(res, event, instruction)
 
     def fallback(reason):   # a writer is set but gave nothing usable: the template waits for the PM, with a warning
-        res["writer_error"] = reason[:600]
+        res["writer_error"] = reason[:2500]
         if hasattr(writer, "request"):
             return paste_in()
         for _, a in todo:

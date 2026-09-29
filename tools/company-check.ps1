@@ -381,7 +381,7 @@ if ($uia -and (Want 'T17')) {
     $err = ($d -split "`n") | Where-Object { $_ -match 'ERROR' } | Select-Object -First 1
     $m = [regex]::Match([string]$sum, 'texts=(\d+) drafted=(\d+) held=(\d+) failed_events=(\d+)')
     $all = $m.Success -and $m.Groups[1].Value -eq $m.Groups[2].Value -and $m.Groups[4].Value -eq '0'
-    Rec 'T17' $(if ($all) { 'OK ' + (Short $sum) } else { 'NG ' + (Short $sum) + $(if ($err) { ' | ' + ((($err -replace '\s+', ' ').Trim()) -replace '^(.{0,420}).*$', '$1') } else { '' }) })
+    Rec 'T17' $(if ($all) { 'OK ' + (Short $sum) } else { 'NG ' + (Short $sum) + $(if ($err) { ' | ' + ((($err -replace '\s+', ' ').Trim()) -replace '^(.{0,2400}).*$', '$1') } else { '' }) })
   } elseif (Want 'T17') { Rec 'T17' 'SKIP' }
 }
 

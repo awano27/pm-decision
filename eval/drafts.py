@@ -58,7 +58,7 @@ def main():
         flags = sum(bool(i["unverified"]) for i in items)
         print(f"{x['id']:12} {res['node']:18} {secs[-1]:5.1f}s drafted {len(items)}/{len(writer.targets(res))}"
               f"{'  invented=' + str(flags) if flags else ''}{'  held=' + str(len(held)) if held else ''}"
-              f"{'  ERROR ' + res['writer_error'][:520] if res.get('writer_error') else ''}",
+              f"{'  ERROR ' + res['writer_error'][:2400] if res.get('writer_error') else ''}",
               flush=True)
     if a.out:
         Path(a.out).write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")

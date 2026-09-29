@@ -192,23 +192,42 @@ $btn = Find-All $w $CT::Button | Where-Object { $_.Current.Name -match '^(送信
 if ($btn) { try { $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch { $btn = $null } }
 if (-not $btn) { Assert-Foreground $w; $box.SetFocus(); [System.Windows.Forms.SendKeys]::SendWait('{ENTER}') }
 
-# wait for the answer: the longest new text that is not our prompt, unchanged for 3 polls while no Stop button
+# wait for the answer. It is JSON carrying our keys ("a1"... / "memo"). Candidates: every new text on the
+# page (nodes) and the page text, each cut after the last line of our own request. Only a text that carries
+# our keys counts, so UI text (composer placeholder, profile card, object markers) is never taken for it.
 $deadline = (Get-Date).AddSeconds($TimeoutSec)
-$last = ''; $stable = 0
+$last = ''; $stable = 0; $from = ''
 $known = @{}; foreach ($t in $before) { $known[$t] = 1 }
 $p = Squash $prompt
-$marker = '（JSON だけ）'   # the last line of our own request: what follows it on the page is the answer
+$marker = '（JSON だけ）'
+$keyRx = '"(a\d+|memo)"\s*:'
+$dbg = ($env:KIMERU_DEBUG_WRITER -eq '1')
+function After-Marker($s) { $k = ([string]$s).LastIndexOf($marker); if ($k -ge 0) { ([string]$s).Substring($k + $marker.Length).Trim() } else { [string]$s } }
+$page = ''
 while ((Get-Date) -lt $deadline) {
   Start-Sleep -Seconds 2
   $w = Get-TeamsWindow
-  $new = @(Get-Texts $w | Where-Object { -not $known.ContainsKey($_) -and (Squash $_) -ne $p -and -not $p.Contains((Squash $_)) })
-  $node = ($new | Sort-Object Length -Descending | Select-Object -First 1)
+  $nodes = @(Get-Texts $w | Where-Object { -not $known.ContainsKey($_) -and (Squash $_) -ne $p -and -not $p.Contains((Squash $_)) })
   $page = Get-PageText $w
-  $cut = $page.LastIndexOf($marker)
-  $tail = if ($cut -ge 0) { $page.Substring($cut + $marker.Length).Trim() } else { '' }
-  $cand = if ($tail.Length -ge 10) { $tail } else { [string]$node }   # page text first, the longest new node as a fallback
+  $pool = @($nodes | ForEach-Object { [pscustomobject]@{ from = 'node'; text = (After-Marker $_) } }) + @([pscustomobject]@{ from = 'page'; text = (After-Marker $page) })
+  $hit = $pool | Where-Object { $_.text -match $keyRx } | Sort-Object { $_.text.Length } -Descending | Select-Object -First 1
+  $cand = if ($hit) { [string]$hit.text } else { '' }
   if ($cand -and $cand -eq $last -and -not (Test-Busy $w)) { $stable++ } else { $stable = 0 }
   $last = $cand
-  if ($stable -ge 2 -and $last.Length -ge 10) { Out-Json @{ ok = $true; text = $last; from = $(if ($tail.Length -ge 10) { 'page' } else { 'node' }); pageLen = $page.Length; nodeLen = ([string]$node).Length }; exit 0 }
+  if ($hit) { $from = $hit.from }
+  if ($stable -ge 2) { Out-Json @{ ok = $true; text = $last; from = $from; pageLen = $page.Length; nodeLen = $last.Length }; exit 0 }
 }
-Fail ("no answer from Copilot within $TimeoutSec s" + $(if ($last) { ' (an answer was still changing)' } else { '' }))
+$dump = @()
+if ($dbg) {
+  # only for a fictional sample (company-check T17 sets the flag): what is on the page, longest first
+  $all = $w.FindAll('Descendants', [System.Windows.Automation.Condition]::TrueCondition)
+  $rows = foreach ($e in $all) {
+    $n = [string]$e.Current.Name
+    if ($n.Length -ge 25 -and -not $known.ContainsKey($n)) { [pscustomobject]@{ t = ($e.Current.ControlType.ProgrammaticName -replace '^ControlType\.', ''); n = $n } }
+  }
+  $dump = @($rows | Sort-Object { $_.n.Length } -Descending | Select-Object -First 12 | ForEach-Object { "$($_.t):len$($_.n.Length):" + (($_.n.Substring(0, [math]::Min(110, $_.n.Length))) -replace '\s+', ' ') })
+  $tail = ((After-Marker $page) -replace '[\uFFFC\s]+', ' ').Trim()
+  $dump += "pageTailVisible:len$($tail.Length):" + $tail.Substring(0, [math]::Min(150, $tail.Length))
+}
+Out-Json @{ ok = $false; error = "no answer carrying our keys within $TimeoutSec s"; debug = $dump }
+exit 2

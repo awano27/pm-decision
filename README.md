@@ -42,16 +42,16 @@
 
 | 状態 | 内容 |
 |---|---|
-| ✅ **使える**（会社 PC の実機で確認済み） | ・Teams・ADO・アラート・議事録の取り込みと、Kev による判断<br>・承認の流れ: 自分とのチャットへ投稿 → iPhone から `OK N` / `NG N` / `保留 N` / `聞き返し N` → 記録<br>・PC への Windows 通知<br>・**M365 だけの人向けの手動貼り付け**: `[kimeru #N Copilot 用]` の依頼文を Copilot に貼り、返ってきた文面を `下書き N <文面>` と返信すると取り込まれる<br>・外部への書き込みは **記録のみ**（実際に送るのは自分とのチャットへの投稿だけ） |
+| ✅ **使える**（会社 PC の実機で確認済み） | ・Teams・ADO・アラート・議事録の取り込みと、Kev による判断<br>・GitHub Copilot CLI による文面とメモの下書き<br>・承認の流れ: 自分とのチャットへ投稿 → iPhone から `OK N` / `NG N` / `保留 N` / `聞き返し N` → 記録<br>・PC への Windows 通知<br>・**M365 だけの人向けの手動貼り付け**: `[kimeru #N Copilot 用]` の依頼文を Copilot に貼り、返ってきた文面を `下書き N <文面>` と返信すると取り込まれる<br>・外部への書き込みは **記録のみ**（実際に送るのは自分とのチャットへの投稿だけ） |
 | 🧪 **実験的**（動くが、画面の作りに依存） | ・`m365-auto`: Teams 内の Microsoft 365 Copilot を画面操作して、文面とメモを自動で書かせる。会社 PC で、貼り付け・送信・返事の読み取り（1 回で 2 件の文面）まで通った。出典（参照したメール・会議）は、Copilot が挙げたときだけ表示<br>・失敗すると 30 分休み、その間は手動の依頼文に切り替わる。貼り付け先は多重に確認し、疑わしければ何も貼らずに止まる |
-| ⚠ **環境しだい** | ・GitHub Copilot CLI（`KIMERU_WRITER=copilot`）: `copilot` コマンドがある環境で動く。今回の会社 PC には無く、再確認できていない<br>・5 分ごとの自動運転（`schedule install`）: 試験用。writer の設定の引き継ぎは未確認 |
+| ⚠ **環境しだい** | ・GitHub Copilot CLI（`KIMERU_WRITER=copilot`）: `copilot` コマンドがある環境で動く（会社 PC で 6 件の文面とメモを約 21 秒で下書き）。無い環境では `winget install GitHub.Copilot` が要る<br>・5 分ごとの自動運転（`schedule install`）: 試験用。writer の設定の引き継ぎは未確認 |
 | ⏳ **これから** | ・実データ（匿名化した業務のイベント）での評価<br>・iPhone への通知（自分宛ての Teams 投稿は通知されない）<br>・実行器の解放（ADO コメントなど。今は記録のみ）<br>・確認待ちへの回答から、しきい値を自分のデータで調整 |
 
 **これまでの主なできごと**
 - 2026-09-29: `m365-auto` が、依頼文を Copilot ではなく **別の会議チャットへ 2 回送信** する事故がありました。ウィンドウの題名は Copilot のままで、入力欄の特定が甘かったのが原因です。
   今は、入力欄自身の名前・フォーカス・貼った内容の一致を確かめてから貼り付けます。詳細と対策は [SECURITY.md](SECURITY.md) と [既知の課題](#既知の課題) にあります。
 
-**次にやること（会社 PC）**: 更新 zip を展開し、`run-company-check.cmd V1`（承認・通知・貼り戻し）と `T18`（Copilot の出典）を実行します。
+**確認結果（会社 PC、2026-09-29）**: `run-company-check.cmd V1`（承認・通知・GitHub Copilot・Copilot への貼り付け・`聞き返し N` / `下書き N`）はすべて OK、`T18`（`m365-auto`）は貼り付けから返事の読み取りまで OK でした。
 手順は [docs/company-pc-test.md](docs/company-pc-test.md)。変更履歴は [CHANGELOG.md](CHANGELOG.md)、自動テストは Windows / Linux の CI で毎回走ります。
 
 ---
@@ -314,7 +314,7 @@ powershell -ExecutionPolicy Bypass -File tools\split-zip.ps1 -Zip C:\develop\kim
 | Teams のチャット一覧の読み取り | ✅ | ✅ |
 | 自分とのチャットを開く・読む | ✅ | ✅ |
 | Kev による判断（CPU のみ、fp32） | ✅ 1 イベント約 45 秒 | ✅ 約 20 秒（bf16） |
-| GitHub Copilot による文面・メモの下書き | ✅（`copilot` コマンドがある環境。2026-09-29 の会社 PC には無く、再確認できていない） | ✅ |
+| GitHub Copilot による文面・メモの下書き | ✅ 6 件を約 21 秒（2026-09-29 に再確認。`copilot` コマンドが要る） | ✅ |
 | ADO の取り込み（別テナントの組織） | ✅ | — |
 | 承認の流れ（投稿 → iPhone から OK/NG → 記録） | ✅ 2 件の投稿、OK と NG の読み取り、二重処理の防止 | ✅ 通し（修正・OK・NG・二重処理の防止） |
 | PC への Windows 通知 | ✅ | ✅ |

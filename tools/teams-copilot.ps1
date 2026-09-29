@@ -32,7 +32,30 @@ Add-Type -Namespace KC -Name W -MemberDefinition @'
 $COPILOT = '^(Microsoft 365 )?Copilot(\s|$|,|（|\()'
 
 function Out-Json($o) { $o | ConvertTo-Json -Compress -Depth 5 }
-function Fail($msg) { Out-Json @{ ok = $false; error = $msg }; exit 2 }
+$DiagFile = Join-Path $env:LOCALAPPDATA 'kimeru\copilot-diag.txt'
+function Write-DiagFile($why) {
+  # what the composer area looks like, with no text: type, masked id, name length (a name only when it is a known UI
+  # word), focus flag, rectangle. Lets one failed run be judged without a second run.
+  try {
+    $w = Get-TeamsWindow
+    if (-not $w) { return }
+    $wr = $w.Current.BoundingRectangle
+    $mk = { param($x) ([string]$x) -replace '[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){0,4}', '<id>' -replace '\d+', 'N' }
+    $rows = @()
+    foreach ($e in @($w.FindAll('Descendants', [System.Windows.Automation.Condition]::TrueCondition))) {
+      $r = $e.Current.BoundingRectangle
+      if ($r.Width -le 0 -or $r.Height -le 0 -or $r.Y -lt ($wr.Y + $wr.Height * 0.5)) { continue }
+      $n = [string]$e.Current.Name
+      $nm = if ($n -match '^(Copilot|送信|Send|添付|音声|新しいチャット|.{0,12}メッセージ.{0,12}|Message Copilot|Ask Copilot)$') { $n } else { "<$($n.Length)>" }
+      $rows += ("{0}|{1}|{2}|foc={3}|x={4},y={5},w={6},h={7}" -f ($e.Current.ControlType.ProgrammaticName -replace '^ControlType\.', ''), (& $mk $e.Current.AutomationId), $nm, $e.Current.IsKeyboardFocusable, [int]$r.X, [int]$r.Y, [int]$r.Width, [int]$r.Height)
+      if ($rows.Count -ge 80) { break }
+    }
+    New-Item -ItemType Directory -Force (Split-Path $DiagFile) | Out-Null
+    $head = "reason=$($why.Substring(0, [Math]::Min(200, $why.Length))) window=$([int]$wr.Width)x$([int]$wr.Height)"
+    [IO.File]::WriteAllText($DiagFile, (($head, $rows) -join "`r`n"), (New-Object Text.UTF8Encoding $false))
+  } catch {}
+}
+function Fail($msg) { Write-DiagFile ([string]$msg); Out-Json @{ ok = $false; error = "$msg [diagfile: $DiagFile]" }; exit 2 }
 function Get-TeamsWindow {
   $pids = @(Get-Process -Name ms-teams -ErrorAction SilentlyContinue | ForEach-Object Id)
   if (-not $pids) { return $null }
@@ -125,6 +148,23 @@ function Find-Box($w, [switch]$Strict) {
       foreach ($e in $all) { $r = $e.Current.BoundingRectangle; if (-not @($keep | Where-Object { $_.Current.BoundingRectangle.IntersectsWith($r) }).Count) { $keep += $e } }
       $c = $keep
       $script:BoxCandidates = $c.Count
+    }
+    if ($c.Count -eq 0 -and -not (Test-CopilotPane $w)) {
+      # last resort, only because the pane itself is already proven to be Copilot (selected row + no chat tab bar):
+      # the one small focusable editor right of the chat list and below the top search box
+      $win = $w.Current.BoundingRectangle
+      $listRight = 0
+      foreach ($e in @((Find-All $w $CT::TreeItem) + (Find-All $w $CT::ListItem))) { $r = $e.Current.BoundingRectangle; if ($r.Width -gt 0 -and $r.Right -gt $listRight -and $r.Right -lt ($win.X + $win.Width * 0.45)) { $listRight = $r.Right } }
+      $fb = @(@($edits) + @(Find-All $w $CT::Document) | Where-Object {
+        $r = $_.Current.BoundingRectangle
+        $r.Width -gt 0 -and $_.Current.IsKeyboardFocusable -and $_.Current.AutomationId -ne 'RootWebArea' -and
+        $r.X -ge ($listRight - 5) -and $r.Y -gt ($win.Y + $win.Height * 0.3) -and $r.Height -lt ($win.Height * 0.3) -and
+        $_.Current.Name -notmatch 'Ctrl\+E|検索' })
+      $keep = @()
+      foreach ($e in $fb) { $r = $e.Current.BoundingRectangle; if (-not @($keep | Where-Object { $_.Current.BoundingRectangle.IntersectsWith($r) }).Count) { $keep += $e } }
+      $c = $keep
+      $script:BoxCandidates = $c.Count
+      $script:BoxHow = 'pane-proven fallback'
     }
     if ($c.Count -ne 1) { return $null }
     $script:BoxRect = $c[0].Current.BoundingRectangle
@@ -251,6 +291,7 @@ if ($Action -eq 'probe') {
                         composeBox = [bool]$box; diag = $(if ($opened) { Get-Diag $opened } else { '' }); strictCopilotBox = [bool]$strictBox; paneCheck = $(if ($opened) { $x = Test-CopilotPane $opened; if ($x) { $x } else { 'ok' } } else { 'n/a' }); strictCandidates = $script:BoxCandidates; boxId = $(if ($box) { (& $mask $box.Current.AutomationId) } else { '' })
                         sendButton = $send; edits = $edits; docs = $docs; buttons = $btns
                         boxTextLen = $(if ($box) { (Get-BoxText $box).Trim().Length } else { -1 }); boxNameLen = $(if ($box) { ([string]$box.Current.Name).Length } else { -1 }) })
+  if (-not $strictBox) { Write-DiagFile 'probe: no strict box' }
   exit 0
 }
 
@@ -285,10 +326,14 @@ if ($sq.Length -gt 2 -and $sq -ne $phq) {
 $why = Test-CopilotPane (Get-TeamsWindow)
 if ($why) { Fail "not the Copilot chat ($why; $(Get-Diag (Get-TeamsWindow))); nothing pasted" }
 $before = @(Get-Texts $w)
+function Send-ToCopilot([string]$text) {
+  $w = Get-TeamsWindow
+  $box = Get-Box $w
+  $phq = Squash ([string]$box.Current.Name)
 $saved = $null
 try { $saved = [System.Windows.Forms.Clipboard]::GetText() } catch {}
 try {
-  [System.Windows.Forms.Clipboard]::SetText($prompt)
+  [System.Windows.Forms.Clipboard]::SetText($text)
   Assert-Foreground $w
   $box = Get-Box $w
   if (-not (Focus-Box $box)) { Fail 'the keyboard focus is not in the Copilot compose box; nothing pasted' }
@@ -297,7 +342,7 @@ try {
 } finally {
   if ($saved) { [System.Windows.Forms.Clipboard]::SetText($saved) } else { [System.Windows.Forms.Clipboard]::Clear() }
 }
-if ((Squash (Read-Box $box)) -ne (Squash $prompt)) {
+if ((Squash (Read-Box $box)) -ne (Squash $text)) {
   Assert-Foreground $w; if (Focus-Box $box) { [System.Windows.Forms.SendKeys]::SendWait('^a'); [System.Windows.Forms.SendKeys]::SendWait('{DEL}') }
   Fail 'the Copilot compose box did not hold exactly the prompt; removed it, nothing sent'
 }
@@ -316,31 +361,37 @@ $sent = $false
 foreach ($try in 1..3) {
   Start-Sleep -Milliseconds 1500
   $left = Squash (Read-Box $box)
-  if ($left.Length -le 2 -or $left -eq $phq -or -not $prompt.StartsWith($left.Substring(0, [Math]::Min(20, $left.Length)))) { $sent = $true; break }
-  if ($try -lt 3) { Assert-Foreground $w; if (Focus-Box $box) { [System.Windows.Forms.SendKeys]::SendWait('{ENTER}') } }
+  if ($left.Length -le 2 -or $left -eq $phq -or -not $text.StartsWith($left.Substring(0, [Math]::Min(20, $left.Length)))) { $sent = $true; break }
+  if ($try -lt 3) { Assert-Foreground $w; if (Focus-Box $box) { [System.Windows.Forms.SendKeys]::SendWait($(if ($try -eq 1) { '{ENTER}' } else { '^{ENTER}' })) } }
 }
 if (-not $sent) {
   Assert-Foreground $w; if (Focus-Box $box) { [System.Windows.Forms.SendKeys]::SendWait('^a'); [System.Windows.Forms.SendKeys]::SendWait('{DEL}') }
   Fail 'the request stayed in the Copilot compose box (send button / Enter did not send it); removed it'
 }
 
+}
+Send-ToCopilot $prompt
+
 # wait for the answer. It is JSON carrying our keys ("a1"... / "memo"). Candidates: every new text on the
 # page (nodes) and the page text, each cut after the last line of our own request. Only a text that carries
 # our keys counts, so UI text (composer placeholder, profile card, object markers) is never taken for it.
-$deadline = (Get-Date).AddSeconds($TimeoutSec)
-$last = ''; $stable = 0; $from = ''
 $known = @{}; foreach ($t in $before) { $known[$t] = 1 }
 $p = Squash $prompt
 $marker = '（JSON だけ）'
 $keyRx = '"(a\d+|memo)"\s*:'
 $dbg = ($env:KIMERU_DEBUG_WRITER -eq '1')
 function After-Marker($s) { $k = ([string]$s).LastIndexOf($marker); if ($k -ge 0) { ([string]$s).Substring($k + $marker.Length).Trim() } else { [string]$s } }
-$page = ''
+$page = ''; $nodes = @()
+function Wait-Answer([int]$sec) {
+$deadline = (Get-Date).AddSeconds($sec)
+$last = ''; $stable = 0; $from = ''
 while ((Get-Date) -lt $deadline) {
   Start-Sleep -Seconds 2
   $w = Get-TeamsWindow
+  $script:w = $w
   $nodes = @(Get-Texts $w | Where-Object { -not $known.ContainsKey($_) -and (Squash $_) -ne $p -and -not $p.Contains((Squash $_)) })
   $page = Get-PageText $w
+  $script:page = $page; $script:nodes = $nodes
   $pool = @($nodes | ForEach-Object { [pscustomobject]@{ from = 'node'; text = (After-Marker $_) } }) + @([pscustomobject]@{ from = 'page'; text = (After-Marker $page) })
   $hit = $pool | Where-Object { $_.text -match $keyRx } | Sort-Object { $_.text.Length } -Descending | Select-Object -First 1
   $cand = if ($hit) { [string]$hit.text } else { '' }
@@ -349,6 +400,15 @@ while ((Get-Date) -lt $deadline) {
   if ($hit) { $from = $hit.from }
   if ($stable -ge 2) { Out-Json @{ ok = $true; text = $last; from = $from; pageLen = $page.Length; nodeLen = $last.Length }; exit 0 }
 }
+}
+Wait-Answer ([Math]::Max(60, $TimeoutSec - 90))
+# Copilot finished but answered in prose (no JSON keys): ask once, in the same conversation, for the JSON only
+$w = Get-TeamsWindow
+if (-not (Test-Busy $w) -and -not ((After-Marker $script:page) -match $keyRx)) {
+  Send-ToCopilot '直前の依頼への答えを、前置きも説明も付けず、指定の JSON だけで出力してください。'
+  Wait-Answer 90
+}
+$page = $script:page; $nodes = $script:nodes; $w = Get-TeamsWindow
 $dump = @()
 if ($dbg) {
   # only for a fictional sample (company-check T17 sets the flag): what is on the page, longest first

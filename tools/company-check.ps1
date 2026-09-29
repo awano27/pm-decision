@@ -50,6 +50,14 @@ function Safe-Diag($raw) {
 }
 function Rec($k, $v) { $Results[$k] = $v; Write-Host ("   {0}: {1}" -f $k, $v) -ForegroundColor Yellow }
 function Short($s) { $x = ([string]$s -replace '\s+', ' ').Trim(); if ($x.Length -gt 160) { $x.Substring(0, 160) } else { $x } }
+function DiagText {
+  # the content-free layout dump the Copilot script writes when it stops (types, masked ids, name lengths, rectangles)
+  $f = Join-Path $env:LOCALAPPDATA 'kimeru\copilot-diag.txt'
+  if (-not (Test-Path $f)) { return '（診断ファイルなし）' }
+  $t = (Get-Content -Raw -Encoding UTF8 $f) -replace '\s*\r?\n', ' / '
+  if ($t.Length -gt 2600) { $t = $t.Substring(0, 2600) + '…' }
+  "$f :: $t"
+}
 function YesNo($q) { (Read-Host "$q [y/N]") -match '^\s*([yYｙＹ]|はい)' }   # tolerate stray keys after y ("y[")
 function Self($action, [string[]]$extra = @()) {
   $out = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'teams-self.ps1') -Action $action @extra 2>&1 | Out-String
@@ -368,6 +376,7 @@ if ($uia -and $py -and (Want 'T18')) {
     $pj = $null; try { $pj = $pr.Trim().TrimStart([char]0xFEFF) | ConvertFrom-Json } catch {}
     if (-not $pj -or -not $pj.ok -or -not $pj.strictCopilotBox -or $pj.paneCheck -ne 'ok') {
       Rec 'T18' ("SKIP 送信せず: Copilot 専用の入力欄を特定できません 候補=$($pj.strictCandidates) pane=$($pj.paneCheck) $($pj.diag) title=$($pj.title) edits=[$(@($pj.edits) -join ';')]")
+      Rec 'T18-diag' (DiagText)
     } else { $go = $true }
   }
   if ($go) {
@@ -378,7 +387,7 @@ if ($uia -and $py -and (Want 'T18')) {
     $err = ($err -replace '.*ERROR ', '').Replace($topic, '<件名>')
     if ($err.Length -gt 300) { $err = $err.Substring(0, 300) }
     if (-not $m.Success) { Rec 'T18' 'NG 実行できませんでした（件名は記録しません）' }
-    elseif ($m.Groups[4].Value -ne '0') { Rec 'T18' ("NG writer が失敗: " + $err) }
+    elseif ($m.Groups[4].Value -ne '0') { Rec 'T18' ("NG writer が失敗: " + $err); Rec 'T18-diag' (DiagText) }
     else { Rec 'T18' ("drafted=$($m.Groups[2].Value)/$($m.Groups[1].Value) 出典=$($m.Groups[3].Value) 件 失敗=$($m.Groups[4].Value)" + $(if ($m.Groups[3].Value -eq '0') { '（出典なし: 件名が見つからないか、Copilot が挙げなかった）' } else { '' })) }
   }
 }

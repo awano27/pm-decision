@@ -29,6 +29,8 @@ def main():
     ap.add_argument("--n", type=int, default=20)
     ap.add_argument("--kinds", default="teams.chat,monitor.alert,ado.workitem.created,meeting.item")
     ap.add_argument("--fixtures", default="fixtures.jsonl")
+    ap.add_argument("--topic", help="a real meeting name or mail subject the writer may know: asks about it in the "
+                                    "chat text (never printed or saved); the run reports how many sources came back")
     ap.add_argument("--out")
     a = ap.parse_args()
     be = {"kev": KevBackend, "jev": JevBackend}.get(a.backend, StubBackend)()
@@ -39,6 +41,10 @@ def main():
     fx = [json.loads(l) for l in (ROOT / "eval" / a.fixtures).read_text(encoding="utf-8").splitlines() if l.strip()]
     per_kind = max(1, a.n // len(kinds))
     fx = [x for k in kinds for x in [f for f in fx if f["event"]["kind"] == k][:per_kind]]
+    if a.topic:
+        for x in fx:
+            if x["event"]["kind"] == "teams.chat":
+                x["event"]["text"] = f"「{a.topic}」の件、その後どうなっていますか。関連するメールや会議の内容を踏まえて、返信をお願いします。"
     rows, secs = [], []
     for x in fx:
         ev = x["event"]
@@ -54,7 +60,8 @@ def main():
                   "template": d.get("template_text"), "unverified": d.get("unverified", []),
                   "long": len(d[writer.FIELD[d["type"]]]) > LIMIT[d["type"]]} for d in drafted]
         rows.append({"id": x["id"], "kind": ev["kind"], "node": res["node"], "error": res.get("writer_error"),
-                     "targets": len(writer.targets(res)), "drafted": items, "held": len(held), "sec": round(secs[-1], 1)})
+                     "targets": len(writer.targets(res)), "drafted": items, "held": len(held), "sec": round(secs[-1], 1),
+                     "sources": len(res.get("copilot_sources", []))})
         flags = sum(bool(i["unverified"]) for i in items)
         print(f"{x['id']:12} {res['node']:18} {secs[-1]:5.1f}s drafted {len(items)}/{len(writer.targets(res))}"
               f"{'  invented=' + str(flags) if flags else ''}{'  held=' + str(len(held)) if held else ''}"
@@ -68,7 +75,7 @@ def main():
     items = [i for r in rows for i in r["drafted"]]
     secs.sort()
     print(f"\nevents={len(rows)} texts={sum(r['targets'] for r in rows)} drafted={len(items)} "
-          f"held={sum(r['held'] for r in rows)} failed_events={sum(1 for r in rows if r['error'])} invented={sum(bool(i['unverified']) for i in items)} "
+          f"held={sum(r['held'] for r in rows)} sources={sum(r['sources'] for r in rows)} failed_events={sum(1 for r in rows if r['error'])} invented={sum(bool(i['unverified']) for i in items)} "
           f"long={sum(i['long'] for i in items)} median={secs[len(secs) // 2]:.1f}s max={secs[-1]:.1f}s")
 
 

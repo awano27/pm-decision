@@ -143,6 +143,23 @@ function Test-SelectedUp($el) {
   }
   $false
 }
+function Test-SelfTitleStrict($w) {
+  # writes only (paste, delete, send): the window title names the learned display name exactly (case-sensitive)
+  # followed by the self marker. Any "(You)" / "(自分)" chat of a colleague with a similar name does not pass.
+  if (-not $w) { return $false }
+  $n = Get-SelfName
+  if (-not $n) { return $false }
+  [bool]($w.Current.Name -cmatch ("\| " + [regex]::Escape($n) + " $SELF \|"))
+}
+function Ensure-Learned($w) {
+  # the self chat was just opened through its fixed id (48:notes) or its title says so: remember the display
+  # name once, so every later write can be checked against it exactly
+  if (Get-SelfName) { return }
+  if ($w -and $w.Current.Name -match "\| ([^|]+?) $SELF \|") {
+    New-Item -ItemType Directory -Force (Split-Path $NameFile) | Out-Null
+    [IO.File]::WriteAllText($NameFile, $Matches[1].Trim(), (New-Object Text.UTF8Encoding $false))
+  }
+}
 function Test-SelfOpen($w) {
   # either signal is enough: the window title "チャット | <name> (あなた) | Microsoft Teams", or the
   # 48:notes entry reporting IsSelected (some list layouts report no selection at all)
@@ -297,6 +314,7 @@ if ($Action -eq 'learn') {
 if ($Action -eq 'status') { Out-Json @{ ok = $true; teams = [bool]$w; selfChatOpen = [bool](Test-SelfOpen $w) }; exit 0 }
 if (-not $w) { Fail 'Teams window not found' }
 $w = Open-SelfChat $w
+Ensure-Learned $w
 if ($Action -eq 'open') { Out-Json @{ ok = $true; selfChatOpen = $true }; exit 0 }
 
 function Get-Box($w) {
@@ -309,11 +327,17 @@ function Get-BoxText($b) {
   catch { try { return $b.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value } catch { return '' } }
 }
 function Squash($s) { ([string]$s) -replace '[\s\u00a0\u200b\ufeff]', '' }   # compare text ignoring line-break/space rendering
+function Test-BoxFocused() {
+  # Ctrl+A / Delete / Enter go to whatever has the keyboard focus: it must be the compose box
+  try { $f = $A::FocusedElement; return [bool]($f -and $f.Current.AutomationId -like 'new-message-*') } catch { return $false }
+}
 function Clear-OurBox($w, $box) {
   # only called when the box starts with "[kimeru": select all and delete, then check it is empty
+  if (-not (Test-SelfTitleStrict (Get-TeamsWindow))) { return $false }
   Assert-Foreground $w
   $box.SetFocus(); Start-Sleep -Milliseconds 150
   Assert-Foreground $w
+  if (-not (Test-BoxFocused)) { return $false }
   [System.Windows.Forms.SendKeys]::SendWait('^a'); Start-Sleep -Milliseconds 100
   [System.Windows.Forms.SendKeys]::SendWait('{DEL}'); Start-Sleep -Milliseconds 300
   -not (Get-BoxText $box).Trim().StartsWith('[kimeru')
@@ -326,8 +350,8 @@ function Wait-Sent($w) {
 }
 
 function Send-Box($w) {
-  # send only what kimeru wrote: self chat + compose box starts with [kimeru
-  if (-not (Test-SelfOpen (Get-TeamsWindow))) { Fail 'window changed before send; aborted' }
+  # send only what kimeru wrote: the self chat (title with the learned name) + compose box starts with [kimeru
+  if (-not (Test-SelfTitleStrict (Get-TeamsWindow))) { Fail 'window changed before send (title is not the self chat); aborted' }
   if (-not (Test-BoxHasKimeru $w)) { Fail 'compose box does not start with [kimeru; not sending' }
   # 1) the Send button: works whether Enter or Ctrl+Enter sends in this user's Teams settings
   $btn = Find-All $w $CT::Button | Where-Object { $_.Current.Name -match '^(送信|Send)(\s*\(|$)' -and $_.Current.IsEnabled } | Select-Object -First 1
@@ -337,11 +361,12 @@ function Send-Box($w) {
   }
   # 2) keys, re-checking the target each time (Enter may only insert a line break)
   foreach ($k in @('^{ENTER}', '{ENTER}')) {
-    if (-not (Test-SelfOpen (Get-TeamsWindow))) { Fail 'window changed before send; aborted' }
+    if (-not (Test-SelfTitleStrict (Get-TeamsWindow))) { Fail 'window changed before send (title is not the self chat); aborted' }
     if (-not (Test-BoxHasKimeru $w)) { return 'keys' }
     Assert-Foreground $w
     (Get-Box $w).SetFocus(); Start-Sleep -Milliseconds 150
     Assert-Foreground $w
+    if (-not (Test-BoxFocused)) { Fail 'keyboard focus is not the compose box; nothing sent' }
     [System.Windows.Forms.SendKeys]::SendWait($k)
     if (Wait-Sent $w) { return "keys:$k" }
   }
@@ -360,11 +385,15 @@ if ($Action -eq 'post') {
     if ($cur -eq $prev -and -not $cur.Trim().StartsWith('[kimeru')) { break }
     $prev = $cur; Start-Sleep -Milliseconds 300
   }
+  if (-not (Test-SelfTitleStrict (Get-TeamsWindow))) { Fail 'the window title is not the self chat (learned name); nothing pasted' }
   $before = Squash (Get-BoxText $box)
   # a kimeru post left in the box by an earlier failed run is ours to remove; anything else is the
-  # person's own draft and is never touched (the exact-text check below then refuses to send)
-  if ((Get-BoxText $box).Trim().StartsWith('[kimeru') -and -not (Clear-OurBox $w $box)) {
-    Fail 'an earlier kimeru post is left in the compose box and could not be cleared; clear it in Teams and retry'
+  # person's own draft: nothing is clicked or pasted (an empty box reads as its placeholder text)
+  if ((Get-BoxText $box).Trim().StartsWith('[kimeru')) {
+    if (-not (Clear-OurBox $w $box)) { Fail 'an earlier kimeru post is left in the compose box and could not be cleared; clear it in Teams and retry' }
+    $before = Squash (Get-BoxText $box)
+  } elseif ($before.Length -gt 2 -and $before -ne (Squash ([string]$box.Current.Name))) {
+    Fail ("the compose box holds a draft of yours ($($before.Length) characters); nothing pasted, will retry later")
   }
   $saved = $null
   try { $saved = [System.Windows.Forms.Clipboard]::GetText() } catch {}
@@ -416,14 +445,18 @@ if ($Action -eq 'read') {
   $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
   function Walk($el, $d) {
     if ($d -gt 40) { return }
+    $isPost = ([string]$el.Current.Name).TrimStart().StartsWith('[kimeru')   # our post: only its first line counts
+    $li = -1
     foreach ($line in ([string]$el.Current.Name) -split "`n") {
+      $li++
+      if ($isPost -and $li -gt 0) { continue }
       $l = $line.Trim()
       $entry = $null
       if ($l -match '^\[kimeru #(\d+)\]') {
         $entry = "P:" + $Matches[1]
         if (-not $posts.Contains($Matches[1])) { $posts.Add($Matches[1]) }
       }
-      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留|聞き返し)\s*#?(\d+)$') {
+      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留|聞き返し)\s*#?(\d+)\s*[.。!！]*$') {
         # phones often send full-width or re-cased text ("ＯＫ　６７５", "Ok 675"): canonicalize
         $c = '{0} {1}' -f $Matches[1].ToUpper(), $Matches[2]
         $entry = "R:" + $c

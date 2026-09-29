@@ -355,6 +355,20 @@ if ($py -and (Want 'T15')) {
   }
 }
 
+# ---- T18: does Microsoft 365 Copilot name the mail / meetings it used? (needs a real subject you know) ----
+if ($uia -and $py -and (Want 'T18')) {
+  Say "T18 M365 Copilot の出典（実際のメール・会議を参照できるか）"
+  $topic = Read-Host "   Copilot が参照できる、最近の会議名かメールの件名の一部（Copilot にだけ送ります。結果シートには書きません。Enter でスキップ）"
+  if (-not $topic) { Rec 'T18' 'SKIP' }
+  else {
+    $d = Py @('eval\drafts.py', '--backend', 'stub', '--writer', 'm365-auto', '--n', '1', '--kinds', 'teams.chat', '--topic', $topic)
+    $sum = ($d -split "`n") | Where-Object { $_ -match '^events=' } | Select-Object -First 1
+    $m = [regex]::Match([string]$sum, 'texts=(\d+) drafted=(\d+) held=\d+ sources=(\d+) failed_events=(\d+)')
+    if (-not $m.Success) { Rec 'T18' 'NG 実行できませんでした（件名は記録しません）' }
+    else { Rec 'T18' ("drafted=$($m.Groups[2].Value)/$($m.Groups[1].Value) 出典=$($m.Groups[3].Value) 件 失敗=$($m.Groups[4].Value)" + $(if ($m.Groups[3].Value -eq '0') { '（出典なし: 件名が見つからないか、Copilot が挙げなかった）' } else { '' })) }
+  }
+}
+
 # ---- T16: Windows notification on this PC (self-chat posts never notify your own devices) ----
 if (Want 'T16') {
   Say "T16 PC への通知（Windows の通知を 1 件出します。クリックすると Teams の自分とのチャットが開きます）"

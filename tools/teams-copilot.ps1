@@ -54,6 +54,22 @@ function Click($el) {
   [KC.W]::mouse_event(2, 0, 0, 0, 0); [KC.W]::mouse_event(4, 0, 0, 0, 0); $true
 }
 function Test-CopilotOpen($w) { $w -and ($w.Current.Name -match '(^|\| )(Microsoft 365 )?Copilot( \||$)') }
+function Test-CopilotPane($w) {
+  # A second, independent proof that the pane on screen is the Copilot chat and not another chat. The window title
+  # and the compose box's name have both been fooled once (a meeting chat received the request). Returns $null when
+  # the pane looks like Copilot, else a reason (never a chat name).
+  # 1) a chat-list row that is selected must be the Copilot row
+  foreach ($e in @((Find-All $w $CT::TreeItem) + (Find-All $w $CT::ListItem))) {
+    if ($e.Current.BoundingRectangle.Width -le 0) { continue }
+    $sel = $false
+    try { $sel = $e.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected } catch { continue }
+    if ($sel -and $e.Current.Name -notmatch $COPILOT) { return 'the selected chat-list row is not Copilot' }
+  }
+  # 2) a meeting / channel chat shows a tab bar (Files, Recap, Attendance, Whiteboard ...); the Copilot page has none
+  $tabs = @(Find-All $w $CT::TabItem | Where-Object { $_.Current.BoundingRectangle.Width -gt 0 -and $_.Current.Name -match '^(共有済み|まとめ|出席|ブレークアウト ルーム|Q&A|会議ホワイトボード|ファイル|投稿|Files|Recap|Attendance|Breakout rooms|Whiteboard|Shared|Posts)$' })
+  if ($tabs.Count -gt 0) { return 'a chat tab bar (meeting / channel) is visible' }
+  $null
+}
 function Get-Entries($w) {
   # chat-list entries (tree or list layouts) and app-bar buttons whose name starts with Copilot
   @(Find-All $w $CT::TreeItem) + @(Find-All $w $CT::ListItem) + @(Find-All $w $CT::Button) + @(Find-All $w $CT::TabItem) |
@@ -158,7 +174,7 @@ if ($Action -eq 'probe') {
   $docs = if ($opened) { @(Find-All $opened $CT::Document | Select-Object -First 5 | ForEach-Object { "Doc:$(& $mask $_.Current.AutomationId):focus=$($_.Current.IsKeyboardFocusable)" }) } else { @() }
   $btns = if ($opened) { @(Find-All $opened $CT::Button | Select-Object -First 30 | ForEach-Object { Shape $_.Current.Name }) } else { @() }
   Out-Json ([ordered]@{ ok = $true; entries = $entries.Count; entryTypes = $kinds; opened = [bool]$opened; title = $shape
-                        composeBox = [bool]$box; strictCopilotBox = [bool]$strictBox; strictCandidates = $script:BoxCandidates; boxId = $(if ($box) { (& $mask $box.Current.AutomationId) } else { '' })
+                        composeBox = [bool]$box; strictCopilotBox = [bool]$strictBox; paneCheck = $(if ($opened) { $x = Test-CopilotPane $opened; if ($x) { $x } else { 'ok' } } else { 'n/a' }); strictCandidates = $script:BoxCandidates; boxId = $(if ($box) { (& $mask $box.Current.AutomationId) } else { '' })
                         sendButton = $send; edits = $edits; docs = $docs; buttons = $btns
                         boxTextLen = $(if ($box) { (Get-BoxText $box).Trim().Length } else { -1 }); boxNameLen = $(if ($box) { ([string]$box.Current.Name).Length } else { -1 }) })
   exit 0
@@ -188,6 +204,8 @@ if ($sq.Length -gt 2 -and $sq -ne $phq) {
     Fail ("the Copilot compose box holds $($sq.Length) visible characters (placeholder $($phq.Length)) that are not kimeru's; nothing sent")
   }
 }
+$why = Test-CopilotPane (Get-TeamsWindow)
+if ($why) { Fail "not the Copilot chat ($why); nothing pasted" }
 $before = @(Get-Texts $w)
 $saved = $null
 try { $saved = [System.Windows.Forms.Clipboard]::GetText() } catch {}
@@ -206,6 +224,11 @@ if ((Squash (Get-BoxText $box)) -ne (Squash $prompt)) {
   Fail 'the Copilot compose box did not hold exactly the prompt; removed it, nothing sent'
 }
 if (-not (Test-CopilotOpen (Get-TeamsWindow))) { Fail 'window changed before send; aborted' }
+$why = Test-CopilotPane (Get-TeamsWindow)
+if ($why) {
+  Assert-Foreground $w; $box.SetFocus(); [System.Windows.Forms.SendKeys]::SendWait('^a'); [System.Windows.Forms.SendKeys]::SendWait('{DEL}')
+  Fail "not the Copilot chat ($why); removed the pasted text, nothing sent"
+}
 $btn = Find-All $w $CT::Button | Where-Object { $_.Current.Name -match '^(送信|Send)(\s*\(|$)' -and $_.Current.IsEnabled } | Select-Object -First 1
 if ($btn) { try { $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch { $btn = $null } }
 if (-not $btn) { Assert-Foreground $w; $box.SetFocus(); [System.Windows.Forms.SendKeys]::SendWait('{ENTER}') }

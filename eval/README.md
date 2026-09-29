@@ -63,6 +63,15 @@ Japanese PM questions it collapses score answers to the middle. Not used.
   Jev anchors on it.
 - When a label disagrees with Jev, re-read the question literally before "fixing" the question — the label may be wrong.
 
+## 要件の検討の依頼（`fixtures_requirements*.jsonl`）
+
+```bash
+python eval/e2e.py --backend kev --fixtures fixtures_requirements.jsonl           # 調整に使った 10 件
+python eval/e2e.py --backend kev --fixtures fixtures_requirements_holdout.jsonl   # 調整に使っていない 10 件
+```
+
+要件の検討 6 件と、「要件」を含むが別の扱いになる 4 件（判断・進捗・共有・障害）です。
+
 ## 文面の質（`draft_quality.py`）
 
 > 注意: writer（GitHub Copilot など）を実際に呼びます。12 イベントで約 15 回です。契約の月間の上限を使うので、回す前に残りを確認してください。

@@ -1,0 +1,19 @@
+{
+ "id": "1727000000101",
+ "createdDateTime": "2026-09-24T05:20:00Z",
+ "chatId": "19:req@thread.v2",
+ "from": {
+  "user": {
+   "displayName": "Nakamura"
+  }
+ },
+ "body": {
+  "contentType": "html",
+  "content": "<p>予約リマインド通知の要件を検討してもらえますか。営業が大手の顧客に提案したくて、来月の顧客説明までに叩き台がほしいです</p>"
+ },
+ "mentions": [
+  {
+   "id": 0
+  }
+ ]
+}

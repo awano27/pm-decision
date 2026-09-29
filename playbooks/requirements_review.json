@@ -1,0 +1,73 @@
+{
+  "id": "requirements_review",
+  "title": "要件の検討",
+  "when": "Review, define or organize the requirements of a new feature or change that someone asks the project manager to think through, and produce a first draft (not a yes/no decision)",
+  "hints": [
+    "要件",
+    "仕様",
+    "叩き台",
+    "検討",
+    "整理",
+    "新機能",
+    "機能追加",
+    "提案",
+    "要望",
+    "requirements",
+    "spec",
+    "draft"
+  ],
+  "steps": [
+    {
+      "id": "purpose",
+      "title": "目的・解決したい課題・対象ユーザーを依頼元に確認",
+      "desc": "Ask the requester what problem this solves, for whom, and how success will be judged"
+    },
+    {
+      "id": "constraints",
+      "title": "現状の機能と制約（依存・期限・予算）を整理",
+      "desc": "List what exists today and the constraints: dependencies, deadline, budget, compliance",
+      "check": "Does the request mention a deadline, a customer, a proposal or another team that constrains the work?",
+      "hints": [
+        "期限",
+        "までに",
+        "顧客",
+        "提案",
+        "説明",
+        "予算",
+        "来月",
+        "来週",
+        "チーム"
+      ]
+    },
+    {
+      "id": "draft",
+      "title": "要件の叩き台（必須・あると良い・対象外）を作成",
+      "desc": "Write a first draft that separates must-have, nice-to-have and out-of-scope"
+    },
+    {
+      "id": "acceptance",
+      "title": "受け入れ条件と非機能要件（性能・セキュリティ・運用）を追記",
+      "desc": "Add acceptance criteria and non-functional requirements to the draft"
+    },
+    {
+      "id": "review",
+      "title": "依頼元・開発・QA で要件をレビュー",
+      "desc": "Walk through the draft with the requester, the developers and QA",
+      "check": "Will more than one team or role have to agree on this?",
+      "hints": [
+        "営業",
+        "開発",
+        "QA",
+        "チーム",
+        "顧客",
+        "複数",
+        "部門"
+      ]
+    },
+    {
+      "id": "register",
+      "title": "合意した要件をチケットに登録し、見積りを依頼",
+      "desc": "Register the agreed requirements as work items and ask the team for an estimate"
+    }
+  ]
+}

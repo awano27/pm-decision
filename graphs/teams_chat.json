@@ -10,6 +10,7 @@
         "instructions": "What is the sender of `text` asking the project manager to do?",
         "criteria": {
           "decision": "Asks the project manager to decide, approve or choose something (for example whether to move a date, which option to take, go/no-go, a budget, who takes over work)",
+          "requirements": "Asks the project manager to work out requirements or a specification for a new feature or change (a first draft, an organized list of needs)",
           "status": "Asks about the progress, schedule or current state of some work",
           "incident": "Reports that something is broken, stopped, slow or failing for users or for the team",
           "fyi": "Shares information, a greeting or thanks; no reply or decision is needed",
@@ -45,11 +46,22 @@
             "fyi",
             "ありがとう",
             "thanks"
+          ],
+          "requirements": [
+            "要件",
+            "仕様",
+            "叩き台",
+            "検討してもらえ",
+            "整理してもらえ",
+            "まとめてもらえ",
+            "requirements",
+            "spec"
           ]
         }
       },
       "routes": {
         "decision": "plan_decision",
+        "requirements": "plan_requirements",
         "status": "reply_status",
         "incident": "incident_bug",
         "fyi": "log_fyi",
@@ -204,6 +216,41 @@
           "type": "teams.reply",
           "chat_id": "{event.chat_id}",
           "text": "受領しました。まず「{plan.first}」から進めます。"
+        }
+      ],
+      "per_step": [
+        {
+          "type": "ado.create",
+          "work_item_type": "Task",
+          "title": "{step.title}（{event.author}さんの依頼）",
+          "due": "{step.due}",
+          "tags": "kimeru;plan;{plan.playbook}"
+        }
+      ],
+      "advice": "{plan.title}: {plan.summary}",
+      "notify": true
+    },
+    "plan_requirements": {
+      "kind": "plan",
+      "playbooks": [
+        "requirements_review"
+      ],
+      "instructions": "What kind of work is the sender of `text` asking the project manager to start?",
+      "min_conf": 0.1,
+      "routes": {
+        "ok": "requirements_planned",
+        "none": "ask_pm",
+        "unsure": "ask_pm"
+      },
+      "_comment": "The intent node already chose 'requirements'; this only confirms it, so the threshold is low (Kev's confidence on a two-way choice is 0.2-0.6 even when right, and lower when the event carries more fields). A wrong 'none' still ends at the PM (ask_pm)."
+    },
+    "requirements_planned": {
+      "kind": "decide",
+      "actions": [
+        {
+          "type": "teams.reply",
+          "chat_id": "{event.chat_id}",
+          "text": "受領しました。要件の検討は、まず「{plan.first}」から進めます。"
         }
       ],
       "per_step": [

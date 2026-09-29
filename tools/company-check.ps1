@@ -364,7 +364,10 @@ if ($uia -and $py -and (Want 'T18')) {
     $d = Py @('eval\drafts.py', '--backend', 'stub', '--writer', 'm365-auto', '--n', '1', '--kinds', 'teams.chat', '--topic', $topic)
     $sum = ($d -split "`n") | Where-Object { $_ -match '^events=' } | Select-Object -First 1
     $m = [regex]::Match([string]$sum, 'texts=(\d+) drafted=(\d+) held=\d+ sources=(\d+) failed_events=(\d+)')
+    $err = ((($d -split "`n") | Where-Object { $_ -match 'ERROR ' } | Select-Object -First 1) -replace '.*ERROR ', '').Replace($topic, '<件名>')
+    if ($err.Length -gt 300) { $err = $err.Substring(0, 300) }
     if (-not $m.Success) { Rec 'T18' 'NG 実行できませんでした（件名は記録しません）' }
+    elseif ($m.Groups[4].Value -ne '0') { Rec 'T18' ("NG writer が失敗: " + $err) }
     else { Rec 'T18' ("drafted=$($m.Groups[2].Value)/$($m.Groups[1].Value) 出典=$($m.Groups[3].Value) 件 失敗=$($m.Groups[4].Value)" + $(if ($m.Groups[3].Value -eq '0') { '（出典なし: 件名が見つからないか、Copilot が挙げなかった）' } else { '' })) }
   }
 }

@@ -322,6 +322,15 @@ def unverified(text, material):
     return sorted({t for t in TOKENS.findall(text or "") if _canon(t) not in m})
 
 
+def _item_text(x):
+    """A list item as one line: a model may answer {"option": "延期", "note": "..."} instead of a string."""
+    if isinstance(x, dict):
+        head = next((str(x[k]) for k in ("option", "name", "title", "案", "選択肢") if has_content(x.get(k))), "")
+        rest = [str(v) for k, v in x.items() if has_content(v) and str(v) != head]
+        return "：".join(t.strip() for t in ([head] if head else []) + rest if t.strip())
+    return str(x)
+
+
 def _memo(m):
     """Keep a writer's memo small and well-formed: short strings, at most 3 list items."""
     if not isinstance(m, dict):
@@ -330,7 +339,7 @@ def _memo(m):
     out = {k: s(m[k]) for k in ("summary", "next", "ask_back") if has_content(m.get(k))}
     for k in ("missing", "options"):
         if isinstance(m.get(k), list):
-            items = [s(x) for x in m[k] if has_content(x)][:3]
+            items = [s(_item_text(x)) for x in m[k] if has_content(x)][:3]
             if items:
                 out[k] = items
     return out

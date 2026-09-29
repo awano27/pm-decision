@@ -396,6 +396,15 @@ class TestWriter(unittest.TestCase):
         with mock.patch("subprocess.run", ok):
             self.assertEqual(w.draft(res, {"text": "x"})["a1"], "受領しました。復旧見込みを確認します。")
 
+    def test_memo_options_given_as_objects_become_one_line_each(self):
+        memo = writer._memo({"summary": "判断の依頼", "missing": [{"item": "原因"}, "復旧見込み"],
+                             "options": [{"option": "延期", "note": "影響範囲の確認が必要"},
+                                         {"option": "現状維持", "note": ""}, "スコープ縮小：整理が必要"],
+                             "next": "確認する"})
+        self.assertEqual(memo["options"], ["延期：影響範囲の確認が必要", "現状維持", "スコープ縮小：整理が必要"])
+        self.assertEqual(memo["missing"], ["原因", "復旧見込み"])
+        self.assertFalse(any("{" in x for k in ("missing", "options") for x in memo[k]))
+
     def test_daily_refuses_to_start_with_a_misspelled_writer(self):
         import os
         from unittest import mock

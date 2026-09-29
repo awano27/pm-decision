@@ -195,8 +195,13 @@ function Open-SelfChat($w) {
   }
   if (-not $cands) { Fail 'self chat not found in chat list (open it once by hand and run -Action learn)' }
   $tried = New-Object System.Collections.Generic.List[string]
+  $rectNote = 'none'
   foreach ($item in $cands) {   # a candidate may be a message rather than the chat entry: verify after each try
-    foreach ($how in 'select', 'link', 'invoke', 'click') {
+    # a long list is virtualized: bring the entry into view first, and note whether it is inside the window
+    try { $item.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView(); Start-Sleep -Milliseconds 400 } catch {}
+    $wr = $w.Current.BoundingRectangle; $ir = $item.Current.BoundingRectangle
+    $rectNote = if ($ir.Width -le 0) { 'empty' } elseif ($ir.X -ge $wr.X -and $ir.Y -ge $wr.Y -and ($ir.X + $ir.Width) -le ($wr.X + $wr.Width) -and ($ir.Y + $ir.Height) -le ($wr.Y + $wr.Height)) { 'inside' } else { 'outside' }
+    foreach ($how in 'select', 'link', 'invoke', 'click', 'enter') {
       try {
         switch ($how) {
           'select' { $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() }
@@ -209,14 +214,21 @@ function Open-SelfChat($w) {
             # new Teams may mark the entry selected via UIA without navigating: click it like a person would
             Assert-Foreground $w
             $r = $item.Current.BoundingRectangle
-            if ($r.Width -le 0) { throw 'no rectangle' }
+            if ($r.Width -le 0 -or $rectNote -ne 'inside') { throw 'not clickable' }
             [void][K.W]::SetCursorPos([int]($r.X + [math]::Min(60, $r.Width / 2)), [int]($r.Y + $r.Height / 2))
             [K.W]::mouse_event(2, 0, 0, 0, 0); [K.W]::mouse_event(4, 0, 0, 0, 0)
+          }
+          'enter' {
+            # keyboard: focus the entry and press Enter, only while Teams is in front
+            Assert-Foreground $w
+            $item.SetFocus(); Start-Sleep -Milliseconds 200
+            Assert-Foreground $w
+            [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
           }
         }
         $tried.Add("${how}:ok")
       } catch { $tried.Add("${how}:err"); continue }
-      for ($i = 0; $i -lt 12; $i++) {
+      for ($i = 0; $i -lt 24; $i++) {   # up to 6 s: opening a chat can take a while on a busy Teams
         Start-Sleep -Milliseconds 250
         $w = Get-TeamsWindow
         if (Test-SelfOpen $w) { return $w }
@@ -225,7 +237,7 @@ function Open-SelfChat($w) {
   }
   $notes = if ($w) { @(Get-NotesItems $w) } else { @() }
   $sel = if ($w) { Get-SelectedKinds $w } else { '' }
-  Fail ("self chat did not open (tried " + ($tried -join ',') + "; notes entries " + $notes.Count +
+  Fail ("self chat did not open (tried " + ($tried -join ',') + "; entry " + $rectNote + "; notes entries " + $notes.Count +
         ", selected chats: " + $(if ($sel) { $sel } else { 'none' }) + ")")
 }
 

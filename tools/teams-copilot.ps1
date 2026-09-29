@@ -153,19 +153,21 @@ $prompt = (Get-Content -Raw -Encoding UTF8 $PromptFile).Trim()
 $w = Open-Copilot $w
 if (-not $w) { Fail 'Copilot chat not found in Teams (no chat-list entry or app button named Copilot)' }
 $box = Get-Box $w
-$cur = (Get-BoxText $box).Trim()
-$ph = [string]$box.Current.Name
-if ($cur -and (Squash $cur) -ne (Squash $ph)) {
+# an empty web editor still reads as one invisible character (zero-width space, line break): Squash drops them
+$cur = Get-BoxText $box
+$sq = Squash $cur
+$phq = Squash ([string]$box.Current.Name)
+if ($sq -and $sq -ne $phq) {
   # text left by our own earlier run may be cleared; anything else could be the person's draft: leave it
-  if ($cur.StartsWith('あなたはプロジェクトマネージャーの下書き係')) {
+  if ($cur.Trim().StartsWith('あなたはプロジェクトマネージャーの下書き係')) {
     Assert-Foreground $w; $box.SetFocus(); Start-Sleep -Milliseconds 150; Assert-Foreground $w
     [System.Windows.Forms.SendKeys]::SendWait('^a'); Start-Sleep -Milliseconds 100
     [System.Windows.Forms.SendKeys]::SendWait('{DEL}'); Start-Sleep -Milliseconds 300
-    $cur = (Get-BoxText (Get-Box $w)).Trim()
+    $sq = Squash (Get-BoxText (Get-Box $w))
   }
-  if ($cur -and (Squash $cur) -ne (Squash $ph)) {
+  if ($sq -and $sq -ne $phq) {
     # lengths only, never the text
-    Fail ("the Copilot compose box holds $($cur.Length) characters (placeholder $($ph.Length)) that are not kimeru's; nothing sent")
+    Fail ("the Copilot compose box holds $($sq.Length) visible characters (placeholder $($phq.Length)) that are not kimeru's; nothing sent")
   }
 }
 $before = @(Get-Texts $w)

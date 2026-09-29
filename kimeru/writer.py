@@ -162,13 +162,41 @@ def _run(cmd, prompt, timeout):
     return out
 
 
+def find_exe(name, env_var=None):
+    """The CLI's path: KIMERU_<NAME>_EXE, then PATH, then where the Windows installers put it (winget links / packages,
+    npm global, ~/.local/bin). A scheduled task or a fresh shell often has a shorter PATH than the one it was tested in."""
+    import glob
+    if env_var and os.environ.get(env_var) and os.path.exists(os.environ[env_var]):
+        return os.environ[env_var]
+    found = shutil.which(name)
+    if found:
+        return found
+    local = os.environ.get("LOCALAPPDATA", "")
+    roaming = os.environ.get("APPDATA", "")
+    home = os.path.expanduser("~")
+    patterns = []
+    for ext in (".exe", ".cmd", ""):
+        patterns += [os.path.join(local, "Microsoft", "WinGet", "Links", name + ext),
+                     os.path.join(local, "Microsoft", "WinGet", "Packages", "*", name + ext),
+                     os.path.join(local, "Microsoft", "WinGet", "Packages", "*", "*", name + ext),
+                     os.path.join(roaming, "npm", name + ext),
+                     os.path.join(home, ".local", "bin", name + ext),
+                     os.path.join(home, ".claude", "local", name + ext)]
+    for pat in patterns:
+        if local or roaming:
+            for hit in sorted(glob.glob(pat)):
+                if os.path.isfile(hit):
+                    return hit
+    return None
+
+
 class ClaudeWriter:
     NAME = "claude"
 
     def __init__(self, model=None, timeout=180, exe=None):
         self.model = model or os.environ.get("KIMERU_WRITER_MODEL", "sonnet")
         self.timeout = timeout
-        self.exe = exe or shutil.which("claude")
+        self.exe = exe or find_exe("claude", "KIMERU_CLAUDE_EXE")
 
     def ask_text(self, prompt):
         if not self.exe:
@@ -191,7 +219,7 @@ class CopilotWriter:
     def __init__(self, model=None, timeout=180, exe=None):
         self.model = model or os.environ.get("KIMERU_WRITER_MODEL", "")
         self.timeout = timeout
-        self.exe = exe or shutil.which("copilot")
+        self.exe = exe or find_exe("copilot", "KIMERU_COPILOT_EXE")
 
     def draft(self, res, event, instruction=None):
         if not self.exe:

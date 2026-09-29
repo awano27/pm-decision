@@ -396,6 +396,7 @@ if ($py -and (Want 'T14')) {
 if ($py -and (Want 'T15')) {
   Say "T15 GitHub Copilot で文面の下書き（架空のサンプル 1 件。会社のデータは送りません）"
   $cop = (Get-Command copilot -ErrorAction SilentlyContinue).Source
+  if (-not $cop -and $py) { $cop = ((Py @('-c', 'from kimeru import writer; print(writer.find_exe("copilot", "KIMERU_COPILOT_EXE") or "")')) -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 1) }
   if (-not $cop) { Rec 'T15' 'SKIP copilot コマンドなし（GitHub Copilot アプリ / winget install GitHub.Copilot）' }
   elseif (-not (YesNo "   架空のチャット 1 件の返信とタスク説明を GitHub Copilot に書かせますか")) { Rec 'T15' 'SKIP' }
   else {
@@ -449,10 +450,12 @@ if ($uia -and $py -and (Want 'T18')) {
 if (Want 'T16') {
   Say "T16 PC への通知（Windows の通知を 1 件出します。クリックすると Teams の自分とのチャットが開きます）"
   $o = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'toast.ps1') -Title 'kimeru: テスト通知' -Body '確認待ちができるとこの通知が出ます' 2>&1 | Out-String
+  $tj = $null; try { $tj = $o.Trim().TrimStart([char]0xFEFF) | ConvertFrom-Json } catch {}
   if ($o -notmatch '"ok":true') { Rec 'T16' ('NG ' + (Safe-Error $o)) }
   else {
+    $why = if ($tj) { "設定=$($tj.setting) 通知センター内=$($tj.inCenter)件" } else { '' }
     $seen = YesNo "   画面右下に「kimeru: テスト通知」が出ましたか（集中モード中は通知センターに入ります）"
-    Rec 'T16' $(if ($seen) { 'OK 通知が表示された' } else { 'NG 通知が見えない（設定 > システム > 通知 で PowerShell / 集中モードを確認）' })
+    Rec 'T16' $(if ($seen) { "OK 通知が表示された $why" } else { "NG 通知が見えない $why（DisabledForUser=設定または集中モード / DisabledByGroupPolicy=会社の設定。通知センターに 1 件以上あれば、届いているが画面には出ていない）" })
   }
 }
 

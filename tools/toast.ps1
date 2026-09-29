@@ -25,8 +25,12 @@ try {
 "@)
   # Windows PowerShell's own app id: a registered AUMID, so no shortcut or registration is needed
   $app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
-  [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show((New-Object Windows.UI.Notifications.ToastNotification $xml))
-  '{"ok":true}'
+  $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app)
+  $setting = [string]$notifier.Setting   # Enabled / DisabledForUser (Settings > Notifications, Focus) / DisabledByGroupPolicy ...
+  $notifier.Show((New-Object Windows.UI.Notifications.ToastNotification $xml))
+  $inCenter = -1
+  try { $inCenter = @([Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory($app)).Count } catch {}
+  '{"ok":true,"setting":' + (ConvertTo-Json $setting) + ',"inCenter":' + $inCenter + '}'
 } catch {
   '{"ok":false,"error":' + (ConvertTo-Json ([string]$_.Exception.Message)) + '}'
   exit 2

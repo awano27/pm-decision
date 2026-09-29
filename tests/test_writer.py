@@ -495,3 +495,21 @@ class TestM365AutoRest(unittest.TestCase):
         self.assertIn("copilot_request", res)
         self.assertEqual(res["actions"][0]["held_for"], "m365")
         self.assertIn("休止中", res["writer_error"])
+
+
+class TestFindExe(unittest.TestCase):
+    def test_env_var_wins_and_missing_is_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "copilot.exe"
+            f.write_text("x")
+            with mock.patch.dict(os.environ, {"KIMERU_COPILOT_EXE": str(f)}):
+                self.assertEqual(writer.find_exe("copilot", "KIMERU_COPILOT_EXE"), str(f))
+        self.assertIsNone(writer.find_exe("kimeru-no-such-cli-xyz"))
+
+    def test_installer_locations_are_searched_when_path_is_short(self):
+        with tempfile.TemporaryDirectory() as d:
+            links = Path(d) / "Microsoft" / "WinGet" / "Links"
+            links.mkdir(parents=True)
+            (links / "copilot.exe").write_text("x")
+            with mock.patch.dict(os.environ, {"LOCALAPPDATA": d, "APPDATA": d}), mock.patch("shutil.which", return_value=None):
+                self.assertEqual(writer.find_exe("copilot"), str(links / "copilot.exe"))

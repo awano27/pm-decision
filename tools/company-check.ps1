@@ -444,6 +444,9 @@ if ($uia -and $py -and (Want 'T18')) {
   if (-not $topic) { Rec 'T18' 'SKIP' }
   elseif (-not (YesNo "   Teams で Copilot のチャットが開いていて、他のチャットの側パネル・別ウィンドウは閉じていますか（依頼文を貼って送信します）")) { Rec 'T18' 'SKIP' }
   else {
+    # a check run is a deliberate attempt: ignore (and reset) the rest the automatic route took after an earlier failure
+    $env:KIMERU_M365_NO_REST = '1'
+    Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:LOCALAPPDATA 'kimeru\m365-auto.json')
     # nothing is sent until a paste test (paste a short text into the Copilot box, read it back, remove it) has passed
     $pt = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'teams-copilot.ps1') -Action pastetest 2>&1 | Out-String
     $pj = $null; try { $pj = $pt.Trim().TrimStart([char]0xFEFF) | ConvertFrom-Json } catch {}

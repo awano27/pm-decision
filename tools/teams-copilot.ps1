@@ -442,9 +442,13 @@ if ($why) {
 }
 if ($DryRun) {
   # everything before the send has passed: take our own test text out again and report how the box was found
-  Assert-Foreground $w; if (Focus-Box $box) { [System.Windows.Forms.SendKeys]::SendWait('^a'); [System.Windows.Forms.SendKeys]::SendWait('{DEL}') }
-  Start-Sleep -Milliseconds 500
-  $rest = (Squash (Read-Box $box)).Length
+  $rest = 999
+  foreach ($try in 1..3) {
+    Assert-Foreground $w
+    if (Focus-Box $box) { [System.Windows.Forms.SendKeys]::SendWait('^a'); Start-Sleep -Milliseconds 150; [System.Windows.Forms.SendKeys]::SendWait('{DEL}') }
+    for ($k = 0; $k -lt 6; $k++) { Start-Sleep -Milliseconds 500; $rest = (Squash (Read-Box $box)).Length; if ($rest -le 2) { break } }
+    if ($rest -le 2) { break }
+  }
   $script:DryInfo = "dpiMode=$script:DpiMode focus=[$($script:FocusTrace -join ' ; ')] boxType=$($box.Current.ControlType.ProgrammaticName -replace '^ControlType\.', '') how=$(if ($script:BoxHow) { $script:BoxHow } else { 'named' }) focus=ok removed=$($rest -le 2) sendButton=$([bool](Find-All $w $CT::Button | Where-Object { $_.Current.Name -match '^(送信|Send)' } | Select-Object -First 1))"
   return
 }

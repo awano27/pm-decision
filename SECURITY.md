@@ -25,6 +25,8 @@ kimeru は PM の Teams・ADO のメッセージを読み、判断の下書き�
 
 ## 使う前に
 
+- `KIMERU_WRITER=copilot` は、PC の `copilot`（GitHub Copilot CLI）にサインインしているアカウントの契約に従って、材料を GitHub に送ります。個人の無料アカウントでも動くので、会社のメッセージを扱う PC では、会社が認めたアカウントかどうかを、`copilot` を起動して `/user` で確かめてから設定してください。
+
 - 共有画面の前に、PC 通知（送信者と本文の冒頭が出ます）を `KIMERU_TOAST=0` で止められます。
 - `m365-auto` は実験的です。日常運用の前に、試験（`run-company-check.cmd T19`）で貼り付け先を確認してください。
 

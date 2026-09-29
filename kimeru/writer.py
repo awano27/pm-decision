@@ -301,7 +301,7 @@ class M365AutoWriter(M365PromptWriter):
             more = f", head={answer.strip()[:300]!r}" if os.environ.get("KIMERU_DEBUG_WRITER") == "1" else ""
             raise RuntimeError(f"Copilot の返事に JSON が無い（{out.get('from', '?')}、{len(answer)} 字、"
                                f"ページ {out.get('pageLen', '?')} 字{more}）")
-        return d
+        return strip_citations(d)
 
 
 WRITERS = {"claude": ClaudeWriter, "copilot": CopilotWriter, "m365": M365PromptWriter, "m365-auto": M365AutoWriter}
@@ -349,6 +349,20 @@ def unverified(text, material):
     respected: 3件 is not covered by 13件; 火曜日 equals 火曜; 15日 is covered by 10/15)."""
     m = _canon(material)
     return sorted({t for t in TOKENS.findall(text or "") if not _covered(t, m)})
+
+CITATION = re.compile(r"\s*\[\d{1,2}\]|\s*\[\[\d{1,2}\]\]|【[^】]{0,40}†[^】]{0,80}】|\^\d{1,2}\^")
+
+
+def strip_citations(v):
+    """Microsoft 365 Copilot marks its references inline ([1], 【1†source】, ^1^): they are not part of a message."""
+    if isinstance(v, str):
+        return CITATION.sub("", v).strip()
+    if isinstance(v, list):
+        return [strip_citations(x) for x in v]
+    if isinstance(v, dict):
+        return {k: strip_citations(x) for k, x in v.items()}
+    return v
+
 
 def _item_text(x):
     """A list item as one line: a model may answer {"option": "延期", "note": "..."} instead of a string."""
@@ -488,7 +502,7 @@ def apply(res, event, writer, instruction=None):
     # sources only from Microsoft 365 Copilot, which can read the PM's mail and meetings; anything a
     # CLI writer calls a source would be made up
     if str(getattr(writer, "NAME", "")).startswith("m365") and isinstance(d.get("sources"), list):
-        src = [str(x).strip()[:80] for x in d["sources"] if str(x).strip()]
+        src = [_item_text(x).strip()[:80] for x in d["sources"] if _item_text(x).strip()]
         if src:
             res["copilot_sources"] = src[:3]
     drafted, refused = [], []

@@ -13,7 +13,7 @@
   exactly the prompt before sending (the same exact-text check as the self chat).
 #>
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('probe', 'ask')][string]$Action,
+  [Parameter(Mandatory = $true)][ValidateSet('probe', 'ask', 'pastetest')][string]$Action,
   [string]$PromptFile = '',
   [int]$TimeoutSec = 240
 )
@@ -56,6 +56,37 @@ function Write-DiagFile($why) {
   } catch {}
 }
 function Fail($msg) { Write-DiagFile ([string]$msg); Out-Json @{ ok = $false; error = "$msg [diagfile: $DiagFile]" }; exit 2 }
+
+# ---- one Teams operation at a time, and never while the person is typing / moving the mouse ----
+Add-Type -Namespace KI -Name L -MemberDefinition @'
+[StructLayout(LayoutKind.Sequential)] public struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+[DllImport("user32.dll")] public static extern bool GetLastInputInfo(ref LASTINPUTINFO p);
+'@
+function Get-IdleSeconds {
+  $i = New-Object 'KI.L+LASTINPUTINFO'
+  $i.cbSize = [Runtime.InteropServices.Marshal]::SizeOf($i)
+  if (-not [KI.L]::GetLastInputInfo([ref]$i)) { return 999 }
+  $now = [int64][Environment]::TickCount -band 4294967295
+  $d = ($now - [int64]$i.dwTime) % 4294967296
+  if ($d -lt 0) { $d += 4294967296 }
+  $d / 1000
+}
+function Wait-UserIdle([int]$need = 4, [int]$max = 90) {
+  if ($env:KIMERU_IDLE_SEC -ne $null -and $env:KIMERU_IDLE_SEC -ne '') { $need = [int]$env:KIMERU_IDLE_SEC }
+  if ($need -le 0) { return }
+  $t0 = Get-Date
+  while ((Get-IdleSeconds) -lt $need) {
+    if (((Get-Date) - $t0).TotalSeconds -gt $max) { Fail "the keyboard / mouse has been in use for $max s; Teams was not touched (set KIMERU_IDLE_SEC=0 to switch this off)" }
+    Start-Sleep -Milliseconds 500
+  }
+}
+function Enter-UiLock {
+  $script:UiMutex = New-Object Threading.Mutex($false, 'Local\kimeru-ui')
+  $got = $false
+  try { $got = $script:UiMutex.WaitOne(180000) } catch [Threading.AbandonedMutexException] { $got = $true }
+  if (-not $got) { Fail 'another kimeru Teams operation is running; Teams was not touched' }
+}
+
 function Get-TeamsWindow {
   $pids = @(Get-Process -Name ms-teams -ErrorAction SilentlyContinue | ForEach-Object Id)
   if (-not $pids) { return $null }
@@ -295,9 +326,14 @@ if ($Action -eq 'probe') {
   exit 0
 }
 
-# ---- ask ----
-if (-not (Test-Path $PromptFile)) { Fail 'prompt file not found' }
-$prompt = (Get-Content -Raw -Encoding UTF8 $PromptFile).Trim()
+# ---- ask (pastetest: everything except the send, with a short harmless text) ----
+Enter-UiLock
+Wait-UserIdle
+if ($Action -eq 'pastetest') { $prompt = 'kimeru 入力テスト（送信しません）' }
+else {
+  if (-not (Test-Path $PromptFile)) { Fail 'prompt file not found' }
+  $prompt = (Get-Content -Raw -Encoding UTF8 $PromptFile).Trim()
+}
 $w = Open-Copilot $w
 if (-not $w) { Fail 'Copilot chat not found in Teams (no chat-list entry or app button named Copilot)' }
 Show-CopilotPane $w
@@ -310,7 +346,7 @@ $phq = Squash ([string]$box.Current.Name)
 if ($sq.Length -gt 2 -and $sq -ne $phq) {
   # (two characters or fewer is an editor artifact, never a draft)
   # text left by our own earlier run may be cleared; anything else could be the person's draft: leave it
-  if ($sq.StartsWith('あなたはプロジェクトマネージャーの下書き係')) {   # Squash: an invisible first character (U+FFFC, zero-width) defeats a plain Trim()
+  if ($sq.StartsWith('あなたはプロジェクトマネージャーの下書き係') -or $sq.StartsWith('kimeru入力テスト')) {   # Squash: an invisible first character (U+FFFC, zero-width) defeats a plain Trim()
     Assert-Foreground $w
     if (-not (Focus-Box $box)) { Fail 'the keyboard focus is not in the Copilot compose box; nothing deleted' }
     Assert-Foreground $w
@@ -326,7 +362,7 @@ if ($sq.Length -gt 2 -and $sq -ne $phq) {
 $why = Test-CopilotPane (Get-TeamsWindow)
 if ($why) { Fail "not the Copilot chat ($why; $(Get-Diag (Get-TeamsWindow))); nothing pasted" }
 $before = @(Get-Texts $w)
-function Send-ToCopilot([string]$text) {
+function Send-ToCopilot([string]$text, [switch]$DryRun) {
   $w = Get-TeamsWindow
   $box = Get-Box $w
   $phq = Squash ([string]$box.Current.Name)
@@ -352,6 +388,14 @@ if ($why) {
   Assert-Foreground $w; if (Focus-Box $box) { [System.Windows.Forms.SendKeys]::SendWait('^a'); [System.Windows.Forms.SendKeys]::SendWait('{DEL}') }
   Fail "not the Copilot chat ($why); removed the pasted text, nothing sent"
 }
+if ($DryRun) {
+  # everything before the send has passed: take our own test text out again and report how the box was found
+  Assert-Foreground $w; if (Focus-Box $box) { [System.Windows.Forms.SendKeys]::SendWait('^a'); [System.Windows.Forms.SendKeys]::SendWait('{DEL}') }
+  Start-Sleep -Milliseconds 500
+  $rest = (Squash (Read-Box $box)).Length
+  $script:DryInfo = "boxType=$($box.Current.ControlType.ProgrammaticName -replace '^ControlType\.', '') how=$(if ($script:BoxHow) { $script:BoxHow } else { 'named' }) focus=ok removed=$($rest -le 2) sendButton=$([bool](Find-All $w $CT::Button | Where-Object { $_.Current.Name -match '^(送信|Send)' } | Select-Object -First 1))"
+  return
+}
 $btn = Find-All $w $CT::Button | Where-Object { $_.Current.Name -match '^(送信|Send)(\s*\(|$)' -and $_.Current.IsEnabled } | Select-Object -First 1
 if ($btn) { try { $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch { $btn = $null } }
 if (-not $btn) { Assert-Foreground $w; if (-not (Focus-Box $box)) { Fail 'the keyboard focus left the Copilot compose box; nothing sent' }; [System.Windows.Forms.SendKeys]::SendWait('{ENTER}') }
@@ -370,7 +414,8 @@ if (-not $sent) {
 }
 
 }
-Send-ToCopilot $prompt
+Send-ToCopilot $prompt -DryRun:($Action -eq 'pastetest')
+if ($Action -eq 'pastetest') { Out-Json @{ ok = $true; pasteTest = $true; info = $script:DryInfo }; exit 0 }
 
 # wait for the answer. It is JSON carrying our keys ("a1"... / "memo"). Candidates: every new text on the
 # page (nodes) and the page text, each cut after the last line of our own request. Only a text that carries

@@ -60,6 +60,37 @@ function Assert-Foreground($w) {
 function Out-Json($o) { $o | ConvertTo-Json -Compress -Depth 5 }
 function Fail($msg) { Out-Json @{ ok = $false; error = $msg }; exit 2 }
 
+# ---- one Teams operation at a time, and never while the person is typing / moving the mouse ----
+Add-Type -Namespace KI -Name L -MemberDefinition @'
+[StructLayout(LayoutKind.Sequential)] public struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+[DllImport("user32.dll")] public static extern bool GetLastInputInfo(ref LASTINPUTINFO p);
+'@
+function Get-IdleSeconds {
+  $i = New-Object 'KI.L+LASTINPUTINFO'
+  $i.cbSize = [Runtime.InteropServices.Marshal]::SizeOf($i)
+  if (-not [KI.L]::GetLastInputInfo([ref]$i)) { return 999 }
+  $now = [int64][Environment]::TickCount -band 4294967295
+  $d = ($now - [int64]$i.dwTime) % 4294967296
+  if ($d -lt 0) { $d += 4294967296 }
+  $d / 1000
+}
+function Wait-UserIdle([int]$need = 4, [int]$max = 90) {
+  if ($env:KIMERU_IDLE_SEC -ne $null -and $env:KIMERU_IDLE_SEC -ne '') { $need = [int]$env:KIMERU_IDLE_SEC }
+  if ($need -le 0) { return }
+  $t0 = Get-Date
+  while ((Get-IdleSeconds) -lt $need) {
+    if (((Get-Date) - $t0).TotalSeconds -gt $max) { Fail "the keyboard / mouse has been in use for $max s; Teams was not touched (set KIMERU_IDLE_SEC=0 to switch this off)" }
+    Start-Sleep -Milliseconds 500
+  }
+}
+function Enter-UiLock {
+  $script:UiMutex = New-Object Threading.Mutex($false, 'Local\kimeru-ui')
+  $got = $false
+  try { $got = $script:UiMutex.WaitOne(180000) } catch [Threading.AbandonedMutexException] { $got = $true }
+  if (-not $got) { Fail 'another kimeru Teams operation is running; Teams was not touched' }
+}
+
+
 function Get-TeamsWindow {
   $pids = @(Get-Process -Name ms-teams -ErrorAction SilentlyContinue | ForEach-Object Id)
   if (-not $pids) { return $null }
@@ -258,6 +289,8 @@ function Open-SelfChat($w) {
         ", selected chats: " + $(if ($sel) { $sel } else { 'none' }) + ")")
 }
 
+if ($Action -in 'open', 'post', 'send', 'read') { Enter-UiLock }
+if ($Action -in 'post', 'send') { Wait-UserIdle 3 60 }   # writing pastes and presses keys: not while the person is typing
 $w = Get-TeamsWindow
 if ($Action -eq 'diag') {
   if (-not $w) { Fail 'Teams window not found' }

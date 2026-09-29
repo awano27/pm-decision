@@ -363,6 +363,17 @@ if ($py -and (Want 'T15')) {
   }
 }
 
+# ---- T19: paste test only (nothing is sent anywhere; the pasted test text is removed again) ----
+if ($uia -and (Want 'T19')) {
+  Say "T19 Copilot の入力欄への貼り付けテスト（送信しません。貼った文字は自動で消します）"
+  if (-not (YesNo "   Teams で Copilot のチャットを開きましたか（他のチャットの側パネルは閉じてください）")) { Rec 'T19' 'SKIP' }
+  else {
+    $pt = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'teams-copilot.ps1') -Action pastetest 2>&1 | Out-String
+    $pj = $null; try { $pj = $pt.Trim().TrimStart([char]0xFEFF) | ConvertFrom-Json } catch {}
+    if ($pj -and $pj.ok) { Rec 'T19' ('OK ' + $pj.info) } else { Rec 'T19' ('NG ' + (Safe-Error $pt)); Rec 'T19-diag' (DiagText) }
+  }
+}
+
 # ---- T18: does Microsoft 365 Copilot name the mail / meetings it used? (needs a real subject you know) ----
 if ($uia -and $py -and (Want 'T18')) {
   Say "T18 M365 Copilot の出典（実際のメール・会議を参照できるか）"
@@ -371,13 +382,13 @@ if ($uia -and $py -and (Want 'T18')) {
   if (-not $topic) { Rec 'T18' 'SKIP' }
   elseif (-not (YesNo "   Teams で Copilot のチャットが開いていて、他のチャットの側パネル・別ウィンドウは閉じていますか（依頼文を貼って送信します）")) { Rec 'T18' 'SKIP' }
   else {
-    # nothing is pasted until the compose box is identified as Copilot's OWN (its name says Copilot): dry check first
-    $pr = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'teams-copilot.ps1') -Action probe 2>&1 | Out-String
-    $pj = $null; try { $pj = $pr.Trim().TrimStart([char]0xFEFF) | ConvertFrom-Json } catch {}
-    if (-not $pj -or -not $pj.ok -or -not $pj.strictCopilotBox -or $pj.paneCheck -ne 'ok') {
-      Rec 'T18' ("SKIP 送信せず: Copilot 専用の入力欄を特定できません 候補=$($pj.strictCandidates) pane=$($pj.paneCheck) $($pj.diag) title=$($pj.title) edits=[$(@($pj.edits) -join ';')]")
+    # nothing is sent until a paste test (paste a short text into the Copilot box, read it back, remove it) has passed
+    $pt = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'teams-copilot.ps1') -Action pastetest 2>&1 | Out-String
+    $pj = $null; try { $pj = $pt.Trim().TrimStart([char]0xFEFF) | ConvertFrom-Json } catch {}
+    if (-not $pj -or -not $pj.ok) {
+      Rec 'T18' ("SKIP 送信せず: 貼り付けテストに通りませんでした " + (Safe-Error $pt))
       Rec 'T18-diag' (DiagText)
-    } else { $go = $true }
+    } else { Rec 'T18-paste' ("OK " + $pj.info); $go = $true }
   }
   if ($go) {
     $d = Py @('eval\drafts.py', '--backend', 'stub', '--writer', 'm365-auto', '--n', '1', '--kinds', 'teams.chat', '--topic', $topic)

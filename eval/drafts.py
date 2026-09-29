@@ -61,7 +61,7 @@ def main():
                   "long": len(d[writer.FIELD[d["type"]]]) > LIMIT[d["type"]]} for d in drafted]
         rows.append({"id": x["id"], "kind": ev["kind"], "node": res["node"], "error": res.get("writer_error"),
                      "targets": len(writer.targets(res)), "drafted": items, "held": len(held), "sec": round(secs[-1], 1),
-                     "sources": len(res.get("copilot_sources", []))})
+                     "sources": len(res.get("copilot_sources", [])), "sources_key": bool(res.get("copilot_sources_key"))})
         flags = sum(bool(i["unverified"]) for i in items)
         print(f"{x['id']:12} {res['node']:18} {secs[-1]:5.1f}s drafted {len(items)}/{len(writer.targets(res))}"
               f"{'  invented=' + str(flags) if flags else ''}{'  held=' + str(len(held)) if held else ''}"
@@ -75,7 +75,7 @@ def main():
     items = [i for r in rows for i in r["drafted"]]
     secs.sort()
     print(f"\nevents={len(rows)} texts={sum(r['targets'] for r in rows)} drafted={len(items)} "
-          f"held={sum(r['held'] for r in rows)} sources={sum(r['sources'] for r in rows)} failed_events={sum(1 for r in rows if r['error'])} invented={sum(bool(i['unverified']) for i in items)} "
+          f"held={sum(r['held'] for r in rows)} sources={sum(r['sources'] for r in rows)} sources_key={sum(r['sources_key'] for r in rows)} failed_events={sum(1 for r in rows if r['error'])} invented={sum(bool(i['unverified']) for i in items)} "
           f"long={sum(i['long'] for i in items)} median={secs[len(secs) // 2]:.1f}s max={secs[-1]:.1f}s")
 
 

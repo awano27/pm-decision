@@ -458,13 +458,13 @@ if ($uia -and $py -and (Want 'T18')) {
   if ($go) {
     $d = Py @('eval\drafts.py', '--backend', 'stub', '--writer', 'm365-auto', '--n', '1', '--kinds', 'teams.chat', '--topic', $topic)
     $sum = ($d -split "`n") | Where-Object { $_ -match '^events=' } | Select-Object -First 1
-    $m = [regex]::Match([string]$sum, 'texts=(\d+) drafted=(\d+) held=\d+ sources=(\d+) failed_events=(\d+)')
+    $m = [regex]::Match([string]$sum, 'texts=(\d+) drafted=(\d+) held=\d+ sources=(\d+) sources_key=(\d+) failed_events=(\d+)')
     $err = [string](($d -split "`n") | Where-Object { $_ -match 'ERROR ' } | Select-Object -First 1)
     $err = ($err -replace '.*ERROR ', '').Replace($topic, '<件名>')
     if ($err.Length -gt 300) { $err = $err.Substring(0, 300) }
     if (-not $m.Success) { Rec 'T18' 'NG 実行できませんでした（件名は記録しません）' }
-    elseif ($m.Groups[4].Value -ne '0') { Rec 'T18' ("NG writer が失敗: " + $err); Rec 'T18-diag' (DiagText) }
-    else { Rec 'T18' ("drafted=$($m.Groups[2].Value)/$($m.Groups[1].Value) 出典=$($m.Groups[3].Value) 件 失敗=$($m.Groups[4].Value)" + $(if ($m.Groups[3].Value -eq '0') { '（出典なし: 件名が見つからないか、Copilot が挙げなかった）' } else { '' })) }
+    elseif ($m.Groups[5].Value -ne '0') { Rec 'T18' ("NG writer が失敗: " + $err); Rec 'T18-diag' (DiagText) }
+    else { Rec 'T18' ("drafted=$($m.Groups[2].Value)/$($m.Groups[1].Value) 出典=$($m.Groups[3].Value) 件 出典欄への回答=$(if ($m.Groups[4].Value -ne '0') { 'あり' } else { 'なし' }) 失敗=$($m.Groups[5].Value)" + $(if ($m.Groups[3].Value -ne '0') { '' } elseif ($m.Groups[4].Value -ne '0') { '（Copilot は「参照なし」と答えた: 件名が見つからなかった可能性）' } else { '（Copilot は出典欄に答えなかった: 依頼文の反映を確認）' })) }
   }
 }
 

@@ -573,6 +573,8 @@ def apply(res, event, writer, instruction=None):
             reply["ask_back_unverified"] = unverified(ask, material)
     # sources only from Microsoft 365 Copilot, which can read the PM's mail and meetings; anything a
     # CLI writer calls a source would be made up
+    if str(getattr(writer, "NAME", "")).startswith("m365"):
+        res["copilot_sources_key"] = ("sources" in d)   # did Copilot answer the question at all (an empty list is an answer)
     if str(getattr(writer, "NAME", "")).startswith("m365") and isinstance(d.get("sources"), list):
         src = [_item_text(x).strip()[:80] for x in d["sources"] if _item_text(x).strip()]
         if src:

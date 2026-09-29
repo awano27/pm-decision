@@ -297,7 +297,7 @@ powershell -ExecutionPolicy Bypass -File tools\split-zip.ps1 -Zip C:\develop\kim
 | 承認の流れ（投稿 → iPhone から OK/NG → 記録） | ✅ 2 件の投稿、OK と NG の読み取り、二重処理の防止 | ✅ 通し（修正・OK・NG・二重処理の防止） |
 | PC への Windows 通知 | ✅ | ✅ |
 | `聞き返し N` / `下書き N` を Teams の画面から読み取る | 会社 PC の `T20` で確認 | ✅（テストで確認） |
-| `m365-auto`（実験的。Teams 内の Microsoft 365 Copilot を画面操作） | 貼り付けテスト（T19）は ✅（入力欄の特定・フォーカス・読み戻し・削除）。実際の送信と返事の取り込み（T18）は確認中 | 個人用 Teams には Copilot チャットがなく不可 |
+| `m365-auto`（実験的。Teams 内の Microsoft 365 Copilot を画面操作） | ✅ 会社 PC（2026-09-29）で、貼り付け・送信・返事の読み取り（1 回で 2 件の文面）まで通った。出典（`sources`）は、Copilot が件名を挙げた場合だけ表示 | 個人用 Teams には Copilot チャットがなく不可 |
 | `m365`（手動貼り付け・`下書き N` で取り込み） | `T20` で確認 | ✅（テストで確認） |
 | 5 分ごとの自動運転（`schedule install`）。writer の設定が引き継がれるかも | 未確認 | 未確認 |
 

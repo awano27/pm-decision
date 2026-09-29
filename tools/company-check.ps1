@@ -374,12 +374,14 @@ if ($uia -and (Want 'T17')) {
   if (-not $pj -or -not $pj.ok) { Rec 'T17-probe' ('NG ' + (Safe-Error $pr)) }
   else { Rec 'T17-probe' ("entries=$($pj.entries) [$($pj.entryTypes)] opened=$($pj.opened) title=$($pj.title) box=$($pj.composeBox) id=$($pj.boxId) send=$($pj.sendButton) edits=[$(@($pj.edits) -join ';')] docs=[$(@($pj.docs) -join ';')] buttons=[$(@($pj.buttons) -join ',')] boxTextLen=$($pj.boxTextLen) boxNameLen=$($pj.boxNameLen)") }
   if ($py -and $pj -and $pj.opened -and (YesNo "   架空のチャット 1 件の文面を Teams の Copilot に書かせますか（Copilot の履歴に残ります）")) {
+    $env:KIMERU_DEBUG_WRITER = '1'   # the sample is fictional: the start of the answer may be shown on failure
     $d = Py @('eval\drafts.py', '--backend', 'stub', '--writer', 'm365-auto', '--n', '1', '--kinds', 'teams.chat')
+    Remove-Item Env:KIMERU_DEBUG_WRITER -ErrorAction SilentlyContinue
     $sum = ($d -split "`n") | Where-Object { $_ -match '^events=' } | Select-Object -First 1
     $err = ($d -split "`n") | Where-Object { $_ -match 'ERROR' } | Select-Object -First 1
     $m = [regex]::Match([string]$sum, 'texts=(\d+) drafted=(\d+) held=(\d+) failed_events=(\d+)')
     $all = $m.Success -and $m.Groups[1].Value -eq $m.Groups[2].Value -and $m.Groups[4].Value -eq '0'
-    Rec 'T17' $(if ($all) { 'OK ' + (Short $sum) } else { 'NG ' + (Short $sum) + $(if ($err) { ' | ' + (Short $err) } else { '' }) })
+    Rec 'T17' $(if ($all) { 'OK ' + (Short $sum) } else { 'NG ' + (Short $sum) + $(if ($err) { ' | ' + ((($err -replace '\s+', ' ').Trim()) -replace '^(.{0,420}).*$', '$1') } else { '' }) })
   } elseif (Want 'T17') { Rec 'T17' 'SKIP' }
 }
 

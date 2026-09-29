@@ -284,7 +284,14 @@ class M365AutoWriter(M365PromptWriter):
             raise RuntimeError(out.get("error") or (r.stdout + r.stderr).strip()[:200])
         answer = out.get("text", "")
         cut = answer.rfind("（JSON だけ）")   # the last line of our own request
-        return _parse_best(answer[cut + len("（JSON だけ）"):] if cut >= 0 else answer, _wanted(res))
+        answer = answer[cut + len("（JSON だけ）"):] if cut >= 0 else answer
+        d = _parse_best(answer, _wanted(res))
+        if not d:
+            # shape only; the text itself only when a person asked for it on a fictional sample (company-check T17)
+            more = f", head={answer.strip()[:300]!r}" if os.environ.get("KIMERU_DEBUG_WRITER") == "1" else ""
+            raise RuntimeError(f"Copilot の返事に JSON が無い（{out.get('from', '?')}、{len(answer)} 字、"
+                               f"ページ {out.get('pageLen', '?')} 字{more}）")
+        return d
 
 
 WRITERS = {"claude": ClaudeWriter, "copilot": CopilotWriter, "m365": M365PromptWriter, "m365-auto": M365AutoWriter}
@@ -379,7 +386,7 @@ def apply(res, event, writer, instruction=None):
     material = _material(res, event, instruction)
 
     def fallback(reason):   # a writer is set but gave nothing usable: the template waits for the PM, with a warning
-        res["writer_error"] = reason[:300]
+        res["writer_error"] = reason[:600]
         if hasattr(writer, "request"):
             return paste_in()
         for _, a in todo:

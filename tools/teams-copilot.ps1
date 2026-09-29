@@ -83,6 +83,15 @@ function Get-BoxText($b) {
   catch { try { return $b.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value } catch { return '' } }
 }
 function Squash($s) { ([string]$s) -replace '[\s ​﻿]', '' }
+function Get-PageText($w) {
+  # the whole web page as one text (the chat is a web view): the longest Document text in the window
+  $best = ''
+  foreach ($d in (Find-All $w $CT::Document)) {
+    try { $t = [string]$d.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern).DocumentRange.GetText(300000) } catch { continue }
+    if ($t.Length -gt $best.Length) { $best = $t }
+  }
+  $best
+}
 function Test-Busy($w) {
   # while Copilot is writing there is a Stop button
   [bool](Find-All $w $CT::Button | Where-Object { $_.Current.Name -match '^(停止|Stop|生成を停止|Stop generating|応答を停止)' -and $_.Current.IsEnabled } | Select-Object -First 1)
@@ -186,13 +195,18 @@ $deadline = (Get-Date).AddSeconds($TimeoutSec)
 $last = ''; $stable = 0
 $known = @{}; foreach ($t in $before) { $known[$t] = 1 }
 $p = Squash $prompt
+$marker = '（JSON だけ）'   # the last line of our own request: what follows it on the page is the answer
 while ((Get-Date) -lt $deadline) {
   Start-Sleep -Seconds 2
   $w = Get-TeamsWindow
   $new = @(Get-Texts $w | Where-Object { -not $known.ContainsKey($_) -and (Squash $_) -ne $p -and -not $p.Contains((Squash $_)) })
-  $cand = ($new | Sort-Object Length -Descending | Select-Object -First 1)
+  $node = ($new | Sort-Object Length -Descending | Select-Object -First 1)
+  $page = Get-PageText $w
+  $cut = $page.LastIndexOf($marker)
+  $tail = if ($cut -ge 0) { $page.Substring($cut + $marker.Length).Trim() } else { '' }
+  $cand = if ($tail.Length -ge 10) { $tail } else { [string]$node }   # page text first, the longest new node as a fallback
   if ($cand -and $cand -eq $last -and -not (Test-Busy $w)) { $stable++ } else { $stable = 0 }
   $last = $cand
-  if ($stable -ge 2 -and $last.Length -ge 10) { Out-Json @{ ok = $true; text = $last }; exit 0 }
+  if ($stable -ge 2 -and $last.Length -ge 10) { Out-Json @{ ok = $true; text = $last; from = $(if ($tail.Length -ge 10) { 'page' } else { 'node' }); pageLen = $page.Length; nodeLen = ([string]$node).Length }; exit 0 }
 }
 Fail ("no answer from Copilot within $TimeoutSec s" + $(if ($last) { ' (an answer was still changing)' } else { '' }))

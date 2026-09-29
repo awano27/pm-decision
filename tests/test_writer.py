@@ -371,6 +371,31 @@ class TestWriter(unittest.TestCase):
             self.assertNotIn("writer_error", res)                                          # decided without a writer
             self.assertIn("m365_auto", (Path(d) / "warnings.jsonl").read_text(encoding="utf-8"))
 
+    def test_m365_auto_reports_the_shape_of_an_answer_without_json(self):
+        import os
+        from types import SimpleNamespace
+        from unittest import mock
+        answer = "先頭の説明文です。これは JSON ではなく普通の文章の返事です。（JSON だけ）\nこちらが返事の本文です。"
+        run = lambda *a, **k: SimpleNamespace(returncode=0, stderr="", stdout=json.dumps(
+            {"ok": True, "text": answer, "from": "page", "pageLen": 4321}, ensure_ascii=False))
+        w = writer.get_writer("m365-auto")
+        res = {"node": "n", "path": [], "actions": [{"type": "teams.reply", "text": "受領しました。"}]}
+        with mock.patch("subprocess.run", run), mock.patch.dict(os.environ, {"KIMERU_DEBUG_WRITER": ""}):
+            with self.assertRaises(RuntimeError) as c:
+                w.draft(res, {"text": "x"})
+        msg = str(c.exception)
+        self.assertIn("page", msg)
+        self.assertIn("4321", msg)
+        self.assertNotIn("こちらが返事の本文", msg)                                   # no text unless asked for
+        with mock.patch("subprocess.run", run), mock.patch.dict(os.environ, {"KIMERU_DEBUG_WRITER": "1"}):
+            with self.assertRaises(RuntimeError) as c:
+                w.draft(res, {"text": "x"})
+        self.assertIn("こちらが返事の本文", str(c.exception))                         # the fictional-sample check shows it
+        ok = lambda *a, **k: SimpleNamespace(returncode=0, stderr="", stdout=json.dumps(
+            {"ok": True, "text": '（JSON だけ）\n```json\n{"a1": "受領しました。復旧見込みを確認します。"}\n```'}, ensure_ascii=False))
+        with mock.patch("subprocess.run", ok):
+            self.assertEqual(w.draft(res, {"text": "x"})["a1"], "受領しました。復旧見込みを確認します。")
+
     def test_daily_refuses_to_start_with_a_misspelled_writer(self):
         import os
         from unittest import mock

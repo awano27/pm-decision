@@ -187,11 +187,13 @@ function Find-Box($w, [switch]$Strict) {
   # 1) the usual compose box id or a name that says so; 2) else the lowest editable field in the window
   #    (the compose box sits at the bottom of the pane); 3) else the lowest focusable document
   $edits = @(Find-All $w $CT::Edit)
-  if ($Strict -or $Action -eq 'ask') {
+  if ($Strict -or $Action -ne 'probe') {
+    $script:BoxNamed = $false
     # writes: exactly ONE compose-like box may exist in the window. Two (a side chat panel, a meeting chat next to
     # Copilot) or a guess by position could put the request into somebody else's chat, so no guessing here
     $c = @($edits | Where-Object { $_.Current.BoundingRectangle.Width -gt 0 -and $_.Current.Name -match $BOXRX })   # the box's OWN name says Copilot. Ids and the plain placeholder "メッセージを入力" belong to every chat (a meeting chat got a request that way); the top search box says "Copilot で検索..." and does not match
     $script:BoxCandidates = $c.Count
+    if ($c.Count -eq 1) { $script:BoxNamed = $true }   # an Edit whose OWN name says Copilot: the strongest proof of identity
     $mk = { param($x) ([string]$x) -replace '[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){0,4}', '<id>' -replace '\d+', 'N' }
     $script:EditShapes = (@($edits | Where-Object { $_.Current.BoundingRectangle.Width -gt 0 } | Select-Object -First 6 | ForEach-Object { "$(& $mk $_.Current.AutomationId):len$($_.Current.Name.Length)" }) -join ';')
     if ($c.Count -eq 0) {
@@ -296,6 +298,8 @@ function Open-Copilot($w) {
 }
 
 function Show-CopilotPane($w) {
+  [void](Find-Box $w -Strict)
+  if ($script:BoxNamed) { return }   # a composer that names itself Copilot is on screen (full page or side panel): leave the layout alone
   # the window title can still say "Copilot" while another chat is on screen (seen on the real Teams): when the
   # pane check fails, select the Copilot row of the chat list (navigation only) and look again for a few seconds
   if (-not (Test-CopilotPane (Get-TeamsWindow))) { return }
@@ -360,10 +364,13 @@ else {
   if (-not (Test-Path $PromptFile)) { Fail 'prompt file not found' }
   $prompt = (Get-Content -Raw -Encoding UTF8 $PromptFile).Trim()
 }
-$w = Open-Copilot $w
-if (-not $w) { Fail 'Copilot chat not found in Teams (no chat-list entry or app button named Copilot)' }
-Show-CopilotPane $w
-$w = Get-TeamsWindow
+[void](Find-Box $w -Strict)
+if (-not $script:BoxNamed) {
+  $w = Open-Copilot $w
+  if (-not $w) { Fail 'Copilot chat not found in Teams (no chat-list entry or app button named Copilot)' }
+  Show-CopilotPane $w
+  $w = Get-TeamsWindow
+}
 $box = Get-Box $w
 # an empty web editor still reads as one invisible character (zero-width space, line break): Squash drops them
 $cur = Read-Box $box
@@ -385,7 +392,7 @@ if ($sq.Length -gt 2 -and $sq -ne $phq) {
     Fail ("the Copilot compose box holds $($sq.Length) visible characters (placeholder $($phq.Length)) that are not kimeru's; nothing sent")
   }
 }
-$why = Test-CopilotPane (Get-TeamsWindow)
+$why = if ($script:BoxNamed) { $null } else { Test-CopilotPane (Get-TeamsWindow) }
 if ($why) { Fail "not the Copilot chat ($why; $(Get-Diag (Get-TeamsWindow))); nothing pasted" }
 $before = @(Get-Texts $w)
 function Send-ToCopilot([string]$text, [switch]$DryRun) {
@@ -408,8 +415,13 @@ if ((Squash (Read-Box $box)) -ne (Squash $text)) {
   Assert-Foreground $w; if (Focus-Box $box) { [System.Windows.Forms.SendKeys]::SendWait('^a'); [System.Windows.Forms.SendKeys]::SendWait('{DEL}') }
   Fail 'the Copilot compose box did not hold exactly the prompt; removed it, nothing sent'
 }
-if (-not (Test-CopilotOpen (Get-TeamsWindow))) { Fail 'window changed before send; aborted' }
-$why = Test-CopilotPane (Get-TeamsWindow)
+if ($script:BoxNamed) {
+  # named composer: the proof is the composer itself, so check that the focus is still inside it (the window title is unreliable)
+  $why = if (Test-FocusOn $script:BoxRect) { $null } else { 'the focus left the Copilot composer' }
+} else {
+  if (-not (Test-CopilotOpen (Get-TeamsWindow))) { Fail 'window changed before send; aborted' }
+  $why = Test-CopilotPane (Get-TeamsWindow)
+}
 if ($why) {
   Assert-Foreground $w; if (Focus-Box $box) { [System.Windows.Forms.SendKeys]::SendWait('^a'); [System.Windows.Forms.SendKeys]::SendWait('{DEL}') }
   Fail "not the Copilot chat ($why); removed the pasted text, nothing sent"

@@ -80,7 +80,11 @@ class TestScriptGuardsPresent(unittest.TestCase):
 
     def test_no_position_guess_for_the_compose_box_when_asking(self):
         # the strict branch returns before the loose "lowest editable field" guess
-        strict = self.text.index("if ($Strict -or $Action -eq 'ask')")
+        # every action except the read-only probe is strict (pastetest once fell into the loose branch and picked
+        # the composer of another chat)
+        self.assertIn("if ($Strict -or $Action -ne 'probe')", self.text)
+        self.assertNotIn("$Action -eq 'ask')", self.text.split("function Find-Box")[1].split("function Get-Box")[0])
+        strict = self.text.index("if ($Strict -or $Action -ne 'probe')")
         loose = self.text.index("Sort-Object { $_.Current.BoundingRectangle.Y } | Select-Object -Last 1")
         self.assertLess(strict, loose)
 

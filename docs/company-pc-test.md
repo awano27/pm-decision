@@ -25,6 +25,7 @@
 結果シートには本文・人名・キーは入らない（件数・OK/NG・エラー文のみ）。ただし、失敗したときのエラー文に組織名などが含まれることがあるので、貼る前に目を通す。一時ファイルと画面構造の出力は自動で削除される。
 
 - 従来どおり `C:\kev`・`C:\az` に置いた場合もそのまま動く（`kimeru` の隣 → `C:\kev` / `C:\az` の順に探す）
+- 自動運転を登録したあとは、1 サイクル（5 分）待って `python -m kimeru --out <出力先> schedule status` を実行し、`settings in effect` に writer などの出どころ（file）が出ていることを確かめる
 - 特定の確認だけやり直す: PowerShell で `.\run-company-check.cmd T9`（複数指定可: `T9 T15 T16`。M365 Copilot の出典は `T18`）
 - 準備だけ: `.\prepare-company.cmd` ／ 確認だけ: `.\run-company-check.cmd monday`
 - Kev が遅い（1 件が数分）ときは、Kev の窓に `precision: fp32` と出ているか確認する。bf16 に対応しない CPU では、起動時に自動で fp32（メモリ約 14GB）になる

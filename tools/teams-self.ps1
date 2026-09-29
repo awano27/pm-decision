@@ -26,8 +26,10 @@
   Personal Teams shows "(あなた)"; work accounts may show "(自分)". Override with -SelfMarker.
 #>
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('status', 'open', 'post', 'send', 'read', 'diag', 'learn', 'chats')][string]$Action,
+  [Parameter(Mandatory = $true)][ValidateSet('status', 'open', 'post', 'send', 'read', 'diag', 'learn', 'chats', 'readchat')][string]$Action,
   [string]$Text = '',
+  [string]$ChatId = '',      # readchat: the chat to open (its id from `chats`)
+  [int]$Count = 5,           # readchat: how many of the last messages to read
   [switch]$Send,
   [string]$SelfMarker = $env:KIMERU_SELF_MARKER   # e.g. "自分" if your Teams shows another word
 )
@@ -107,7 +109,8 @@ function Find-All($root, $type) {
   $root.FindAll('Descendants', (New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, $type)))
 }
 
-$NameFile = Join-Path $env:LOCALAPPDATA 'kimeru\self-name.txt'
+$StateDir = if ($env:KIMERU_STATE_DIR) { $env:KIMERU_STATE_DIR } else { Join-Path $env:LOCALAPPDATA 'kimeru' }
+$NameFile = Join-Path $StateDir 'self-name.txt'
 function Get-SelfName { if (Test-Path $NameFile) { (Get-Content $NameFile -Encoding UTF8 -TotalCount 1).Trim() } }
 
 function Get-ChatItems($w) {
@@ -203,6 +206,83 @@ function Get-SelectedKinds($w) {
   @(Get-ChatItems $w | Where-Object { Test-Selected $_ } | ForEach-Object { Get-ChatKind (Get-ChatId $_) }) -join ','
 }
 
+function Get-ChatTitle($item) {
+  # the chat's title as the chat list shows it (the same text `chats` reports)
+  foreach ($d in (Get-Raw $item 4)) {
+    if ($d.Current.AutomationId -like 'title-chat-list-item_*') {
+      $t = (@(Get-Raw $d 3 | ForEach-Object { $_.Current.Name } | Where-Object { $_ }) -join ' ').Trim()
+      if (-not $t) { $t = [string]$d.Current.Name }
+      return $t
+    }
+  }
+  ''
+}
+function Get-SelectedChatId($w) {
+  foreach ($it in (Get-ChatItems $w)) { if (Test-Selected $it) { return (Get-ChatId $it) } }
+  $null
+}
+function Test-ChatOpen($w, $id, $title) {
+  # opened = the window title names the chat AND the list agrees (a layout that reports no selection at all: the title alone).
+  # Either one alone has been wrong before (a title that lags, a selection that does not move the pane).
+  if (-not $w -or -not $title) { return $false }
+  if (-not ([string]$w.Current.Name).Contains("| $title |")) { return $false }
+  $sel = @(Get-ChatItems $w | Where-Object { Test-Selected $_ })
+  if ($sel.Count) { return [bool](@($sel | Where-Object { (Get-ChatId $_) -eq $id }).Count) }
+  $true
+}
+function Select-Chat($w, $id, $title) {
+  # select the chat's list entry (pattern, then invoke, then a click) and wait until Test-ChatOpen agrees; $false = not confirmed
+  $item = Get-ChatItems $w | Where-Object { (Get-ChatId $_) -eq $id } | Select-Object -First 1
+  if (-not $item) { return $false }
+  try { $item.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView(); Start-Sleep -Milliseconds 300 } catch {}
+  foreach ($how in 'select', 'invoke', 'click') {
+    try {
+      switch ($how) {
+        'select' { $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() }
+        'invoke' { $item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
+        'click' {
+          Assert-Foreground $w
+          $r = $item.Current.BoundingRectangle; $wr = $w.Current.BoundingRectangle
+          if ($r.Width -le 0 -or -not $wr.Contains([int]($r.X + 40), [int]($r.Y + $r.Height / 2))) { throw 'not clickable' }
+          [void][K.W]::SetCursorPos([int]($r.X + [math]::Min(60, $r.Width / 2)), [int]($r.Y + $r.Height / 2))
+          [K.W]::mouse_event(2, 0, 0, 0, 0); [K.W]::mouse_event(4, 0, 0, 0, 0)
+        }
+      }
+    } catch { continue }
+    for ($i = 0; $i -lt 20; $i++) {
+      Start-Sleep -Milliseconds 300
+      if (Test-ChatOpen (Get-TeamsWindow) $id $title) { return $true }
+    }
+  }
+  $false
+}
+function Get-ChatMessages($w, $count) {
+  # read only: the texts of the last messages in the pane to the right of the chat list (ids first, then names by position)
+  $wr = $w.Current.BoundingRectangle
+  $listRight = 0
+  foreach ($it in (Get-ChatItems $w)) { $r = $it.Current.BoundingRectangle; if ($r.Width -gt 0 -and $r.Right -gt $listRight -and $r.Right -lt ($wr.X + $wr.Width * 0.5)) { $listRight = $r.Right } }
+  $all = @($w.FindAll('Descendants', [System.Windows.Automation.Condition]::TrueCondition))
+  $byId = @(); $byName = @()
+  foreach ($e in $all) {
+    $r = $e.Current.BoundingRectangle
+    if ($r.Width -le 0 -or $r.Height -le 0 -or $r.X -lt ($listRight - 2)) { continue }
+    $n = ([string]$e.Current.Name).Trim()
+    if ($n.Length -lt 1) { continue }
+    if ([string]$e.Current.AutomationId -match '^(message-body|content-|body-)') { $byId += [pscustomobject]@{ y = $r.Y; text = $n } }
+    elseif ($n.Length -ge 4 -and $r.Y -gt ($wr.Y + $wr.Height * 0.12) -and $r.Y -lt ($wr.Y + $wr.Height * 0.88) -and
+            $e.Current.ControlType -in @($CT::ListItem, $CT::Group, $CT::Text)) { $byName += [pscustomobject]@{ y = $r.Y; text = $n } }
+  }
+  $how = if ($byId.Count) { 'ids' } else { 'names' }
+  $rows = if ($byId.Count) { $byId } else { $byName }
+  $seen = @{}; $msgs = @()
+  foreach ($x in ($rows | Sort-Object y)) {
+    $t = ($x.text -replace '\s+', ' ')
+    if ($t.Length -gt 4000) { $t = $t.Substring(0, 4000) }
+    if (-not $seen.ContainsKey($t)) { $seen[$t] = 1; $msgs += [ordered]@{ text = $t; sender = ''; time = '' } }
+  }
+  [pscustomobject]@{ how = $how; messages = @($msgs | Select-Object -Last $Count) }
+}
+
 function Mask($s) {
   # keep short parentheticals like "(自分)" and punctuation; letters/digits become x
   $e = [System.Text.RegularExpressions.MatchEvaluator] { param($m) if ($m.Value.StartsWith('(')) { $m.Value } else { 'x' } }
@@ -289,8 +369,8 @@ function Open-SelfChat($w) {
         ", selected chats: " + $(if ($sel) { $sel } else { 'none' }) + ")")
 }
 
-if ($Action -in 'open', 'post', 'send', 'read') { Enter-UiLock }
-if ($Action -in 'post', 'send') { Wait-UserIdle 3 60 }   # writing pastes and presses keys: not while the person is typing
+if ($Action -in 'open', 'post', 'send', 'read', 'readchat') { Enter-UiLock }
+if ($Action -in 'post', 'send', 'readchat') { Wait-UserIdle 3 60 }   # writing and opening another chat move the screen: not while the person works   # writing pastes and presses keys: not while the person is typing
 $w = Get-TeamsWindow
 if ($Action -eq 'diag') {
   if (-not $w) { Fail 'Teams window not found' }
@@ -307,6 +387,31 @@ if ($Action -eq 'diag') {
               itemShapes = @($items | Select-Object -First 8 | ForEach-Object { Mask $_.Current.Name }) })
   exit 0
 }
+if ($Action -eq 'readchat') {
+  # Opens one chat, reads its last messages, goes back to the chat that was open. Read only: the input box is never touched.
+  if (-not $w) { Fail 'Teams window not found' }
+  if (-not $ChatId -or $ChatId -eq '48:notes') { Fail 'readchat needs the id of another chat (not the self chat)' }
+  if (-not (Get-ChatItems $w).Count -and (Show-ChatApp $w)) { Start-Sleep -Seconds 2; $w = Get-TeamsWindow }
+  $item = Get-ChatItems $w | Where-Object { (Get-ChatId $_) -eq $ChatId } | Select-Object -First 1
+  if (-not $item) { Fail 'the chat is not in the list on screen; nothing was opened' }
+  $title = Get-ChatTitle $item
+  if (-not $title) { Fail 'the chat has no title to check the screen against; nothing was opened' }
+  $origId = Get-SelectedChatId $w
+  if (-not (Select-Chat $w $ChatId $title)) {
+    if ($origId -and $origId -ne $ChatId) { [void](Select-Chat (Get-TeamsWindow) $origId (Get-ChatTitle (Get-ChatItems (Get-TeamsWindow) | Where-Object { (Get-ChatId $_) -eq $origId } | Select-Object -First 1))) }
+    Fail 'could not confirm that the chat is open (the title and the selection did not agree); nothing was read'
+  }
+  $w = Get-TeamsWindow
+  $read = Get-ChatMessages $w $Count
+  $returned = $false
+  if ($origId -and $origId -ne $ChatId) {
+    $origItem = Get-ChatItems $w | Where-Object { (Get-ChatId $_) -eq $origId } | Select-Object -First 1
+    if ($origItem) { $returned = [bool](Select-Chat $w $origId (Get-ChatTitle $origItem)) }
+  } elseif ($origId -eq $ChatId) { $returned = $true }
+  Out-Json ([ordered]@{ ok = $true; opened = $true; how = $read.how; messages = @($read.messages); returned = $returned; hadOriginal = [bool]$origId })
+  exit 0
+}
+
 if ($Action -eq 'chats') {
   if (-not $w) { Fail 'Teams window not found' }
   $name = Get-SelfName
@@ -489,7 +594,7 @@ if ($Action -eq 'read') {
         $entry = "P:" + $Matches[1]
         if (-not $posts.Contains($Matches[1])) { $posts.Add($Matches[1]) }
       }
-      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留|聞き返し)\s*#?(\d+)\s*[.。!！]*$') {
+      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留|聞き返し|再実行)\s*#?(\d+)\s*[.。!！]*$') {
         # phones often send full-width or re-cased text ("ＯＫ　６７５", "Ok 675"): canonicalize
         $c = '{0} {1}' -f $Matches[1].ToUpper(), $Matches[2]
         $entry = "R:" + $c

@@ -22,7 +22,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import actions, events, graph
+from . import actions, config, events, execute, graph
 from . import writer as writer_mod
 from . import plan as planner
 from .backends import BackendUnavailable, ClmBackend, JevBackend, KevBackend, StubBackend
@@ -47,6 +47,38 @@ def _append(path, rec):
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
+EVENT_KEEP = ("kind", "id", "author", "text", "item", "meeting", "title", "description", "work_item_type",
+              "rule", "severity", "condition", "mentions_me", "context", "date", "chat_id", "chat_title")
+
+
+class Meter:
+    """Counts what one event costs the judge: calls, questions and seconds. Everything else is passed through."""
+
+    def __init__(self, inner):
+        self.inner, self.calls, self.questions, self.seconds = inner, 0, 0, 0.0
+        self.profile = getattr(inner, "profile", None)
+
+    def ask(self, state, questions):
+        t = time.perf_counter()
+        try:
+            return self.inner.ask(state, questions)
+        finally:
+            self.seconds += time.perf_counter() - t
+            self.calls += 1
+            self.questions += len(questions)
+
+    def __getattr__(self, name):   # NAME, model, ... of the wrapped backend
+        return getattr(self.__dict__["inner"], name)
+
+
+def _judge_info(backend):
+    """Which judge answered, seen through the wrappers that time or record it (Timed, Recording)."""
+    seen = 0
+    while hasattr(backend, "inner") and seen < 5:
+        backend, seen = backend.inner, seen + 1
+    return {"name": getattr(backend, "NAME", type(backend).__name__), "model": str(getattr(backend, "model", ""))[:60]}
+
+
 def _graph_version(g):
     return hashlib.sha1(json.dumps(g, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:8]
 
@@ -56,9 +88,50 @@ def _processed(out):
     return set(p.read_text(encoding="utf-8").split()) if p.exists() else set()
 
 
-def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=False):
+def _merge_into_pending(out, ev):
+    """A new message in a chat whose earlier message still waits for the PM joins that item (posted again under the same
+    number) instead of becoming a second one. Returns True when it was merged."""
+    if ev.get("kind") != "teams.chat" or not ev.get("chat_id"):
+        return False
+    from . import notify
+    ap = notify.Approvals(out)
+    for it in ap.data["items"].values():
+        rec = it["record"]
+        if it["status"] in ("pending", "held") and (rec.get("event") or {}).get("chat_id") == ev["chat_id"]:
+            rec.setdefault("followups", []).append({"text": " ".join(str(ev.get("text", "")).split())[:300],
+                                                   "at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+            it["posted"], it["request_posted"] = False, False      # posted again, with the follow-up, under the same number
+            ap.save()
+            _append(out / "merged.jsonl", {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "into": it["key"], "event_id": ev.get("id")})
+            return True
+    return False
+
+
+def _judge_and_draft(g, ev, backend, playbooks, writer):
+    """One pass: the graph, then the writer. Returns (res, held)."""
+    meter = Meter(backend)
+    res = graph.run(g, ev, meter, playbooks=playbooks)
+    held = []
+    t_writer = time.perf_counter()
+    drafted_any = writer_mod.apply(res, ev, writer)
+    res["perf"] = {"calls": meter.calls, "questions": meter.questions, "judge_sec": round(meter.seconds, 2),
+                   "writer_sec": round(time.perf_counter() - t_writer, 2)}
+    if drafted_any:
+        res["material_event"] = {k: ev.get(k) for k in writer_mod.EVENT_FIELDS if ev.get(k)}
+        # LLM text goes out only after the PM approves its exact wording
+        held = [a for a in res["actions"] if a.get("drafted_by") or a.get("held_for")]
+    # a kind the PM switched on for real execution never runs by itself, decided by the graph or not
+    held += [a for a in res["actions"] if execute.is_gated(a) and a not in held]
+    if held and res["outcome"] == "decide":
+        res["needs_human"] = True
+    return res, held
+
+
+def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=False, reader=None):
     """Judge every event in `payload`. dedup=True (inbox/daily) skips an event already decided
-    by the same graph version, so a retried or re-dropped file does not decide twice."""
+    by the same graph version, so a retried or re-dropped file does not decide twice.
+    `reader` (fulltext.Reader) opens a chat to read it in full, only when needed (see fulltext.py)."""
+    from . import fulltext
     if playbooks is None:
         playbooks = planner.load_playbooks(DEFAULT_PLAYBOOKS)
     if writer is None:
@@ -74,19 +147,42 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
             key = f"{g['name']}@{_graph_version(g)}:{ev['kind']}:{ev.get('id')}".replace(" ", "_")
             if key in seen:
                 continue
-            res = graph.run(g, ev, backend, playbooks=playbooks)
-            held = []
-            if writer_mod.apply(res, ev, writer):
-                res["material_event"] = {k: ev.get(k) for k in writer_mod.EVENT_FIELDS if ev.get(k)}
-                # LLM text goes out only after the PM approves its exact wording
-                held = [a for a in res["actions"] if a.get("drafted_by") or a.get("held_for")]
+            if dedup and _merge_into_pending(out, ev):
+                with (out / "processed.txt").open("a", encoding="utf-8") as f:
+                    f.write(key + "\n")
+                seen.add(key)
+                continue
+            can_read = reader is not None and ev["kind"] == "teams.chat" and bool(ev.get("chat_id"))
+            read_info, ev_run = None, ev
+            if can_read and fulltext.truncated(ev.get("text")):        # the preview is cut off: read before judging
+                ev_run, read_info = fulltext.deepen(reader, ev)
+            res, held = _judge_and_draft(g, ev_run, backend, playbooks, writer)
+            if can_read and read_info is None and (res["needs_human"] or res.get("notify")):
+                ev_run, read_info = fulltext.deepen(reader, ev)         # a decision that ends at the PM: look at the whole chat
+                if read_info["state"] == "full":
+                    res, held = _judge_and_draft(g, ev_run, backend, playbooks, writer)
+            if read_info:
+                res["read_full"] = read_info
             # decide runs now; advise actions are only proposed until approved (see notify.collect)
             now = [a for a in res["actions"] if a not in held] if res["outcome"] == "decide" else []
             res["executed"] = [actions.execute(a, dry_run=True) for a in now]
             res["at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            res["summary"] = events.summary(ev)
-            if held and res["outcome"] == "decide":
-                res["needs_human"] = True
+            res["summary"] = events.summary(ev_run)
+            kept = fulltext.persistable(ev_run)   # a full text is kept only while the item waits (full_text.json)
+            res["event"] = {k: (str(v)[:2000] if isinstance(v, str) else v) for k, v in kept.items()
+                            if k in EVENT_KEEP and v not in (None, "")}   # local only: lets `kimeru review` build a labeled example
+            if ev_run.get("full") and res.get("material_event"):
+                res["material_event"] = {**res["material_event"], "text": kept["text"]}
+                res["material_event"].pop("直前のやり取り", None)
+            res["judge"] = _judge_info(backend)
+            res["graph_key"] = key
+            if ev_run.get("full"):
+                # the records that stay hold an excerpt; the whole text waits in full_text.json until the PM decides
+                res_keep = fulltext.scrub(res, ev_run["text"], kept["text"])
+                held = fulltext.scrub(held, ev_run["text"], kept["text"])
+                if res["needs_human"]:
+                    fulltext.save(out, f"{res.get('graph')}:{res.get('event_id')}:{res.get('node')}", ev_run)
+                res = res_keep
             _append(out / "decisions.jsonl", res)
             if res["needs_human"]:
                 _append(out / "queue.jsonl", {**res, "actions": held} if held and res["outcome"] == "decide" else res)
@@ -126,8 +222,23 @@ def _safe_streams():
             pass
 
 
+def _brief_hour():
+    try:
+        return int(config.value("brief_hour"))
+    except ValueError:
+        return 8
+
+
 def main(argv=None):
     _safe_streams()
+    argv_list = list(sys.argv[1:] if argv is None else argv)
+    try:   # settings: argument > environment > config file > default (read once, here)
+        for w in config.apply(argv_list):
+            print(f"kimeru: warning: {w}", file=sys.stderr)
+    except config.ConfigError as e:
+        if not (argv_list[-2:] == ["config", "path"] or argv_list[-1:] == ["path"] and "config" in argv_list):
+            print(f"kimeru: the config file is broken: {e}", file=sys.stderr)
+            return 2
     ap = argparse.ArgumentParser(prog="kimeru")
     ap.add_argument("--graphs", default=str(HERE / "graphs"))
     ap.add_argument("--playbooks", default=str(DEFAULT_PLAYBOOKS))
@@ -142,7 +253,16 @@ def main(argv=None):
     p_w.add_argument("inbox")
     p_w.add_argument("--interval", type=float, default=5)
     p_w.add_argument("--once", action="store_true")
-    sub.add_parser("digest")
+    p_dg = sub.add_parser("digest", help="summary of the decisions; --week for the last 7 days in numbers")
+    p_dg.add_argument("--week", action="store_true", help="the last 7 days: counts, shares, approvals, agreement")
+    p_dg.add_argument("--share", action="store_true", help="with --week: numbers and environment only, safe to paste into an issue")
+    p_rv = sub.add_parser("review", help="say in the terminal whether automatic decisions were right (Teams is not used)")
+    p_rv.add_argument("--limit", type=int, default=20)
+    p_cal = sub.add_parser("calibrate", help="tune the threshold coefficients on your reviewed decisions (the model is not called)")
+    p_cal.add_argument("--min-questions", type=int, default=100)
+    p_cal.add_argument("--allow-wider", action="store_true", help="also propose changes that decide more automatically")
+    p_cal.add_argument("--apply", action="store_true", help="write the proposal to the local thresholds file")
+    p_cal.add_argument("--revert", action="store_true", help="remove the local thresholds file")
     p_n = sub.add_parser("notify", help="post human-queue items to Teams self chat")
     p_n.add_argument("--send", action="store_true", help="actually press Enter (default: paste only)")
     sub.add_parser("approvals", help="read OK/NG/保留 replies from Teams self chat")
@@ -163,16 +283,22 @@ def main(argv=None):
     p_d.add_argument("--once", action="store_true", help="one cycle and exit (for the scheduler)")
     p_d.add_argument("--interval", type=int, default=300, help="seconds between cycles when looping")
     p_d.add_argument("--send", action="store_true", help="actually send self-chat posts (default: paste only)")
-    p_d.add_argument("--ado-org")
-    p_d.add_argument("--ado-project")
-    p_d.add_argument("--subscription")
-    p_d.add_argument("--brief-hour", type=int, default=8)
+    p_d.add_argument("--ado-org", default=config.value("ado_org") or None)
+    p_d.add_argument("--ado-project", default=config.value("ado_project") or None)
+    p_d.add_argument("--subscription", default=config.value("subscription") or None)
+    p_d.add_argument("--brief-hour", type=int, default=_brief_hour())
     p_s = sub.add_parser("schedule", help="register/remove `daily --once --send` every N minutes (Task Scheduler, no admin)")
     p_s.add_argument("action", choices=["install", "remove", "status"])
     p_s.add_argument("--minutes", type=int, default=5)
     p_s.add_argument("--extra", default="", help="extra args for daily, e.g. \"--subscription s\"")
-    p_s.add_argument("--ado-org", default="")
-    p_s.add_argument("--ado-project", default="")
+    p_s.add_argument("--ado-org", default=config.value("ado_org"))
+    p_s.add_argument("--ado-project", default=config.value("ado_project"))
+    p_push = sub.add_parser("push", help="notification routes for the phone (counts and numbers only)")
+    p_push.add_argument("action", choices=["test", "status"])
+    p_c = sub.add_parser("config", help="show / set / unset the settings that are not secret, and where each comes from")
+    p_c.add_argument("action", choices=["show", "set", "unset", "path"])
+    p_c.add_argument("key", nargs="?")
+    p_c.add_argument("value", nargs="?")
     p_r = sub.add_parser("retry", help="put inbox/done/*.error files back into the inbox (after fixing what parked them)")
     p_r.add_argument("--inbox", default="inbox")
     p_p = sub.add_parser("pull", help="poll ADO / Azure Monitor with your az login into an inbox")
@@ -187,7 +313,20 @@ def main(argv=None):
     out = Path(a.out)
 
     if a.cmd == "schedule":
-        return schedule(a)
+        return schedule(a, out)
+
+    if a.cmd == "config":
+        return config_cmd(a)
+
+    if a.cmd == "push":
+        from . import push
+        if a.action == "status":
+            print("\n".join(push.status_lines(out)))
+            return 0
+        res = push.test()
+        for route, r in res.items():
+            print(f"{route}: {r}")
+        return 1 if any(v.startswith("failed") or v.startswith("no route") for v in res.values()) else 0
 
     if a.cmd == "retry":
         from . import daily
@@ -253,7 +392,16 @@ def main(argv=None):
         return 0
 
     if a.cmd == "digest":
+        if a.week or a.share:
+            from . import stats
+            print(stats.week(out, share=a.share))
+            return 0
         return digest(out)
+
+    if a.cmd == "calibrate" and a.revert:
+        from . import calibrate
+        print("removed the local thresholds file" if calibrate.revert() else "there was no local thresholds file")
+        return 0
 
     if a.cmd == "report":
         from . import report
@@ -263,6 +411,14 @@ def main(argv=None):
         return 0
 
     gs = graph.load_dir(a.graphs, pbs)
+    if a.cmd == "review":
+        from . import review
+        review.run(out, gs, pbs, limit=a.limit)
+        return 0
+    if a.cmd == "calibrate":
+        from . import calibrate
+        calibrate.run(out, gs, min_questions=a.min_questions, allow_wider=a.allow_wider, do_apply=a.apply)
+        return 0
     be = _backend(a.backend, a.model)
     if a.cmd == "demo":
         from . import demo, report
@@ -295,7 +451,7 @@ def main(argv=None):
         ado = (a.ado_org, a.ado_project) if a.ado_org and a.ado_project else None
         while True:
             r = daily.cycle(out, a.inbox, gs, be, pbs, process, send=a.send, ado=ado,
-                            subscription=a.subscription, brief_hour=a.brief_hour)
+                            subscription=a.subscription, brief_hour=a.brief_hour, budget=a.interval)
             print(datetime.now().strftime("%H:%M"), json.dumps(r, ensure_ascii=False), flush=True)
             if a.once:   # non-zero when a step failed, so Task Scheduler's "last result" shows it
                 failed = any(isinstance(v, str) and v.startswith("error:") for v in r.values())
@@ -338,15 +494,57 @@ def digest(out):
     dec = sum(r["outcome"] == "decide" for r in rows)
     q = [r for r in rows if r["needs_human"]]
     print(f"判断 {n} 件: 自動決定 {dec} / アドバイス {n - dec}（うち人の確認 {len(q)}）")
+    from . import stats
+    line = stats.perf_line(rows)
+    if line and not any((r.get("judge") or {}).get("name") == "Jev" for r in rows):
+        print(line)
     for r in q:
         print(f"- [{r['event_kind']} #{r['event_id']}] {r['advice']}")
+    return 0
+
+
+def config_cmd(a):
+    if a.action == "path":
+        print(config.path())
+        return 0
+    if a.action == "show":
+        print(f"config file: {config.path()}" + ("" if config.path().exists() else "  (not created yet)"))
+        width = max(len(k) for k in config.SETTINGS)
+        print(f"{'setting'.ljust(width)}  {'value':<40}  source")
+        for k, v, src in config.rows():
+            print(f"{k.ljust(width)}  {(v or '-'):<40}  {src}")
+        print("secrets (environment variables; the value is never shown): "
+              + ", ".join(f"{n}={'set' if on else 'not set'}" for n, on in config.secrets_status().items()))
+        from . import push
+        for line in push.status_lines(Path(a.out)):   # includes why a route is resting
+            print(line)
+        return 0
+    try:
+        if a.action == "set":
+            if not a.key or a.value is None:
+                print("kimeru: config set needs a setting and a value", file=sys.stderr)
+                return 2
+            config.set_value(a.key, a.value)
+            print(f"set {a.key} in {config.path()}")
+            if a.key == "execute":
+                from . import execute
+                for t in execute.unsupported():
+                    print(f"kimeru: '{t}' は未対応です（実行できるのは {', '.join(execute.SUPPORTED)} だけ）。この種類は、これまでどおり記録のみです")
+        else:
+            if not a.key:
+                print("kimeru: config unset needs a setting", file=sys.stderr)
+                return 2
+            print(("unset " if config.unset_value(a.key) else "was not set: ") + a.key)
+    except config.ConfigError as e:
+        print(f"kimeru: {e}", file=sys.stderr)
+        return 2
     return 0
 
 
 TASK = "kimeru-daily"
 
 
-def schedule(a):
+def schedule(a, state_out=None):
     """Windows Task Scheduler entry that runs one daily cycle every N minutes as the
     current user (no admin). The task calls a tiny hidden VBS runner in the data folder,
     so no console window flashes and the /TR command stays short whatever the repo path."""
@@ -354,7 +552,11 @@ def schedule(a):
     if a.action == "remove":
         return subprocess.run(["schtasks", "/Delete", "/TN", TASK, "/F"]).returncode
     if a.action == "status":
-        return subprocess.run(["schtasks", "/Query", "/TN", TASK, "/FO", "LIST"]).returncode
+        rc = subprocess.run(["schtasks", "/Query", "/TN", TASK, "/FO", "LIST"]).returncode
+        from . import daily
+        for line in daily.status_lines(Path(a.out)):
+            print(line)
+        return rc
     exe = Path(sys.executable)
     pyw = exe.with_name("pythonw.exe")
     runner = pyw if pyw.exists() else exe
@@ -363,14 +565,19 @@ def schedule(a):
     backend = f"--backend {a.backend}" if a.backend != "stub" else ""
     ado = getattr(a, "ado_org", ""), getattr(a, "ado_project", "")
     extra = (f'--ado-org "{ado[0]}" --ado-project "{ado[1]}" ' if all(ado) else "") + (a.extra or "")
+    # the settings in effect now are kept in the config file: the scheduled runs read it (a task has no shell profile)
+    saved = config.save_effective({"backend": a.backend if a.backend != "stub" else "",
+                                   "ado_org": ado[0], "ado_project": ado[1]})
     line = (f'cmd /c cd /d "{HERE}" && "{runner}" -m kimeru --out "{out}" {backend} daily --once --send '
             f'--inbox "{out / "inbox"}" {extra}').strip()
     vbs = out / "run-daily.vbs"
     # VBS string literal: double every quote; window style 0 = hidden, wait for completion
-    vbs.write_text('CreateObject("WScript.Shell").Run "' + line.replace('"', '""') + '", 0, True\n', encoding="utf-16")  # WSH reads UTF-8 as ANSI: Japanese paths break
+    # window style 0 = hidden, wait for completion; WScript.Quit passes the exit code on, so the task's "last result" is real
+    vbs.write_text('WScript.Quit CreateObject("WScript.Shell").Run("' + line.replace('"', '""') + '", 0, True)\n', encoding="utf-16")  # WSH reads UTF-8 as ANSI: Japanese paths break
     tr = f'wscript.exe "{vbs}"'
     r = subprocess.run(["schtasks", "/Create", "/TN", TASK, "/SC", "MINUTE", "/MO", str(a.minutes),
                         "/TR", tr, "/F", "/RL", "LIMITED"])
     print(("installed: " if r.returncode == 0 else "failed: ") + tr)
     print("runs: " + line)
+    print(f"settings kept in {config.path()}: {', '.join(saved) or '(none)'}")
     return r.returncode

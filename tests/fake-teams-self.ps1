@@ -5,6 +5,8 @@
 param(
   [Parameter(Mandatory = $true)][string]$Action,
   [string]$Text = '',
+  [string]$ChatId = '',
+  [int]$Count = 5,
   [switch]$Send
 )
 $ErrorActionPreference = 'Stop'
@@ -29,6 +31,19 @@ switch ($Action) {
       elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留)\s*#?(\d+)$') { $c = 'R:{0} {1}' -f $Matches[1].ToUpper(), $Matches[2]; $tl.Add($c) }
     }
     Out-Json @{ ok = $true; posts = @(); replies = @(); timeline = @($tl) }
+  }
+  'chats' {
+    $f = $env:KIMERU_FAKE_CHATS
+    $rows = if ($f -and (Test-Path $f)) { @((Get-Content $f -Raw -Encoding UTF8 | ConvertFrom-Json).chats) } else { @() }
+    Out-Json @{ ok = $true; chats = @($rows | ForEach-Object { @{ id = $_.id; kind = $_.kind; title = $_.title; preview = $_.preview; time = $_.time; unread = [bool]$_.unread; mention = [bool]$_.mention } }) }
+  }
+  'readchat' {
+    $f = $env:KIMERU_FAKE_CHATS
+    $c = if ($f -and (Test-Path $f)) { @((Get-Content $f -Raw -Encoding UTF8 | ConvertFrom-Json).chats) | Where-Object { $_.id -eq $ChatId } | Select-Object -First 1 } else { $null }
+    if (-not $c) { Out-Json @{ ok = $false; error = 'the chat is not in the list on screen; nothing was opened' }; exit 2 }
+    $log = $env:KIMERU_FAKE_OPENLOG
+    if ($log) { Add-Content -Path $log -Value $ChatId -Encoding UTF8 }
+    Out-Json @{ ok = $true; opened = $true; how = 'fake'; messages = @(@($c.messages) | Select-Object -Last $Count | ForEach-Object { @{ text = $_; sender = ''; time = '' } }); returned = $true; hadOriginal = $true }
   }
   default { Out-Json @{ ok = $false; error = "unsupported $Action" }; exit 2 }
 }

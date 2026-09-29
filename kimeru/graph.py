@@ -54,8 +54,12 @@ def validate(g, playbooks=None):
     nodes = g.get("nodes") or {}
     if g.get("start") not in nodes:
         raise GraphError(f"{g.get('name')}: start node missing")
+    from .actions import KNOWN
     for nid, n in nodes.items():
         k = n.get("kind")
+        for a in list(n.get("actions", [])) + list(n.get("per_step", [])) if k in TERMINALS else []:
+            if a.get("type") not in KNOWN:
+                raise GraphError(f"{nid}: unknown action type {a.get('type')!r} (known: {', '.join(sorted(KNOWN))})")
         if k == "judge":
             q = n.get("question") or {}
             if q.get("type") not in ("noul", "choice", "score"):
@@ -71,6 +75,7 @@ def validate(g, playbooks=None):
             for kname in [x for x in n if x.endswith("_conf") or x.startswith("noul_")]:
                 if not isinstance(n[kname], (int, float)) or not 0 <= n[kname] <= 1:
                     raise GraphError(f"{nid}: {kname} must be between 0 and 1")
+            _check_thresholds(nid, n)
             r = n.get("routes") or {}
             if "unsure" not in r:
                 raise GraphError(f"{nid}: judge needs an 'unsure' route")
@@ -112,6 +117,7 @@ def validate(g, playbooks=None):
             r = n.get("routes") or {}
             if set(r) != {"ok", "none", "unsure"}:
                 raise GraphError(f"{nid}: plan needs exactly ok/none/unsure routes")
+            _check_thresholds(nid, n)
             for t in r.values():
                 if t not in nodes:
                     raise GraphError(f"{nid}: route to unknown node {t}")
@@ -209,6 +215,29 @@ def route(node, ans, profile=None):
 _TPL = re.compile(r"\{([a-zA-Z_][\w.]*)\}")
 
 
+def one_line(s, limit=None):
+    """Collapse line breaks and runs of blanks; cut at `title_max` characters (setting) with an ellipsis."""
+    import os
+    try:
+        limit = limit or max(20, int(os.environ.get("KIMERU_TITLE_MAX", "100")))
+    except ValueError:
+        limit = 100
+    s = " ".join(str(s).split())
+    return s if len(s) <= limit else s[:limit - 1] + "…"
+
+
+THRESHOLD_KEYS = ("yes_at", "no_at", "split_at", "need_at", "min_conf", "due_min_conf", "first_min_conf")
+
+
+def _check_thresholds(nid, n):
+    """Every threshold is a number from 0 to 1, and a yes needs a higher probability than a no."""
+    for k in THRESHOLD_KEYS:
+        if k in n and (isinstance(n[k], bool) or not isinstance(n[k], (int, float)) or not 0 <= n[k] <= 1):
+            raise GraphError(f"{nid}: {k} must be a number between 0 and 1")
+    if n.get("yes_at", 0.7) <= n.get("no_at", 0.3):
+        raise GraphError(f"{nid}: yes_at ({n.get('yes_at', 0.7)}) must be greater than no_at ({n.get('no_at', 0.3)})")
+
+
 def render(s, ctx):
     def get(m):
         cur = ctx
@@ -224,12 +253,21 @@ def render(s, ctx):
     return s
 
 
-def run(g, event, backend, state=None, playbooks=None):
-    """Walk the graph for one event. Returns a trace dict ending in an outcome."""
+def run(g, event, backend, state=None, playbooks=None, batch=None):
+    """Walk the graph for one event. Returns a trace dict ending in an outcome.
+
+    batch=True asks every judge question of the graph in ONE call the first time a question is needed (after the rules
+    have had their say: a route decided by rules alone asks nothing). The plan questions are not part of it: they depend on
+    the chosen playbook. The final action is the one a question-by-question walk reaches, provided the backend answers each
+    question independently of the others."""
+    import os
     from .events import state_of
     from . import plan as planner
+    if batch is None:
+        batch = os.environ.get("KIMERU_BATCH", "0") == "1"
     state = state if state is not None else state_of(event)
     nodes, nid, trace, answers, plan = g["nodes"], g["start"], [], {}, None
+    pre = {}
     for _ in range(MAX_STEPS):
         n = nodes[nid]
         if n["kind"] in TERMINALS:
@@ -237,6 +275,9 @@ def run(g, event, backend, state=None, playbooks=None):
             acts = render(n.get("actions", []), ctx)
             for step in (plan or {}).get("steps", []) if n.get("per_step") else []:
                 acts += render(n["per_step"], {**ctx, "step": step})
+            for a in acts:   # a title is one short line, whatever text it was made from (a long chat message, a pasted list)
+                if isinstance(a.get("title"), str):
+                    a["title"] = one_line(a["title"])
             out = {"outcome": n["kind"], "node": nid,
                    "advice": render(n.get("advice"), ctx),
                    "actions": acts,
@@ -260,11 +301,14 @@ def run(g, event, backend, state=None, playbooks=None):
             answers[nid] = ans
             trace.append({"node": nid, "answer": {"playbook": ans["playbook"].get("choice"),
                                                    "confidence": ans["playbook"].get("confidence"),
-                                                   "steps": [s["id"] for s in (plan or {}).get("steps", [])]},
+                                                   "steps": [s["id"] for s in (plan or {}).get("steps", [])],
+                                                   "answers": _plan_answers(ans)},
                           "edge": edge})
             nid = n["routes"][edge]
             continue
-        ans = backend.ask(state, {nid: n["question"]})[nid]
+        if batch and not pre:
+            pre = backend.ask(state, {k: v["question"] for k, v in nodes.items() if v["kind"] == "judge"})
+        ans = pre[nid] if nid in pre else backend.ask(state, {nid: n["question"]})[nid]
         edge, nxt = route(n, ans, getattr(backend, "profile", None))
         guard = guard_hit(n, event, ans, edge)
         if guard:   # the source already rated it severe but the model scored it lower: a person decides
@@ -274,6 +318,12 @@ def run(g, event, backend, state=None, playbooks=None):
         trace.append({"node": nid, "answer": {k: v for k, v in ans.items() if k != "type"}, "edge": edge})
         nid = nxt
     raise GraphError("max steps exceeded")
+
+
+def _plan_answers(ans):
+    """need_* / due_* / first from the plan's second call, kept as small numbers (no text)."""
+    keep = ("noul", "score", "choice", "confidence")
+    return {k: {f: v[f] for f in keep if f in v} for k, v in ans.items() if k != "playbook" and isinstance(v, dict)}
 
 
 def load_dir(d, playbooks=None):

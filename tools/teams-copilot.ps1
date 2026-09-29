@@ -37,7 +37,8 @@ try { if ([KC.W]::SetProcessDpiAwarenessContext([IntPtr](-4))) { $script:DpiMode
 $COPILOT = '^(Microsoft 365 )?Copilot(\s|$|,|（|\()'
 
 function Out-Json($o) { $o | ConvertTo-Json -Compress -Depth 5 }
-$DiagFile = Join-Path $env:LOCALAPPDATA 'kimeru\copilot-diag.txt'
+$StateDir = if ($env:KIMERU_STATE_DIR) { $env:KIMERU_STATE_DIR } else { Join-Path $env:LOCALAPPDATA 'kimeru' }
+$DiagFile = Join-Path $StateDir 'copilot-diag.txt'
 function Write-DiagFile($why) {
   # what the composer area looks like, with no text: type, masked id, name length (a name only when it is a known UI
   # word), focus flag, rectangle. Lets one failed run be judged without a second run.

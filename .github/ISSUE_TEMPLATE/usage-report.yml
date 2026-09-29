@@ -1,0 +1,23 @@
+name: 利用結果の報告
+description: 1 週間使った結果を、数値だけで報告する
+title: "[利用結果] "
+labels: ["report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **実際のメッセージの本文、社名、人名、ID、URL、トークン、パスを書かないでください。** 公開の場所です。
+        下の欄には、`kimeru digest --week --share`（数値と環境だけを出す）などの出力を貼ってください。
+  - type: textarea
+    id: share
+    attributes:
+      label: kimeru digest --week --share の出力
+      description: 数値と環境だけが出ます（本文・件名・人名・ID・パスは出ません）
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: felt
+    attributes:
+      label: 使ってみて（任意。具体的なメッセージの内容は書かない）
+      description: 例「返信の下書きは短くしてから使うことが多かった」「要件の依頼が人の確認に回ることが多かった」

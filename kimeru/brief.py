@@ -109,9 +109,29 @@ def format_post(ranked, total, pending, date=None):
     return "\n".join(lines)
 
 
+def quiet_reads(out, now=None, days=1):
+    """Chats kimeru opened to read in full that turned out to need no action. Opening marks a chat as read in Teams, so the
+    PM would otherwise lose the unread mark and never see them: the brief lists them by chat name."""
+    now = now or datetime.now(timezone.utc)
+    since = now - timedelta(days=days)
+    names = []
+    for rec in _rows(Path(out) / "decisions.jsonl"):
+        at = rec.get("at")
+        if not at or datetime.fromisoformat(at) < since:
+            continue
+        if (rec.get("read_full") or {}).get("state") == "full" and not rec.get("needs_human") and not rec.get("notify"):
+            names.append(((rec.get("event") or {}).get("chat_title") or (rec.get("event") or {}).get("author") or "（名前なし）")[:30])
+    return names
+
+
 def build(out, backend, top=3, now=None, date=None):
     """now: aware datetime for the collection window; date: "YYYY-MM-DD" shown in the header."""
     items = collect(out, now=now)
     ranked = rank(items, backend, top)
     pending = sum(1 for i in items if i["kind"] == "approval")
-    return format_post(ranked, len(items), pending, date), ranked
+    text = format_post(ranked, len(items), pending, date)
+    quiet = quiet_reads(out, now=now)
+    if quiet:
+        text += (f"\n開いて読みましたが、対応は不要でした: {len(quiet)} 件（{'、'.join(quiet[:5])}{' ほか' if len(quiet) > 5 else ''}）"
+                 "。開いたので、Teams では既読になっています")
+    return text, ranked

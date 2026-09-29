@@ -23,6 +23,14 @@ class FakeTeams:
     def chats(self):
         return self.chat_list
 
+    def readchat(self, chat_id, count=5):
+        """Opening a chat to read it in full: the messages set in `chat_messages` (nothing is opened when it is unknown)."""
+        self.opened = getattr(self, "opened", []) + [chat_id]
+        msgs = getattr(self, "chat_messages", {}).get(chat_id)
+        if msgs is None:
+            raise RuntimeError("the chat is not in the list on screen; nothing was opened")
+        return {"ok": True, "opened": True, "returned": True, "messages": [{"text": m, "sender": "", "time": ""} for m in msgs[-count:]]}
+
     def post(self, text, send):
         self.posts.append((text, send))
         if send and text.startswith("[kimeru #"):
@@ -138,20 +146,20 @@ class TestKnownIssues(unittest.TestCase):
             inbox = Path(d) / "inbox"
             inbox.mkdir()
             for i, txt in enumerate(("これは何ですか", "あれは何ですか")):
-                (inbox / f"m{i}.json").write_text(json.dumps({"id": f"m{i}", "chatId": "19:c", "createdDateTime": "2026-09-28T08:00:00Z",
+                (inbox / f"m{i}.json").write_text(json.dumps({"id": f"m{i}", "chatId": f"19:c{i}", "createdDateTime": "2026-09-28T08:00:00Z",
                                                             "from": {"user": {"displayName": "X"}}, "body": {"contentType": "text", "content": txt}}), encoding="utf-8")
             calls = {"n": 0}
             orig = t.post
 
             def flaky(text, send):
                 calls["n"] += 1
-                if calls["n"] == 2:
+                if calls["n"] in (2, 3):   # the post right after judging, and the cycle's own retry of it
                     raise RuntimeError("compose box busy")
                 return orig(text, send)
             t.post = flaky
             r = self.cycle(d, t, toaster=lambda a, b: shown.append((a, b)))
             self.assertTrue(str(r["notify"]).startswith("error"))          # #2 failed after #1 was posted ...
-            self.assertEqual(shown[-1], ("kimeru: 確認待ち 1 件", "#1"))       # ... and #1 is still announced
+            self.assertEqual(shown[-1], ("kimeru: 確認待ち 1 件 / 投稿できていない確認待ち 1 件", "#1"))   # ... #1 is still announced, #2 counted apart
             t.post = orig
             r = self.cycle(d, t, toaster=lambda a, b: shown.append((a, b)), now=datetime(2026, 9, 28, 9, 5))
             self.assertEqual(shown[-1], ("kimeru: 確認待ち 1 件", "#2"))       # only the new one, once

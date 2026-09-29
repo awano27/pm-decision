@@ -24,10 +24,10 @@ class TestSchedule(unittest.TestCase):
             self.assertTrue(tr.startswith('wscript.exe "'))
             self.assertLess(len(tr), 262)                               # schtasks /TR limit
             vbs = (out / "run-daily.vbs").read_text(encoding="utf-16")   # WSH needs UTF-16 for non-ASCII paths
-            self.assertTrue(vbs.startswith('CreateObject("WScript.Shell").Run "'))
-            self.assertTrue(vbs.rstrip().endswith('", 0, True'))         # hidden window, wait
+            self.assertTrue(vbs.startswith('WScript.Quit CreateObject("WScript.Shell").Run("'))
+            self.assertTrue(vbs.rstrip().endswith('", 0, True)'))        # hidden window, wait, pass the exit code on
             self.assertEqual(vbs.count("\n"), 1)                         # one line, no stray breaks
-            inner = vbs[len('CreateObject("WScript.Shell").Run "'):-len('", 0, True\n')]
+            inner = vbs[len('WScript.Quit CreateObject("WScript.Shell").Run("'):-len('", 0, True)\n')]
             self.assertNotIn('"', inner.replace('""', ""))               # every quote doubled for VBS
             self.assertIn("--backend kev daily --once --send", inner)
 

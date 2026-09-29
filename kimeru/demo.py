@@ -28,6 +28,14 @@ class DemoTeams:
     def chats(self):
         return self.chat_list
 
+    def readchat(self, chat_id, count=5):
+        """Opening a chat to read it in full: the messages set in `chat_messages` (nothing is opened when it is unknown)."""
+        self.opened = getattr(self, "opened", []) + [chat_id]
+        msgs = getattr(self, "chat_messages", {}).get(chat_id)
+        if msgs is None:
+            raise RuntimeError("the chat is not in the list on screen; nothing was opened")
+        return {"ok": True, "opened": True, "returned": True, "messages": [{"text": m, "sender": "", "time": ""} for m in msgs[-count:]]}
+
     def post(self, text, send):
         self.posts.append(text)
         if send and text.startswith("[kimeru #"):

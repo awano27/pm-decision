@@ -266,7 +266,7 @@ def teams_events(chats, sec, include_existing=False):
         cid, kind = c.get("id"), c.get("kind")
         if not cid or kind == "self":
             continue
-        sig = hashlib.sha1(f"{c.get('time')}|{c.get('preview')}".encode("utf-8")).hexdigest()[:16]
+        sig = hashlib.sha1(str(c.get("preview") or "").strip().encode("utf-8")).hexdigest()[:16]
         prev = sigs.get(cid)
         sigs[cid] = sig
         if prev == sig or (first and not include_existing):
@@ -277,7 +277,7 @@ def teams_events(chats, sec, include_existing=False):
         if not (kind == "oneOnOne" or c.get("mention")):
             continue
         out.append({"kind": "teams.chat", "source": "teams-ui", "id": f"{cid}#{sig}", "chat_id": cid,
-                    "chat_kind": kind, "author": c.get("title"), "ts": c.get("time"),
+                    "chat_kind": kind, "author": c.get("title"), "chat_title": c.get("title"), "ts": c.get("time"),
                     "mentions_me": bool(c.get("mention")), "unread": bool(c.get("unread")), "text": preview})
     return out
 

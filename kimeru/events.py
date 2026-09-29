@@ -164,4 +164,14 @@ def summary(event, limit=120):
 
 
 def state_of(event):
-    return {k: v for k, v in event.items() if k != "raw"}
+    """What the judge sees: the event without its raw payload and the earlier messages of a thread (they are for the writer);
+    `text` is cut at `judge_text_max` characters (Kev refuses input that is too long, and a long text lowers its confidence)."""
+    from . import config
+    try:
+        cap = max(100, int(config.value("judge_text_max")))
+    except ValueError:
+        cap = 1200
+    s = {k: v for k, v in event.items() if k not in ("raw", "thread", "full")}
+    if isinstance(s.get("text"), str) and len(s["text"]) > cap:
+        s["text"] = s["text"][:cap]
+    return s

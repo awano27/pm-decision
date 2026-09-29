@@ -53,7 +53,7 @@ function Rec($k, $v) { $Results[$k] = $v; Write-Host ("   {0}: {1}" -f $k, $v) -
 function Short($s) { $x = ([string]$s -replace '\s+', ' ').Trim(); if ($x.Length -gt 160) { $x.Substring(0, 160) } else { $x } }
 function DiagText {
   # the content-free layout dump the Copilot script writes when it stops (types, masked ids, name lengths, rectangles)
-  $f = Join-Path $env:LOCALAPPDATA 'kimeru\copilot-diag.txt'
+  $f = Join-Path $(if ($env:KIMERU_STATE_DIR) { $env:KIMERU_STATE_DIR } else { Join-Path $env:LOCALAPPDATA 'kimeru' }) 'copilot-diag.txt'
   if (-not (Test-Path $f)) { return '（診断ファイルなし）' }
   $t = (Get-Content -Raw -Encoding UTF8 $f) -replace '\s*\r?\n', ' / '
   if ($t.Length -gt 2600) { $t = $t.Substring(0, 2600) + '…' }
@@ -256,6 +256,95 @@ if ($py) {
   } else { Rec 'T9' 'SKIP' }
 }
 
+# ---- T23: how long is the preview Teams gives? (read only; lengths only, never text) ----
+if ($uia -and $selfOk -and (Want 'T23')) {
+  Say "T23 チャット一覧のプレビューの長さ（読み取りだけ。文字数の分布だけを記録します）"
+  $c = Self 'chats'
+  if (-not $c.ok) { Rec 'T23' ('NG ' + $c.error) }
+  else {
+    $pv = @($c.chats | Where-Object { $_.preview } | ForEach-Object { [string]$_.preview })
+    if (-not $pv.Count) { Rec 'T23' 'SKIP プレビューのあるチャットがありません' }
+    else {
+      $len = @($pv | ForEach-Object { $_.Length } | Sort-Object)
+      $cut = @($pv | Where-Object { $_ -match '(…|\.\.\.)$' }).Count
+      $nl = @($pv | Where-Object { $_ -match "[\r\n]" }).Count
+      Rec 'T23' ("件数={0} 文字数 最小={1} 中央値={2} 最大={3} 末尾が省略記号={4} 改行あり={5}" -f $pv.Count, $len[0], $len[[int]($len.Count / 2)], $len[-1], $cut, $nl)
+    }
+  }
+}
+
+# ---- T24: open one chat, read it, go back (marks the chat as read; you choose to run it) ----
+if ($uia -and $selfOk -and (Want 'T24')) {
+  Say "T24 チャットを開いて全文を読む（開くと、そのチャットは既読になります）"
+  $c = Self 'chats'
+  $pick = if ($c.ok) { @($c.chats | Where-Object { $_.kind -ne 'self' -and $_.preview -and -not $_.unread } | Select-Object -First 1) } else { @() }
+  if (-not $pick.Count) { Rec 'T24' 'SKIP 既読のチャットが一覧にありません（未読の印を変えないため、既読のものだけを使います）' }
+  elseif (-not (YesNo "   既読のチャット 1 件を開いて、直近のメッセージを読みます（読み取りだけ。終わったら元のチャットへ戻します）。よろしいですか")) { Rec 'T24' 'SKIP' }
+  else {
+    Write-Host "   数秒間マウス・キーボードに触らないでください"
+    $r = Self 'readchat' @('-ChatId', [string]$pick[0].id, '-Count', '5')
+    if (-not $r.ok) { Rec 'T24' ('NG ' + $r.error) }
+    else {
+      $lens = @($r.messages | ForEach-Object { ([string]$_.text).Length })
+      Rec 'T24' ("{0} 読めた件数={1} 文字数=[{2}] 元のチャットへ戻れた={3} 取り方={4}" -f $(if ($lens.Count -gt 0) { 'OK' } else { 'NG 0 件' }), $lens.Count, ($lens -join ','), $r.returned, $r.how)
+    }
+  }
+}
+
+# ---- T22: an approved ADO comment is written exactly once (a test work item you name) ----
+if ($selfOk -and (Want 'T22')) {
+  Say "T22 承認した ADO コメントが 1 回だけ書かれるか（試験用の作業項目）"
+  $wi = Read-Host "   試験用の作業項目の番号（誰の邪魔にもならないもの。Enter でスキップ）"
+  if (-not $wi -or $wi -notmatch '^\d+$') { Rec 'T22' 'SKIP' }
+  elseif (-not (YesNo "   作業項目 $wi に、承認のあと、コメントを 1 件書きます（az のサインインが要ります）。よろしいですか")) { Rec 'T22' 'SKIP' }
+  else {
+    $out22 = Join-Path $tmp 'out22'
+    New-Item -ItemType Directory -Force $out22 | Out-Null
+    $base = Get-Random -Minimum 100 -Maximum 899
+    [IO.File]::WriteAllText((Join-Path $out22 'approvals.json'), "{`"next`": $base, `"items`": {}}")
+    $rec = [ordered]@{ graph = 'company-check'; event_kind = 'ado.workitem.created'; event_id = "t22-$wi"; node = 'request_info'; outcome = 'decide'; needs_human = $true; advice = ''
+      actions = @(@{ type = 'ado.comment'; id = $wi; text = 'kimeru の試験です。このコメントは、承認のあとに 1 回だけ書かれます。' }) }
+    [IO.File]::WriteAllText((Join-Path $out22 'queue.jsonl'), (($rec | ConvertTo-Json -Compress -Depth 8) + "`n"), (New-Object Text.UTF8Encoding $false))
+    $env:KIMERU_EXECUTE = 'ado.comment'
+    Write-Host "   数秒間マウス・キーボードに触らないでください"
+    $nt = Py @('-m', 'kimeru', '--out', $out22, 'notify', '--send')
+    if ($nt -notmatch 'posted: \[') { Rec 'T22' ('NG 投稿できません ' + (Fails $nt)) }
+    else {
+      Write-Host ("   Teams の自分とのチャットで「OK {0}」と返信してください（最大 {1} 秒）" -f $base, $WaitSec) -ForegroundColor Green
+      $deadline = (Get-Date).AddSeconds($WaitSec); $ex = Join-Path $out22 'executions.jsonl'
+      while ((Get-Date) -lt $deadline -and -not (Test-Path $ex)) { Start-Sleep -Seconds 10; [void](Py @('-m', 'kimeru', '--out', $out22, 'approvals')) }
+      # two more reads: the same reply is still on the screen, and it must not write again
+      [void](Py @('-m', 'kimeru', '--out', $out22, 'approvals')); [void](Py @('-m', 'kimeru', '--out', $out22, 'approvals'))
+      $rows = if (Test-Path $ex) { @(Get-Content -Encoding UTF8 $ex | ForEach-Object { $_ | ConvertFrom-Json }) } else { @() }
+      $done = @($rows | Where-Object { $_.state -eq 'done' }).Count
+      $failed = @($rows | Where-Object { $_.state -eq 'failed' } | ForEach-Object { $_.error })
+      if ($done -eq 1) {
+        $seen = YesNo "   ADO の作業項目 $wi に、kimeru のコメントが **1 件だけ** ありますか"
+        Rec 'T22' $(if ($seen) { 'OK 書かれた回数=1、ADO でも 1 件' } else { 'NG kimeru は 1 回書いたと記録したが、ADO で 1 件と確認できない' })
+      } elseif ($failed.Count) { Rec 'T22' ('NG 書けませんでした: ' + (Short ($failed -join ' / '))) }
+      else { Rec 'T22' ("NG 書かれた回数=$done（返信を待つ時間が足りなかった可能性）") }
+    }
+    Remove-Item Env:\KIMERU_EXECUTE -ErrorAction SilentlyContinue
+  }
+}
+
+# ---- T21: the phone notification routes (counts only; you say whether it reached the iPhone) ----
+if (Want 'T21') {
+  Say "T21 iPhone への通知の経路（件数だけの試験の 1 行を送ります）"
+  if (-not $env:KIMERU_PUSH) { Rec 'T21' 'SKIP 経路が未設定（docs/push-notification.md。KIMERU_PUSH と URL の環境変数）' }
+  elseif (-not (YesNo "   設定した経路に、固定の試験の 1 行（件数も本文もありません）を送ります。よろしいですか")) { Rec 'T21' 'SKIP' }
+  else {
+    $o = Py @('-m', 'kimeru', 'push', 'test')
+    $sent = @(($o -split "`n") | Where-Object { $_ -match ': sent' }).Count
+    $bad = @(($o -split "`n") | Where-Object { $_ -match ': failed' } | ForEach-Object { ($_ -replace '\s+$', '') })
+    if ($sent -eq 0) { Rec 'T21' ('NG ' + (Short ($bad -join ' / '))) }
+    else {
+      $seen = YesNo "   iPhone（や指定した先）に「kimeru: 試験の通知です」が届きましたか"
+      Rec 'T21' ("{0} 送れた経路={1} 失敗={2}" -f $(if ($seen) { 'OK' } else { 'NG 届かない' }), $sent, $(if ($bad.Count) { (Short ($bad -join ' / ')) } else { 'なし' }))
+    }
+  }
+}
+
 # ---- T20: "聞き返し N" and "下書き N <文面>" are read from the real Teams chat (fictional items) ----
 if ($selfOk -and (Want 'T20')) {
   Say "T20 聞き返し・下書き（M365 Copilot の文面の貼り戻し）を Teams から読めるか"
@@ -446,7 +535,7 @@ if ($uia -and $py -and (Want 'T18')) {
   else {
     # a check run is a deliberate attempt: ignore (and reset) the rest the automatic route took after an earlier failure
     $env:KIMERU_M365_NO_REST = '1'
-    Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:LOCALAPPDATA 'kimeru\m365-auto.json')
+    Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $(if ($env:KIMERU_STATE_DIR) { $env:KIMERU_STATE_DIR } else { Join-Path $env:LOCALAPPDATA 'kimeru' }) 'm365-auto.json')
     # nothing is sent until a paste test (paste a short text into the Copilot box, read it back, remove it) has passed
     $pt = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'teams-copilot.ps1') -Action pastetest 2>&1 | Out-String
     $pj = $null; try { $pj = $pt.Trim().TrimStart([char]0xFEFF) | ConvertFrom-Json } catch {}

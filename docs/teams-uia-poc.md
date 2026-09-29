@@ -28,3 +28,14 @@ Goal: ingest Teams chats with zero admin consent, no Graph API, no Power Automat
 - Whether a minimized window reflects *new* messages live (tested content was unchanged between states).
 - Work-account tenant UI vs. this account; localization differences in node names.
 - Robustness across Teams UI updates.
+
+## 他のチャットを開いて読む（`teams-self.ps1 -Action readchat`）
+
+既定では使いません（設定 `read_full=1` のときだけ、`kimeru` が必要な件に限って呼びます）。
+
+- `-ChatId <id> -Count 5`: 一覧の該当の項目を選び（選択 → 実行 → クリックの順）、**画面の題名（`| <題名> |`）と、一覧の選択の状態の両方** で開いたことを確かめてから、右側の領域の直近のメッセージの文字を読みます。確かめられないときは、何も読まずに止まり（固定のエラー文を返す）、元のチャットへ戻します
+- 読み取りだけです。入力欄、貼り付け、送信の処理は、この Action に入っていません（`tests/test_fulltext.py` が、スクリプトの文面で確かめています）
+- 排他（ロック）と、キーボード・マウスが止まるまでの待ちは、他の画面操作と同じです
+- 読み終えたら、元に開いていたチャットへ戻し、`returned` に結果を入れます。元のチャットが無かった（Copilot の画面などだった）ときは戻せません
+- メッセージの取り方（`how`）は、まず AutomationId（`message-body-` など）、なければ右側の領域の名前つきの要素を位置順に読みます。Teams の版で変わるので、実機の結果（`T24`）で確かめます
+- **開いたチャットは、Teams で既読になります**

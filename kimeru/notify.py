@@ -17,7 +17,7 @@ from . import actions, fsutil
 from . import writer as writer_mod
 
 HERE = Path(__file__).resolve().parent.parent
-REPLY = re.compile(r"^(OK|NG|保留|聞き返し)\s*#?(\d+)\s*[.。!！]*$", re.IGNORECASE)
+REPLY = re.compile(r"^(OK|NG|保留|聞き返し|再実行)\s*#?(\d+)\s*[.。!！]*$", re.IGNORECASE)
 REDRAFT = re.compile(r"^修正\s*#?(\d+)\s*[:：]?\s*(\S.*)$")
 PASTE = re.compile(r"^下書き\s*#?(\d+)\s*[:：]?\s*(\S.*)$")   # the PM brings back what Microsoft 365 Copilot wrote
 MAX_PASTE = 1200
@@ -39,7 +39,7 @@ def parse_paste(line):
     return (m.group(1), m.group(2).strip()) if m else None
 
 
-STATUS = {"OK": "approved", "NG": "rejected", "保留": "held", "聞き返し": "ask_back"}   # 聞き返し: repost, not a decision
+STATUS = {"OK": "approved", "NG": "rejected", "保留": "held", "聞き返し": "ask_back", "再実行": "redo"}   # 聞き返し / 再実行: not decisions
 
 
 class PowerShellBridge:
@@ -66,19 +66,38 @@ class PowerShellBridge:
     def chats(self):
         return self._run("-Action", "chats").get("chats", [])
 
+    def readchat(self, chat_id, count=5):
+        """Open one chat, read its last messages (read only) and go back to the chat that was open. Slow (a few seconds)."""
+        return self._run("-Action", "readchat", "-ChatId", chat_id, "-Count", str(count))
 
-def format_post(n, rec):
+
+def format_post(n, rec, full=None):
+    """`full` is the full text kept while the item waits (fulltext.load): the post then shows it and the earlier messages."""
     ev = rec.get("event_kind", "")
     lines = [f"[kimeru #{n}] 判断が必要（{rec.get('graph')}）", f"{ev} #{rec.get('event_id')}"]
+    rf = rec.get("read_full") or {}
+    if rf.get("state") == "preview_only":
+        lines.append("⚠ プレビューだけで判断しました（" + str(rf.get("why", ""))[:100] + "）。元のメッセージを Teams で確認してください")
+    elif rf.get("state") == "full" and rf.get("note"):
+        lines.append("⚠ " + rf["note"])
     if rec.get("advice"):
         lines.append(f"内容: {rec['advice']}")
     if rec.get("actions"):
         lines.append("承認で実行: " + ", ".join(a.get("type", "?") for a in rec["actions"]))
     src = (rec.get("material_event") or {})
+    if full and not (src and any(a.get("drafted_by") for a in rec.get("actions", []))):
+        lines.append("元（全文）: " + (f"{(rec.get('event') or {}).get('author')}: " if (rec.get("event") or {}).get("author") else "") + str(full.get("text", ""))[:600])
+        for t in (full.get("thread") or [])[-3:]:
+            lines.append("　直前のやり取り: " + str(t)[:120])
     if src and any(a.get("drafted_by") for a in rec.get("actions", [])):
         what = src.get("text") or src.get("item") or src.get("title") or src.get("rule") or ""
         who = src.get("author")
-        lines.append("元: " + (f"{who}: " if who else "") + str(what)[:200])
+        shown = (full or {}).get("text") or what
+        lines.append("元" + ("（全文）" if full else "") + ": " + (f"{who}: " if who else "") + str(shown)[:(600 if full else 200)])
+        for t in ((full or {}).get("thread") or [])[-3:]:
+            lines.append("　直前のやり取り: " + str(t)[:120])
+    for f in (rec.get("followups") or [])[-3:]:
+        lines.append("続きのメッセージ: " + str(f.get("text", ""))[:120])
     memo = rec.get("memo") or {}
     if memo:
         lines.append("Copilot のメモ:")
@@ -127,6 +146,13 @@ def format_post(n, rec):
         for a in hidden:
             lines.append("・" + str(a.get("title") or "")[:50] +
                          ("　⚠ 元の材料に無い日付・数値: " + ", ".join(a["unverified"]) if a.get("unverified") else ""))
+    from . import execute
+    for a in rec.get("actions", []):
+        if execute.is_gated(a):   # a switched-on kind: the PM sees the exact text that will be written
+            if not a.get("drafted_by"):
+                lines.append(f"{writer_mod.LABEL.get(a['type'], a['type'])}（定型文）:\n{a.get(writer_mod.FIELD.get(a['type'], 'text'), '')}")
+            lines.append(f"→ OK {n} で、作業項目 {a.get('id')} に、上の文面のとおり" + ("（末尾に kimeru の 1 行を付けて）" if execute.signature_on() else "")
+                         + "コメントを書きます")
     ask = any(a.get("ask_back") for a in drafts)
     lines.append(f"返信: OK {n} / NG {n} / 保留 {n}" + (f" / 修正 {n} <直してほしい点>" if drafts else "")
                  + (f" / 下書き {n} <Copilot の文面>" if rec.get("copilot_request") else "")
@@ -176,15 +202,28 @@ def mark_toasted(out, nums, notice_keys):
     ap.save()
 
 
-def toast_text(out, posted, notices):
+def unposted_count(out):
+    """Pending items that could not be posted to the self chat (counted apart from the posted ones)."""
+    ap = Approvals(out)
+    return sum(1 for it in ap.data["items"].values() if not it["posted"] and it["status"] == "pending")
+
+
+def toast_enabled():
+    import os
+    return os.environ.get("KIMERU_TOAST", "1") != "0"
+
+
+def toast_text(out, posted, notices, unposted=0):
     """Title and body for the PC notification. Counts and numbers only; KIMERU_TOAST=detail adds the
-    first item's one-line summary."""
+    first item's one-line summary (on this PC only: the routes that leave it never carry a summary)."""
     import os
     parts = []
     if posted:
         parts.append(f"確認待ち {len(posted)} 件")
     if notices:
         parts.append(f"自動決定の通知 {notices} 件")
+    if unposted:
+        parts.append(f"投稿できていない確認待ち {unposted} 件")
     body = ("#" + ", #".join(str(n) for n in posted[:5]) if posted else "") or "Teams の自分とのチャットを確認してください"
     if os.environ.get("KIMERU_TOAST") == "detail" and posted:
         rec = (Approvals(out).data["items"].get(str(posted[0])) or {}).get("record", {})
@@ -260,13 +299,15 @@ def notify(out, bridge, send=False):
     for rec in rows:
         if not ap.known(_key(rec)):
             ap.add(_key(rec), rec)
+    ap.save()   # an item that cannot be posted now must still exist (and be counted as waiting) after a failed post
     posted = []
     for n, it in ap.data["items"].items():
         req = it["record"].get("copilot_request")
         if it["posted"] and (not req or it.get("request_posted")):
             continue
         if not it["posted"]:
-            r = bridge.post(format_post(n, it["record"]), send) or {}
+            from . import fulltext
+            r = bridge.post(format_post(n, it["record"], fulltext.load(out, it["key"])), send) or {}
             if send and (r.get("typed") is False or r.get("sent") is False):
                 raise RuntimeError(f"#{n} was not posted as planned: {r}")   # stays unposted; retried next cycle
             if send:
@@ -313,7 +354,7 @@ STALE_ACTION_KEYS = ("drafted_by", "held_for", "writer_warning", "variant", "ask
 STALE_RECORD_KEYS = ("writer_error", "copilot_request", "copilot_sources", "memo", "redraft_note")
 
 
-def _redraft(it, instruction, writer):
+def _redraft(it, instruction, writer, out=None):
     """Write the item again with the PM's instruction. Returns the change to log; the item is posted
     again under the same number either way (a failure says so and keeps the previous draft)."""
     rec = it["record"]
@@ -327,7 +368,14 @@ def _redraft(it, instruction, writer):
             a.pop(k, None)
     for k in STALE_RECORD_KEYS:
         rec.pop(k, None)
-    drafted = writer_mod.apply(rec, rec["material_event"], writer, instruction)
+    material = dict(rec["material_event"])
+    from . import fulltext
+    full = fulltext.load(out, it["key"]) if out is not None else None
+    if full:   # the writer works from the whole text while the item waits
+        material["text"] = full["text"]
+        if full.get("thread"):
+            material["thread"] = full["thread"]
+    drafted = writer_mod.apply(rec, material, writer, instruction)
     used = [a for a in drafted if a.get("drafted_by")]
     if not used:
         why = rec.get("writer_error") or "使える下書きが返りませんでした"
@@ -371,12 +419,30 @@ def _apply_paste(it, text):
     return {"status": "pasted"}
 
 
+def _after_approval(out, ap, num, it, bridge):
+    """What an approval sets in motion beyond the plan record: the switched-on kinds are carried out (execute.py), and the
+    text of an approved reply comes back alone, ready to copy (it is never sent to the other person)."""
+    import os
+    from . import execute
+    post = lambda t: bridge.post(t, True)
+    ap.save()   # the approval itself is saved before anything is attempted
+    real = execute.run_approved(out, ap, num, it, post)
+    if os.environ.get("KIMERU_SEND_READY", "1") != "0":
+        execute.send_ready_posts(num, it, post, link=os.environ.get("KIMERU_OPEN_CHAT_LINK", "0") == "1")
+    return real
+
+
 def collect(out, bridge, writer=None):
     """Read replies from the self chat and apply them. Returns applied changes."""
     ap = Approvals(out)
     # nothing is waiting for an answer: do not touch Teams at all (reading switches it to the self chat)
-    if not any(it["posted"] and it["status"] in ("pending", "held") for it in ap.data["items"].values()):
+    def waiting(it):   # waiting for an answer, or approved but with an execution that failed / was left unsure (`再実行`)
+        return it["posted"] and (it["status"] in ("pending", "held") or (
+            it["status"] == "approved" and any(v.get("state") in ("failed", "running") for v in (it.get("exec") or {}).values())))
+    if not any(waiting(it) for it in ap.data["items"].values()):
         return []
+    from . import execute
+    execute.report_unknown(ap, lambda text: bridge.post(text, True))
     writer = writer if writer is not None else writer_mod.get_writer()
     changes = []
     for line in fresh_replies(bridge.read()):
@@ -390,13 +456,19 @@ def collect(out, bridge, writer=None):
         if rd:
             it = ap.data["items"].get(rd[0])
             if it and it["posted"] and it["status"] in ("pending", "held"):
-                changes.append({"id": int(rd[0]), **_redraft(it, rd[1], writer)})
+                changes.append({"id": int(rd[0]), **_redraft(it, rd[1], writer, out)})
             continue
         r = parse_reply(line)
         if not r:
             continue
         word, num = r
         it = ap.data["items"].get(num)
+        if word == "再実行":   # runs again what failed or was left unsure, on an item that is already approved
+            from . import execute
+            if it and it["status"] == "approved" and it.get("exec") and any(v.get("state") in ("failed", "running") for v in it["exec"].values()):
+                changes.append({"id": int(num), "status": "redo",
+                                "real": execute.redo(out, ap, int(num), it, lambda t: bridge.post(t, True))})
+            continue
         if not it or not it["posted"] or it["status"] not in ("pending", "held"):
             continue
         if word == "聞き返し":
@@ -415,13 +487,21 @@ def collect(out, bridge, writer=None):
         if new == it["status"]:
             continue
         it["status"] = new
+        if new in ("approved", "rejected"):   # the full text is kept only while the item waits
+            from . import fulltext
+            fulltext.drop(out, it["key"])
         ch = {"id": int(num), "status": new}
         if new == "approved":
             ch["executed"] = [actions.execute(a, dry_run=True) for a in it["record"].get("actions", [])]
+            ch["real"] = _after_approval(out, ap, int(num), it, bridge)
         changes.append(ch)
     ap.save()
     if changes:
+        from datetime import datetime, timezone
+        at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         with (Path(out) / "approvals.log.jsonl").open("a", encoding="utf-8") as f:
             for ch in changes:
-                f.write(json.dumps(ch, ensure_ascii=False) + "\n")
+                # when, and which decision (the same key as the decision record): old lines without them stay readable
+                item = ap.data["items"].get(str(ch.get("id"))) or {}
+                f.write(json.dumps({"at": at, "key": item.get("key"), **ch}, ensure_ascii=False) + "\n")
     return changes

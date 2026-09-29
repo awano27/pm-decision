@@ -85,16 +85,27 @@ def build(node, state, backend, playbooks):
 
     pb = playbooks[a1["choice"]]
     steps = pb["steps"]
+    import os
+    lean = os.environ.get("KIMERU_PLAN_LEAN", "1") != "0"
+
+    def due_q(s):
+        return {"type": "score", "criteria": DUE_LEVELS, "hints": DUE_HINTS,
+                "instructions": f"By when should the project manager finish this step: {s['desc']}"}
+
     qs = {}
     for s in steps:
         if s.get("check"):
             qs[f"need_{s['id']}"] = {"type": "noul", "instructions": s["check"], "hints": s.get("hints", [])}
-        qs[f"due_{s['id']}"] = {"type": "score", "criteria": DUE_LEVELS, "hints": DUE_HINTS,
-                                "instructions": f"By when should the project manager finish this step: {s['desc']}"}
+        if not (lean and s.get("check")):   # a step that may be dropped is asked about its deadline only if it is kept
+            qs[f"due_{s['id']}"] = due_q(s)
     qs["first"] = {"type": "choice", "instructions": "Which step should the project manager do first?",
                    "criteria": {s["id"]: s["desc"] for s in steps},
                    "hints": {s["id"]: s.get("hints", []) for s in steps}}
     a2 = backend.ask(state, qs)
+    if lean:
+        kept = [s for s in steps if s.get("check") and a2[f"need_{s['id']}"]["noul"] >= node.get("need_at", 0.5)]
+        if kept:
+            a2.update(backend.ask(state, {f"due_{s['id']}": due_q(s) for s in kept}))
     answers.update(a2)
 
     need_at = node.get("need_at", 0.5)

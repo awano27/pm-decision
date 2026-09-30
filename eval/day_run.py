@@ -56,6 +56,12 @@ class FakeTeams:
         self.timeline.append("R:" + line)
 
 
+def as_list(v):
+    """A step's entry in a cycle report that should be a list (notify: numbers, approvals: "#N:status"). A step that was skipped for a
+    busy lock still has its list (see daily._busy: the skipped steps are named in report["busy"]); anything else reads as nothing."""
+    return v if isinstance(v, list) else []
+
+
 def payloads(n):
     """n raw payloads per kind, built from the fixtures (the normalizers accept these shapes)."""
     fx = [json.loads(l) for l in (ROOT / "eval" / "fixtures.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
@@ -127,16 +133,16 @@ def main():
         t.reply(f"修正 {n_fix} もっと短く、敬語は丁寧に")
         r2 = daily.cycle(out, inbox, graphs, be, pbs, proc, bridge=t, send=True, now=datetime(2026, 10, 1, 9, 5))
         print(f"cycle 2 (修正 {n_fix}): approvals {r2.get('approvals')}")
-        check("修正 redrafts", f"#{n_fix}:redrafted" in (r2.get("approvals") or []), str(r2.get("approvals")))
+        check("修正 redrafts", f"#{n_fix}:redrafted" in as_list(r2.get("approvals")), str(r2.get("approvals")))
         t.reply(f"OK {n_ok}")
         t.reply(f"NG {n_ng}")
         r3 = daily.cycle(out, inbox, graphs, be, pbs, proc, bridge=t, send=True, now=datetime(2026, 10, 1, 9, 10))
         print(f"cycle 3 (OK {n_ok}, NG {n_ng}): reposted {r3.get('notify')}, approvals {r3.get('approvals')}")
-        check("the redraft is reposted under the same number", int(n_fix) in (r3.get("notify") or []), str(r3.get("notify")))
+        check("the redraft is reposted under the same number", int(n_fix) in as_list(r3.get("notify")), str(r3.get("notify")))
         redraft = [p for p in t.posts if p.startswith(f"[kimeru #{n_fix}]")]
         if len(redraft) >= 2:
             print("  redraft of #" + n_fix + ":\n  | " + redraft[-1].replace("\n", "\n  | ")[:600])
-        check("OK and NG applied", f"#{n_ok}:approved" in (r3.get("approvals") or []) and f"#{n_ng}:rejected" in (r3.get("approvals") or []))
+        check("OK and NG applied", f"#{n_ok}:approved" in as_list(r3.get("approvals")) and f"#{n_ng}:rejected" in as_list(r3.get("approvals")))
         log = [json.loads(l) for l in (out / "approvals.log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
         ran = [c for c in log if c.get("status") == "approved"]
         check("only the approved item ran", len(ran) == 1 and all(c["id"] == int(n_ok) for c in ran))

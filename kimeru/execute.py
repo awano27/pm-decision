@@ -8,6 +8,8 @@ implemented here. The rules:
     (`freeze`, saved as exec_text) and a later change of the settings does not change it. An item posted before execution was
     switched on has no such text: an OK does not write, the post is shown again with the text and the target;
   - only the daily and approvals paths execute (`real=True`); the demo, eval scripts, `run` and `watch` only record;
+  - the comment is sent as plain text (`<` and `&` escaped); the check for the same text compares what ADO stored, whether it wrapped
+    the comment in tags or kept the escapes, with the approved text
   - each action has an idempotency key and a state saved BEFORE the call ("running") and after it: "done" (with the external id),
     "failed" (sure that nothing was written) or "unknown" (a timeout, a dropped connection, 502-504, or a failure to record after
     the write: it may have been written). "running"/"unknown" is never executed again on its own: the PM checks ADO, then answers
@@ -15,7 +17,8 @@ implemented here. The rules:
   - a failure never cancels the approval; running it again is the PM's command, and one `再実行 N` reply acts once;
   - the target (organization / project) recorded when the work item was pulled must equal the settings, or nothing is written;
     an item with no recorded origin is shown as "not written" in the post, and OK records the plan only (state "skipped": not a failure);
-  - a lock file lets one approvals run at a time (notify.collect); the check for the same text reads every page of comments;
+  - a lock file lets one run at a time change approvals.json (collect, notify, the merge of a follow-up message, purge); its owner is
+    known by its process id: a lock of a live process is never taken over, that of a dead one is; the check for the same text reads every page of comments;
     when that read fails on a redo, an unknown result stays unknown (`済 N` still works);
   - the result goes back to the self chat through an outbox (kept until it is really posted), and every attempt, `running`
     included, is written to executions.jsonl;
@@ -34,7 +37,7 @@ import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import config, pull
+from . import config, fsutil, pull
 
 SUPPORTED = ("ado.comment",)
 SIGNATURE = "\n\n（kimeru が下書きし、本人が承認した文面です）"
@@ -162,11 +165,33 @@ def ambiguous(e):
 _TAG = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?/?>")
 
 
+def _fold(text):
+    return " ".join(str(text or "").split())
+
+
 def _plain(text):
-    """The same normalization for both sides of the comparison, in this order: tags removed, HTML escapes resolved (ADO keeps a
-    `<` as `&lt;`), white space folded. Removing the tags first keeps `<div>件数 &lt; 3</div>` equal to `件数 < 3`, and a text
-    that only had an escaped `<` never loses what stands between it and a later `>`."""
-    return " ".join(html.unescape(_TAG.sub(" ", str(text or ""))).split())
+    """The form of a comment AS ADO STORES IT, for the comparison: tags removed (ADO may wrap the comment in `<div>`…), HTML escapes
+    resolved (`&lt;` is a `<`), white space folded. The text we send is escaped first (see `_escaped`), so every `<` of the
+    approved text is an escape here and is never taken for a tag: `<b>` and `List<String>` keep what they say, and two sentences that
+    differ between a `<` and a later `>` stay different."""
+    return _fold(html.unescape(_TAG.sub(" ", str(text or ""))))
+
+
+def _plain_approved(text):
+    """The approved text for the same comparison: escapes resolved and white space folded, and no tag removed (a `<b>` the PM
+    approved is text)."""
+    return _fold(html.unescape(str(text or "")))
+
+
+def _wanted(text):
+    """The forms of the approved text that a stored comment may have after _plain: as typed, or with its escapes resolved."""
+    return {_fold(text), _plain_approved(text)}
+
+
+def _escaped(text):
+    """What is sent to ADO: the comment is shown as plain text, so a `<` and a `&` are escaped (a `<b>` must not become bold text,
+    or vanish as a tag). Line breaks are sent as they are."""
+    return html.escape(str(text), quote=False)
 
 
 MAX_PAGES = 100
@@ -174,21 +199,47 @@ MAX_PAGES = 100
 
 def _existing_comment(base, wid, text, http, token):
     """The id of a comment on the work item that already has this text (read only, every page), or None."""
-    want = _plain(text)
+    want = _wanted(text)
     cont, seen = None, set()
     for _ in range(MAX_PAGES):
+        fsutil.heartbeat()
         url = f"{base}/{wid}/comments?api-version=7.1-preview.4&$top=200"
         if cont:
             url += "&continuationToken=" + urllib.parse.quote(str(cont), safe="")
         res = http("GET", url, token, None) or {}
         for c in res.get("comments", res.get("value", [])) or []:
-            if _plain(c.get("text")) == want:
+            if _plain(c.get("text")) in want:
                 return c.get("id") or "?"
         cont = res.get("continuationToken")
         if not cont or cont in seen:
             return None
         seen.add(cont)
     raise RuntimeError("too many pages of comments")
+
+
+def inspect_comment(wid, marker, text, http=None, token_fn=None):
+    """For the check on a real PC (tools/check.ps1 T22): how ADO stored the comment that was written (read only, every page).
+    The comment is found by `marker`, a phrase of the text. Returns counts and booleans only, never text:
+    {"found": n comments with the marker, "wrapped_in_tags": ADO put tags around it, "escaped": it kept the `<` as `&lt;`,
+    "same_text_check": the check for the same text (_existing_comment) finds it}."""
+    http = http or pull.http_json
+    org, project = current_target()
+    token = (token_fn or _token)(org)
+    base = f"https://dev.azure.com/{urllib.parse.quote(org)}/{urllib.parse.quote(project)}/_apis/wit/workItems"
+    stored, cont, seen = [], None, set()
+    for _ in range(MAX_PAGES):
+        url = f"{base}/{wid}/comments?api-version=7.1-preview.4&$top=200"
+        if cont:
+            url += "&continuationToken=" + urllib.parse.quote(str(cont), safe="")
+        res = http("GET", url, token, None) or {}
+        stored += [str(c.get("text") or "") for c in (res.get("comments", res.get("value", [])) or []) if marker in str(c.get("text") or "")]
+        cont = res.get("continuationToken")
+        if not cont or cont in seen:
+            break
+        seen.add(cont)
+    return {"found": len(stored), "wrapped_in_tags": any(_TAG.search(t) for t in stored),
+            "escaped": any("&lt;" in t or "&amp;" in t for t in stored),
+            "same_text_check": any(_plain(t) in _wanted(text) for t in stored)}
 
 
 class _CheckFailed(_Refused):
@@ -228,7 +279,8 @@ def _write_ado_comment(action, item, http, token_fn, check_existing=False):
         if found:
             return {"comment_id": found, "existing": True, "org": org, "project": project}
     url = f"{base}/{wid}/comments?api-version=7.1-preview.4"
-    res = http("POST", url, token, {"text": text}, retries=1)   # one try: a retry could write it twice
+    fsutil.heartbeat()
+    res = http("POST", url, token, {"text": _escaped(text)}, retries=1)   # one try: a retry could write it twice
     return {"comment_id": (res or {}).get("id"), "org": org, "project": project}
 
 

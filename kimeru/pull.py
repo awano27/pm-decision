@@ -100,6 +100,7 @@ def http_json(method, url, token, body=None, retries=3):
     data = json.dumps(body).encode("utf-8") if body is not None else None
     delay = 1.0
     for attempt in range(retries):
+        fsutil.heartbeat()   # a retry, a long Retry-After or a slow answer must not make the lock of the caller look unused
         req = urllib.request.Request(url, data=data, method=method, headers={
             "Authorization": "Bearer " + token, "Content-Type": "application/json", "User-Agent": "kimeru/0.1",
             "X-TFS-FedAuthRedirect": "Suppress"})   # ADO: 401 instead of 203 + a sign-in page
@@ -113,6 +114,7 @@ def http_json(method, url, token, body=None, retries=3):
                                     "check the organization / project name and `az login`") from None
         except urllib.error.HTTPError as e:
             if e.code in (429, 500, 502, 503, 504) and attempt < retries - 1:
+                fsutil.heartbeat()
                 time.sleep(float(e.headers.get("Retry-After") or delay))
                 delay *= 2
                 continue

@@ -33,7 +33,7 @@ import subprocess
 import tempfile
 import time
 
-from . import config
+from . import config, fsutil
 
 SYSTEM = (
     "あなたはプロジェクトマネージャーの下書き係です。与えられた材料だけを使い、"
@@ -765,10 +765,13 @@ def apply(res, event, writer, instruction=None):
             a["held_for"] = "fallback"
         return [a for _, a in todo]
 
+    fsutil.heartbeat()   # a call to the writer takes minutes: the lock of the step that called it is marked in use before and after
     try:
         d = writer.draft(res, event, instruction)
     except Exception as e:  # writer is optional: any failure keeps the template
         return fallback(f"{type(e).__name__}: {e}")
+    finally:
+        fsutil.heartbeat()
     if not d:
         return fallback("no JSON in writer output")
     if not any(has_content(d.get(k)) for k, _ in todo):

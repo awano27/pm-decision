@@ -66,6 +66,9 @@ def status_lines(out):
                      f"files left for the next cycle (time limit): {rep.get('left_for_next_cycle', 0)}")
     else:
         lines.append("last cycle: none recorded yet")
+    if last and (last.get("report") or {}).get("busy"):
+        lines.append("steps skipped in the last cycle because another run held approvals.lock (they are tried again next cycle): "
+                     + ", ".join(sorted(last["report"]["busy"])))
     data = fsutil.read_json(out / "approvals.json", {"items": {}})
     pending = sum(1 for it in data.get("items", {}).values() if it.get("posted") and it.get("status") in ("pending", "held"))
     lines.append(f"waiting for your answer: {pending}")
@@ -78,6 +81,13 @@ def status_lines(out):
     else:
         lines.append("settings in effect: not recorded yet (after the first cycle)")
     return lines
+
+
+def _busy(report, step, why):
+    """A step that was skipped because another run holds the lock. The step's own entry in the report keeps its usual shape
+    (notify: a list of numbers, notices: a count, approvals: a list), so a reader of the report needs no special case; the skipped
+    steps are named here: report["busy"] = {step: reason}."""
+    report.setdefault("busy", {})[step] = why
 
 
 def _step(out, name, fn, report):
@@ -220,7 +230,7 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
         purged = []
         _log(out, {"step": "full_text", "error": f"{type(e).__name__}"})
     if getattr(purged, "busy", False):
-        r["full_text_purge"] = "busy: approvals.json is in use by another run, nothing was purged this cycle"
+        _busy(r, "full_text_purge", "approvals.json is in use by another run, nothing was purged this cycle")
     elif purged:
         r["full_text_purged"] = len(purged)
     if send:   # a route turned on is baselined before this cycle posts anything; a route turned off forgets what came meanwhile
@@ -261,13 +271,15 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
     def do_notify():
         got = notify.notify(out, bridge, send=send, real=real)
         if getattr(got, "busy", False):
-            return {"posted": early, "busy": "another approvals run holds the lock, nothing was posted this call"}
+            _busy(r, "notify", "another run holds approvals.lock, nothing was posted this call")
+            return list(early)
         return early + got
 
     def do_notices():
         got = notify.notify_notices(out, bridge, send=send)
         if getattr(got, "busy", False):
-            return {"posted": len(early_notices), "busy": "another approvals run holds the lock, nothing was posted this call"}
+            _busy(r, "notices", "another run holds approvals.lock, nothing was posted this call")
+            return len(early_notices)
         return len(early_notices) + len(got)
     _step(out, "notify", do_notify, r)
     _step(out, "notices", do_notices, r)
@@ -309,7 +321,8 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
     def do_collect():
         got = notify.collect(out, bridge, real=real, send=send)
         if getattr(got, "busy", False):
-            return "busy: another approvals run holds the lock, nothing was applied this cycle"
+            _busy(r, "approvals", "another run holds approvals.lock, nothing was applied this cycle")
+            return []
         changes.extend(got)
         return [f"#{c['id']}:{c['status']}" for c in changes]
     _step(out, "approvals", do_collect, r)

@@ -34,7 +34,7 @@ python -m kimeru push test|status                 # 通知の経路（iPhone 用
 - 全文を保存するのは、**確認待ちの間だけ**（`out/full_text.json`）。承認か却下のあとは消え、記録に残るのは、これまでと同じ長さの要約です。確認待ちや未投稿のままの件も、`full_text_keep_days`（既定 7 日）で消え、その件は、プレビューだけで判断したものとして扱います。全文は `.jsonl` に書きません（m365 の依頼文も、記録には抜粋で作ったものを残し、全文のものは `full_text.json` に置きます）
 - 同じチャットの続きのメッセージは、前の件がまだ確認待ちなら、同じ番号の投稿に「続きのメッセージ」として加わります
 - 行動の題名（ADO の題名など）は、1 行で、`title_max`（既定 100 文字）までです
-- 実機での確認: `run-check.cmd T23`（プレビューの長さの分布だけを記録。`preview_cut_len` の目安も出ます）、`T24`（既読のチャット 1 件を開いて読み、元へ戻れるか、読んだ文がプレビューと合ったか、選択を報告する画面か）。NG のときも、スクリプトの生の出力は結果シートに書きません
+- 実機での確認: `run-check.cmd T23`（プレビューの長さの分布だけを記録。`preview_cut_len` の目安も出ます）、`T24`（既読のチャット 1 件を開いて読み、元へ戻れるか、読んだ文がプレビューと合ったか、選択を報告する画面か）。T24 は、読んだあとに「N 秒以内に Teams の入力欄をクリックしてください」と出して待ち（既定 8 秒。`KIMERU_T24_FOCUS_SEC` で 3〜60 秒）、そのあとで `diag` を取ります（ポップアウトした窓を確かめるときは、その窓を前面にして、その入力欄をクリックします）。結果シートの `T24-diag` には、フォーカスの種類（type）、topPid、fgPid、それぞれが Teams のプロセスか、`teamsInUse` を、数字と真偽だけで出します（本文は出しません）。NG のときも、スクリプトの生の出力は結果シートに書きません
 
 ### 判断の速さ
 
@@ -98,7 +98,7 @@ python -m kimeru config path
 | `KIMERU_CYCLE_BUDGET` | 1 サイクルの時間の上限（秒。未設定は自動運転の間隔） |
 | `KIMERU_PLAN_LEAN` / `KIMERU_BATCH` | 不要な手順の期限を聞かない（既定 0）／グラフの質問を 1 回にまとめる（既定 0） |
 | `KIMERU_READ_FULL` / `KIMERU_READ_MAX_OPEN` / `KIMERU_READ_BUDGET` / `KIMERU_READ_MESSAGES` | チャットを開いて全文を読む（既定 0）、1 サイクルに開く数（既定 3。0 なら読まない）、読む秒数の上限（既定 60。0 なら読まない）、開いたチャットから読む末尾のメッセージ数（既定 5） |
-| `KIMERU_READ_IDLE_SEC` / `KIMERU_READ_CLICK` / `KIMERU_READ_MAX_DEFER` | 全文を読むために開く前と、開いたあとの操作の直前に、キーボード・マウスが止まっているべき秒数（既定 30、`0` で確かめない。`KIMERU_IDLE_SEC` は読む処理に影響しない。戻す処理は別に 3 秒）／Teams を前面に出してクリックする経路を使う（既定 0）／人の操作と重なって回せる回数の上限（既定 12。超えたらプレビューで判断。0 は延期しない: 最初の 1 回は読み、読めなければプレビューで判断） |
+| `KIMERU_READ_IDLE_SEC` / `KIMERU_READ_CLICK` / `KIMERU_READ_MAX_DEFER` | 全文を読むために開く前と、開いたあとの操作の直前に、キーボード・マウスが止まっているべき秒数（既定 30、`0` で確かめない。`KIMERU_IDLE_SEC` は読む処理に影響しない。戻す処理は別に 3 秒。`read_idle_sec` が 3 未満ならそれに合わせる）／Teams を前面に出してクリックする経路を使う（既定 0）／人の操作と重なって回せる回数の上限（既定 12。超えたらプレビューで判断。0 は延期しない: 最初の 1 回は読み、読めなければプレビューで判断） |
 | `KIMERU_READ_MIN_PREVIEW` / `KIMERU_PREVIEW_CUT_LEN` / `KIMERU_FULL_TEXT_KEEP_DAYS` | これより短いプレビューの件は開かない（既定 12 字。これより小さくはできない）／この長さ以上のプレビューも「切れている」とみなす（既定 0 = 末尾の記号だけ。`T23` の結果で決める）／確認待ちの全文を残す日数（既定 7） |
 | `KIMERU_RECORD_EVENT_FULL` | `1` で、`decisions.jsonl` に元のイベントの全体（本文などは 2,000 文字まで）を残す。既定 0 は、要約の長さ（120 文字）まで（[SECURITY.md](../SECURITY.md#記録に残る範囲と期間)） |
 | `KIMERU_JUDGE_TEXT_MAX` / `KIMERU_TITLE_MAX` | 判断モデルに見せる `text` の文字数（既定 1200）／行動の件名の文字数（既定 100） |
@@ -109,7 +109,7 @@ python -m kimeru config path
 | `KIMERU_CODEX_MODEL` / `KIMERU_CODEX_EFFORT` | `codex` のモデル名（既定 `gpt-6-luna`）と推論の強さ（既定 `low`）。空は未設定と同じで、既定値になります |
 | `KIMERU_GROK_MODEL` | `grok` のモデル名（省略可） |
 | `KIMERU_TOAST` | `0`（または `off`）で PC の Windows 通知を止める。`detail` で、PC の通知だけに、確認待ちの件名などを含める（iPhone などの経路には、常に件数と番号だけ） |
-| `KIMERU_PUSH` / `KIMERU_PUSH_MIN_MINUTES` | 通知の経路（`teams_webhook,webhook,outlook` のコンマ区切り）と、同じ経路への最小の間隔（分、既定 5）。経路を有効にした最初のサイクルの始めに、それまでの確認待ちと通知は「通知済み」として記録するだけで送りません（そのサイクルで新しく投稿された分からは送ります。経路を外していた間の分は、有効にし直しても送りません）。一覧の名前は、大文字小文字と前後の空白を読み替えます。経路名でないものは無視して警告し、残りの経路は使います |
+| `KIMERU_PUSH` / `KIMERU_PUSH_MIN_MINUTES` | 通知の経路（`teams_webhook,webhook,outlook` のコンマ区切り）と、同じ経路への最小の間隔（分、既定 5）。経路を有効にした最初のサイクルの始めに、それまでの確認待ちと通知は「通知済み」として記録するだけで送りません（そのサイクルで新しく投稿された分からは送ります。経路を外していた間の分は、有効にし直しても送りません）。一覧の名前は、環境変数と設定ファイルでは、大文字小文字と前後の空白を読み替えます（`config set push` は、正確な経路名だけを受け付けます）。経路名でないものは無視して警告し、残りの経路は使います |
 | `KIMERU_PUSH_TEAMS_URL` / `KIMERU_PUSH_WEBHOOK_URL` / `KIMERU_PUSH_WEBHOOK_KEY` | 経路の URL（https だけ）と鍵。秘密なので、環境変数だけ。表示にも記録にも出ません |
 | `KIMERU_PUSH_WEBHOOK_BODY` | 汎用の webhook の本文の形（JSON、`{text}` と `{key}`）。`config show` は中身を出しません |
 | `KIMERU_AZ` | `az.cmd` の場所（`kimeru` の隣の `az`、`C:\az` も探します） |
@@ -118,7 +118,7 @@ python -m kimeru config path
 | `KIMERU_CLM_URL` / `KIMERU_CLM_URL_REMOTE_OK` | CLM（試験用）の接続先（既定 `http://127.0.0.1:8700/v1`）と、この PC 以外を許す明示の設定（既定 0） |
 | `KIMERU_EXECUTE` / `KIMERU_EXECUTE_SIGNATURE` | 承認のあとに実行する種類（実装済みは `ado.comment` だけ。既定は無し）と、コメント末尾の kimeru の 1 行（既定 1、`0` で外す） |
 | `KIMERU_SEND_READY` / `KIMERU_OPEN_CHAT_LINK` | 返信を承認したら送る文面だけを自分とのチャットに返す（既定 1）／相手とのチャットを開くリンクも付ける（実験的。既定 0） |
-| `KIMERU_IDLE_SEC` | Teams を操作する前に、キーボード・マウスが止まっているべき秒数（既定 4、`0` で待たない。他のチャットを開いて読む処理には効かず、そちらは `KIMERU_READ_IDLE_SEC`（既定 30）だけで決まる） |
+| `KIMERU_IDLE_SEC` | Teams を操作する前に、キーボード・マウスが止まっているべき秒数（既定: `post`・`send` は 3、teams-copilot は 4。`0` で待たない。他のチャットを開いて読む処理には効かず、そちらは `KIMERU_READ_IDLE_SEC`（既定 30）だけで決まる） |
 | `KIMERU_STATE_DIR` | （`schedule install` が、設定されていれば自動運転の起動行に引き継ぎます）状態フォルダ（設定ファイル、自分とのチャットの目印、writer の休止の印、診断）。未設定なら `%LOCALAPPDATA%\kimeru` |
 | `KIMERU_COPILOT_EXE` / `KIMERU_CLAUDE_EXE` / `KIMERU_CODEX_EXE` / `KIMERU_GROK_EXE` | 各 CLI の場所（PATH に無いとき） |
 | `KIMERU_WRITER_CMD` | `KIMERU_WRITER=cmd` のコマンド（プロンプトを標準入力で受け、答えを標準出力へ） |

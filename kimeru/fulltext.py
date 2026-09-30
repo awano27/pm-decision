@@ -17,9 +17,11 @@ approval or a rejection it is deleted, and what stays in the records is a summar
 written to a .jsonl file: the paste-in request for Microsoft 365 Copilot is kept in the record with the excerpt, and the
 version with the whole text waits in full_text.json beside it.
 """
+import contextlib
 import json
 import os
 import re
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -315,6 +317,23 @@ def _path(out):
     return Path(out) / "full_text.json"
 
 
+@contextlib.contextmanager
+def _locked(out, wait_sec=30.0):
+    """full_text.json is read, changed and written by the daily judgment step (outside the approvals lock) and by the approvals
+    steps (inside it), so every read-modify-write takes this short lock of its own (full_text.lock), waiting for its turn: a save
+    must not be skipped. A lock of a process that is gone is taken over at once (fsutil.exclusive)."""
+    from . import fsutil
+    end = time.time() + wait_sec
+    while True:
+        with fsutil.exclusive(Path(out) / "full_text.lock") as got:
+            if got:
+                yield
+                return
+        if time.time() >= end:
+            raise RuntimeError("full_text.json is in use by another run (full_text.lock)")
+        time.sleep(0.05)
+
+
 def _read(out):
     try:
         data = json.loads(_path(out).read_text(encoding="utf-8"))
@@ -333,9 +352,13 @@ def _write(out, data):
             f.unlink(missing_ok=True)
         return
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(p.name + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, p)
+    tmp = p.with_name(f"{p.name}.tmp.{os.getpid()}.{threading.get_ident()}")   # one temporary file per process and thread
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        from . import fsutil
+        fsutil._replace(tmp, p)
+    finally:
+        tmp.unlink(missing_ok=True)
     bak.unlink(missing_ok=True)
 
 
@@ -352,6 +375,11 @@ def _expired(entry, now=None):
 
 
 def save(out, key, ev, request=None, now=None, material=None):
+    with _locked(out):
+        _save(out, key, ev, request, now, material)
+
+
+def _save(out, key, ev, request, now, material):
     data = _read(out)
     entry = {"text": ev.get("text", ""), "thread": ev.get("thread", []), "title": ev.get("author", ""),
              "at": (now or datetime.now(timezone.utc)).isoformat(timespec="seconds")}
@@ -365,13 +393,14 @@ def save(out, key, ev, request=None, now=None, material=None):
 
 def set_request(out, key, request):
     """Replace the request kept with a full text (after a redraft)."""
-    data = _read(out)
-    if key in data:
-        if request:
-            data[key]["request"] = request
-        else:
-            data[key].pop("request", None)
-        _write(out, data)
+    with _locked(out):
+        data = _read(out)
+        if key in data:
+            if request:
+                data[key]["request"] = request
+            else:
+                data[key].pop("request", None)
+            _write(out, data)
 
 
 def load(out, key, now=None):
@@ -380,12 +409,13 @@ def load(out, key, now=None):
 
 
 def drop(out, key):
-    data = _read(out)
-    if key in data:
-        del data[key]
-        _write(out, data)
-        return True
-    return False
+    with _locked(out):
+        data = _read(out)
+        if key in data:
+            del data[key]
+            _write(out, data)
+            return True
+        return False
 
 
 def purge(out, now=None):
@@ -400,15 +430,16 @@ def purge(out, now=None):
 
 def purge_locked(out, now=None):
     """The body of purge (the caller holds the lock)."""
-    data = _read(out)
-    gone = [k for k, e in data.items() if _expired(e, now)]
-    if not gone:
-        if not data:
-            _write(out, data)       # nothing kept: no file, and no .bak left by an older version
-        return []
-    for k in gone:
-        del data[k]
-    _write(out, data)
+    with _locked(out):
+        data = _read(out)
+        gone = [k for k, e in data.items() if _expired(e, now)]
+        if not gone:
+            if not data:
+                _write(out, data)       # nothing kept: no file, and no .bak left by an older version
+            return []
+        for k in gone:
+            del data[k]
+        _write(out, data)
     from . import notify
     ap = notify.Approvals(out)
     changed = False

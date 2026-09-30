@@ -545,13 +545,17 @@ def main(argv=None):
         from . import notify as nt
         bridge = nt.PowerShellBridge()
         try:
+            busy = "another approvals run is in progress (the daily cycle, or another window): {}. Try again in a minute."
             if a.cmd == "notify":
                 ids = nt.notify(out, bridge, send=a.send, real=True)
-                print(f"{'posted' if a.send else 'pasted (not sent)'}: {ids}")
+                if getattr(ids, "busy", False):   # nothing was posted: say so and fail, so that no check reads it as a post
+                    print(busy.format("nothing was posted"))
+                    return 1
+                print(f"{'posted' if a.send else 'pasted (not sent)'}: {list(ids)}")
             else:
                 res = nt.collect(out, bridge, real=True, send=a.send)
                 if getattr(res, "busy", False):
-                    print("another approvals run is in progress (the daily cycle, or another window): nothing was read or applied. Try again in a minute.")
+                    print(busy.format("nothing was read or applied"))
                 for ch in res:
                     print(f"#{ch['id']} -> {ch['status']}" + (f" ({len(ch['executed'])} actions planned)" if "executed" in ch else ""))
         except Exception as e:  # one readable line instead of a traceback (the check script records it)

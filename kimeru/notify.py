@@ -621,14 +621,24 @@ def _collect(out, bridge, writer=None, real=False, send=False):
         r0 = parse_reply(line)                       # (the same starting point as redo_seen: a result post starts the count again)
         if r0 and r0[0] == "再実行":
             redo_count[r0[1]] = redo_count.get(r0[1], 0) + 1
-    if read.get("timeline") is not None:   # the result post of an earlier redo is on the screen now: the count starts again from 0
-        shown = {e[2:] for e in read["timeline"] if e.startswith("X:")}
+    xcount = {}   # how many result posts "[kimeru 実行 #N]" the screen shows, per item
+    if read.get("timeline") is not None:
+        for e in read["timeline"]:
+            if e.startswith("X:"):
+                xcount[e[2:]] = xcount.get(e[2:], 0) + 1
         for n0, it0 in ap.data["items"].items():
-            if it0.get("redo_reset") and n0 in shown:
-                it0["redo_seen"] = 0
-                it0.pop("redo_reset")
-            if int(it0.get("redo_seen", 0)) > redo_count.get(n0, 0):   # the replies that acted are before a boundary that is shown
-                it0["redo_seen"] = redo_count.get(n0, 0)
+            seen0, cnt0, x0 = int(it0.get("redo_seen", 0)), redo_count.get(n0, 0), xcount.get(n0, 0)
+            # The count of replies that already acted starts again from 0 only when the result post of that redo is PROVEN to be on the
+            # screen: a result post is shown that was not there when the reply acted (more of them than then), or the replies that acted
+            # stand before the last one. An old result post alone proves nothing, and a boundary that is not on the screen lowers nothing:
+            # until it is proven the count is kept and a reply that looks new waits for a later cycle (a reply never acts twice).
+            if it0.get("redo_reset"):
+                if x0 > int(it0.get("redo_xn", 0)) or (x0 and cnt0 < seen0):
+                    it0["redo_seen"] = 0
+                    it0.pop("redo_reset", None)
+                    it0.pop("redo_xn", None)
+            elif seen0 and x0 and cnt0 < seen0:   # the replies that acted are before a result post that is shown
+                it0["redo_seen"] = cnt0
     redo_done = set()
     for line in replies:
         ps = parse_paste(line)
@@ -659,6 +669,7 @@ def _collect(out, bridge, writer=None, real=False, send=False):
                 it["redo_seen"] = min(seen, cnt)
                 continue
             it["redo_seen"] = cnt
+            it["redo_xn"] = xcount.get(num, 0)   # the result posts on the screen now: one more must appear once this redo is answered
             ap.save()   # saved before the run: a stop in the middle must not run the same reply again
             changes.append({"id": int(num), "status": "redo", "real": execute.redo(out, ap, int(num), it, post)})
             continue

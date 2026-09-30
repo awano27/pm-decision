@@ -61,6 +61,20 @@ function DiagText {
   if ($t.Length -gt 2600) { $t = $t.Substring(0, 2600) + '…' }
   "$f :: $t"
 }
+function Posted($t) {
+  # `notify` printed "posted: [...]" (or "pasted (not sent): [...]"); the lock-held message ("another approvals run is in progress") is a failure, never a post
+  ([string]$t -match '(?m)^(posted|pasted \(not sent\)): \[') -and ([string]$t -notmatch 'another approvals run is in progress')
+}
+function Focus-Numbers($dg) {
+  # the focus line of `diag` as numbers, a control type name and booleans only: type, topPid, fgPid, whether topPid is one of teamsPids
+  $f = [string]$dg.focus
+  if ($f -match '^(none|error)$' -or -not $f) { return "focus=なし teamsInUse=$($dg.teamsInUse)" }
+  $type = ([regex]::Match($f, '^([A-Za-z0-9.]+)').Groups[1].Value)
+  $top = [regex]::Match($f, 'topPid=(\d+)').Groups[1].Value
+  $fg = [regex]::Match($f, 'fgPid=(\d+)').Groups[1].Value
+  $tp = @(([regex]::Match($f, 'teamsPids=([\d/]*)').Groups[1].Value) -split '/' | Where-Object { $_ })
+  "type=$type topPid=$top fgPid=$fg topPidはTeamsのプロセス=$([bool]($top -and ($tp -contains $top))) fgPidはTeamsのプロセス=$([bool]($fg -and ($tp -contains $fg))) teamsInUse=$($dg.teamsInUse)"
+}
 function YesNo($q) { (Read-Host "$q [y/N]") -match '^\s*([yYｙＹ]|はい)' }   # tolerate stray keys after y ("y[")
 function Self($action, [string[]]$extra = @()) {
   $out = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'teams-self.ps1') -Action $action @extra 2>&1 | Out-String
@@ -245,7 +259,7 @@ if ($py) {
     [IO.File]::WriteAllText((Join-Path $out 'approvals.json'), "{`"next`": $base, `"items`": {}}")
     Write-Host "   数秒間マウス・キーボードに触らないでください"
     $nt = Py @('-m', 'kimeru', '--out', $out, 'notify', '--send')
-    Rec 'T9-notify' $(if ($nt -match 'posted: \[') { 'OK ' + (Short (($nt -split "`n") | Where-Object { $_ -match 'posted:' })) } else { 'NG ' + (Fails $nt) })
+    Rec 'T9-notify' $(if (Posted $nt) { 'OK ' + (Short (($nt -split "`n") | Where-Object { $_ -match 'posted:' })) } elseif ($nt -match 'another approvals run is in progress') { 'NG 鍵が取れず、何も投稿していません（他の処理が動いています。少し待って、やり直してください）' } else { 'NG ' + (Fails $nt) })
     Write-Host ("   iPhone から「OK {0}」と「NG {1}」を別々に返信してください（最大 {2} 秒）" -f $base, ($base + 1), $WaitSec) -ForegroundColor Green
     $acc = ''; $deadline = (Get-Date).AddSeconds($WaitSec)
     while ((Get-Date) -lt $deadline -and -not ($acc -match 'approved' -and $acc -match 'rejected')) {
@@ -310,12 +324,15 @@ if ($uia -and $selfOk -and (Want 'T24')) {
       $fits = if ($head.Length -lt 12) { '（プレビューが短く、確かめられない）' } else { [string]$r.previewMatched }
       Rec 'T24' ("{0} 読めた件数={1} 文字数=[{2}] {3} 選択の報告={4} 読んだ文がプレビューと合った={5} 取り方={6}" -f $(if ($lens.Count -gt 0 -and $r.returned -and $fits -eq 'True') { 'OK' } else { 'NG' }), $lens.Count, ($lens -join ','), $back, $r.verified, $fits, $r.how)
     }
-    # after the read (Teams is not in front again if the window that was in front came back): where the focus is, as numbers and a type
-    # name only. focus= gives the ProcessId of the focused element, the handle of the window that holds it (hwnd / top) and that
-    # window's process (topPid); fgPid is the process of the window in front now, teamsPids are those of Teams. To decide the
-    # input-box check on this PC: put the cursor in a compose box, run `teams-self.ps1 -Action diag` by hand, and compare topPid with teamsPids
+    # the input-box check of this PC: after the read, wait for you to click a Teams compose box, then take `diag` (read only, it types nothing).
+    # focus= holds the control type, the ProcessId of the focused element, the window that holds it (topPid), the window in front now
+    # (fgPid) and the processes of Teams (teamsPids); the sheet gets the type, the two ids, whether they are Teams' own, and teamsInUse
+    $focusSec = 8
+    if ($env:KIMERU_T24_FOCUS_SEC -match '^\d+$') { $focusSec = [Math]::Min(60, [Math]::Max(3, [int]$env:KIMERU_T24_FOCUS_SEC)) }
+    Write-Host ("   {0} 秒以内に Teams の入力欄（メッセージを書く欄）をクリックしてください。ポップアウトした窓で確かめるときは、その窓を前面にして、その入力欄をクリックします" -f $focusSec) -ForegroundColor Green
+    Start-Sleep -Seconds $focusSec
     $dg = Self 'diag'
-    Rec 'T24-diag' $(if ($dg.ok) { "focus=[{0}] teamsInUse={1}" -f (([string]$dg.focus) -replace '[^A-Za-z0-9=/. _]', ''), $dg.teamsInUse } else { 'NG ' + (Short $dg.error) })
+    Rec 'T24-diag' $(if ($dg.ok) { Focus-Numbers $dg } else { 'NG ' + (Short $dg.error) })
   }
 }
 
@@ -333,14 +350,15 @@ if ($selfOk -and (Want 'T22')) {
     # the target the work item "came from": the settings' organization and project (kimeru writes only where the item came from)
     $tgt = (Py @('-c', 'import json; from kimeru import config, pull; config.apply([]); o, p = pull.ado_names(config.value("ado_org"), config.value("ado_project")); print(json.dumps({"org": o, "project": p}))')).Trim()
     $origin = try { $tgt | ConvertFrom-Json } catch { $null }
+    $t22text = "kimeru の試験です。このコメントは、承認のあとに 1 回だけ書かれます。`n件数 < 3 のとき <b> を使う、という文を含みます。"
     $rec = [ordered]@{ graph = 'check'; event_kind = 'ado.workitem.created'; event_id = "t22-$wi"; node = 'request_info'; outcome = 'decide'; needs_human = $true; advice = ''
       event = @{ origin = @{ org = [string]$origin.org; project = [string]$origin.project } }
-      actions = @(@{ type = 'ado.comment'; id = $wi; text = 'kimeru の試験です。このコメントは、承認のあとに 1 回だけ書かれます。' }) }
+      actions = @(@{ type = 'ado.comment'; id = $wi; text = $t22text }) }
     [IO.File]::WriteAllText((Join-Path $out22 'queue.jsonl'), (($rec | ConvertTo-Json -Compress -Depth 8) + "`n"), (New-Object Text.UTF8Encoding $false))
     $env:KIMERU_EXECUTE = 'ado.comment'
     Write-Host "   数秒間マウス・キーボードに触らないでください"
     $nt = Py @('-m', 'kimeru', '--out', $out22, 'notify', '--send')
-    if ($nt -notmatch 'posted: \[') { Rec 'T22' ('NG 投稿できません ' + (Fails $nt)) }
+    if (-not (Posted $nt)) { Rec 'T22' ('NG 投稿できません ' + $(if ($nt -match 'another approvals run is in progress') { '（鍵が取れず、何も投稿していません）' } else { Fails $nt })) }
     else {
       Write-Host ("   Teams の自分とのチャットで「OK {0}」と返信してください（最大 {1} 秒）" -f $base, $WaitSec) -ForegroundColor Green
       $deadline = (Get-Date).AddSeconds($WaitSec); $ex = Join-Path $out22 'executions.jsonl'
@@ -351,8 +369,13 @@ if ($selfOk -and (Want 'T22')) {
       $done = @($rows | Where-Object { $_.state -eq 'done' }).Count
       $failed = @($rows | Where-Object { $_.state -eq 'failed' } | ForEach-Object { $_.error })
       if ($done -eq 1) {
+        # read back what ADO stored (read only; counts and true/false only): did it wrap the comment in tags, did it keep `<` as `&lt;`,
+        # and did the same-text check of kimeru find it (a redo must not write it again)
+        $rb = try { (Py @('-c', 'import json, sys; from kimeru import config, execute; config.apply([]); print(json.dumps(execute.inspect_comment(sys.argv[1], sys.argv[2], execute.comment_text(dict(text=sys.argv[3])))))', $wi, 'kimeru の試験です', $t22text)) -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 1 | ConvertFrom-Json } catch { $null }
+        $shape = if ($rb -and $rb.PSObject.Properties['found']) { "読み返した件数=$($rb.found) タグで包まれた=$($rb.wrapped_in_tags) エスケープされた=$($rb.escaped) 同じ文面の確認が一致=$($rb.same_text_check)" } else { '読み返せず（az のサインインか、通信を確かめてください）' }
         $seen = YesNo "   ADO の作業項目 $wi に、kimeru のコメントが **1 件だけ** ありますか"
-        Rec 'T22' $(if ($seen) { 'OK 書かれた回数=1、ADO でも 1 件' } else { 'NG kimeru は 1 回書いたと記録したが、ADO で 1 件と確認できない' })
+        $good = $seen -and $rb -and $rb.found -eq 1 -and $rb.same_text_check
+        Rec 'T22' $(if ($good) { "OK 書かれた回数=1、ADO でも 1 件 $shape" } elseif ($seen) { "NG ADO には 1 件あるが、同じ文面の確認が一致しない、または読み返せない $shape" } else { "NG kimeru は 1 回書いたと記録したが、ADO で 1 件と確認できない $shape" })
       } elseif ($failed.Count) { Rec 'T22' ('NG 書けませんでした: ' + (Short ($failed -join ' / '))) }
       else { Rec 'T22' ("NG 書かれた回数=$done（返信を待つ時間が足りなかった可能性）") }
     }
@@ -403,7 +426,7 @@ if ($selfOk -and (Want 'T20')) {
     [IO.File]::WriteAllText((Join-Path $out20 'queue.jsonl'), $q + "`n", (New-Object Text.UTF8Encoding $false))
     Write-Host "   数秒間マウス・キーボードに触らないでください"
     $nt = Py @('-m', 'kimeru', '--out', $out20, 'notify', '--send')
-    if ($nt -notmatch 'posted: \[') { Rec 'T20' ('NG 投稿できません ' + (Fails $nt)) }
+    if (-not (Posted $nt)) { Rec 'T20' ('NG 投稿できません ' + $(if ($nt -match 'another approvals run is in progress') { '（鍵が取れず、何も投稿していません）' } else { Fails $nt })) }
     else {
       Write-Host ("   Teams の自分とのチャットで、次の 2 つを別々に返信してください（最大 {0} 秒）" -f $WaitSec) -ForegroundColor Green
       Write-Host ("     聞き返し {0}" -f $base) -ForegroundColor Green

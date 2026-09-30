@@ -288,7 +288,7 @@ class TestOneCollectAtATime(Safety):
     def test_a_lock_left_by_a_dead_process_is_taken_over(self):
         lock = self.out / "approvals.lock"
         lock.parent.mkdir(parents=True, exist_ok=True)
-        lock.write_text("123")
+        lock.write_text("2147483646")   # a process id that no process has
         import os
         os.utime(lock, (0, 0))
         with fsutil.exclusive(lock) as got:
@@ -311,6 +311,15 @@ class TestEveryPageAndTheStoredForm(Safety):
         stored = "<div>件数 &lt; 3 のとき &amp; 確認</div>"
         http = lambda method, url, token, body=None, retries=3: {"comments": [{"id": 9, "text": stored}]}
         self.assertEqual(execute._existing_comment("https://x/_apis/wit/workItems", "7", "件数 < 3 のとき & 確認", http, "t"), 9)
+
+    def test_a_tag_like_text_matches_whether_ads_wrapped_it_or_kept_only_the_escapes(self):
+        find = lambda stored, text: execute._existing_comment(
+            "https://x/_apis/wit/workItems", "7", text, lambda m, u, t, body=None, retries=3: {"comments": [{"id": 9, "text": stored}]}, "t")
+        self.assertEqual(find("<div>&lt;b&gt; を使う</div>", "<b> を使う"), 9)           # wrapped in a tag, the `<b>` escaped
+        self.assertEqual(find("&lt;b&gt; を使う", "<b> を使う"), 9)                      # only the escapes
+        self.assertEqual(find("<div>List&lt;String&gt; を返す</div>", "List<String> を返す"), 9)
+        self.assertEqual(find("List&lt;String&gt; を返す", "List<String> を返す"), 9)
+        self.assertEqual(find("<p>件数 &lt; 3</p><p>以上</p>", "件数 < 3 以上"), 9)
 
     def test_a_redo_does_not_write_when_the_text_is_on_a_later_page(self):
         self.enable()

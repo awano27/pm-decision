@@ -1,3 +1,8 @@
+try:   # isolation from the real state folder, whichever way the tests are started
+    from . import isolate  # noqa: F401
+except ImportError:
+    import isolate  # noqa: F401
+
 import json
 import tempfile
 import unittest
@@ -23,7 +28,7 @@ class FakeTeams:
     def chats(self):
         return self.chat_list
 
-    def readchat(self, chat_id, count=5):
+    def readchat(self, chat_id, count=5, preview=None):
         """Opening a chat to read it in full: the messages set in `chat_messages` (nothing is opened when it is unknown)."""
         self.opened = getattr(self, "opened", []) + [chat_id]
         msgs = getattr(self, "chat_messages", {}).get(chat_id)
@@ -204,6 +209,50 @@ class TestKnownIssues(unittest.TestCase):
             r = self.cycle(d, t, now=datetime(2026, 9, 28, 9, 5))             # judge is back
             self.assertEqual(r["waiting"], 0)
             self.assertIn("brief", r)
+
+    def test_unposted_items_are_announced_on_the_pc_once_while_the_count_stays_the_same(self):
+        shown = []
+        toast = lambda a, b: shown.append((a, b))
+        with tempfile.TemporaryDirectory() as d:
+            t = FakeTeams()
+            t.post = lambda text, send: (_ for _ in ()).throw(RuntimeError("Teams is unreachable"))
+            inbox = Path(d) / "inbox"
+            inbox.mkdir()
+            (inbox / "m.json").write_text(json.dumps({"id": "m1", "chatId": "19:c", "createdDateTime": "2026-09-28T08:00:00Z",
+                                                    "from": {"user": {"displayName": "X"}}, "body": {"contentType": "text", "content": "これは何ですか"}}), encoding="utf-8")
+            for minute in (0, 5, 10):                                          # three cycles in a row
+                self.cycle(d, t, toaster=toast, now=datetime(2026, 9, 28, 9, minute))
+            self.assertEqual(len([s for s in shown if "投稿できていない" in s[0]]), 1)
+            (inbox / "m2.json").write_text(json.dumps({"id": "m2", "chatId": "19:d", "createdDateTime": "2026-09-28T08:01:00Z",
+                                                     "from": {"user": {"displayName": "Y"}}, "body": {"contentType": "text", "content": "あれは何ですか"}}), encoding="utf-8")
+            self.cycle(d, t, toaster=toast, now=datetime(2026, 9, 28, 9, 15))
+            self.assertEqual([s[0] for s in shown if "投稿できていない" in s[0]][-1], "kimeru: 投稿できていない確認待ち 2 件")   # a changed count is announced
+
+    def test_files_left_by_the_time_limit_do_not_fail_the_run_or_hold_the_brief(self):
+        import io
+        import os
+        from contextlib import redirect_stdout
+        from unittest import mock
+        from kimeru import cli
+        with tempfile.TemporaryDirectory() as d:
+            inbox = Path(d) / "inbox"
+            inbox.mkdir()
+            for i in (1, 2):
+                (inbox / f"m{i}.json").write_text(json.dumps({"id": f"m{i}", "chatId": f"19:c{i}", "createdDateTime": "2026-09-28T08:00:00Z",
+                                                            "from": {"user": {"displayName": "X"}}, "body": {"contentType": "text", "content": "これは何ですか"}}), encoding="utf-8")
+            ticks = iter(range(0, 1000, 5))
+            env = {"KIMERU_STATE_DIR": d, "KIMERU_TOAST": "0", "KIMERU_CYCLE_BUDGET": "1"}
+            buf = io.StringIO()
+            with mock.patch.dict(os.environ, env), mock.patch("kimeru.notify.PowerShellBridge", FakeTeams),                     mock.patch("time.monotonic", lambda: next(ticks)), redirect_stdout(buf):
+                rc = cli.main(["--out", str(Path(d) / "out"), "daily", "--once", "--inbox", str(inbox), "--brief-hour", "0"])
+            self.assertEqual(rc, 0)                                            # not a failed run
+            report = json.loads(buf.getvalue().strip().splitlines()[-1].split(" ", 1)[1])
+            self.assertEqual((report["waiting"], report["left_for_next_cycle"]), (0, 2))
+            self.assertIn("brief", report)                                     # the morning brief is not put off
+            with mock.patch.dict(os.environ, env):
+                lines = daily.status_lines(Path(d) / "out")
+            self.assertIn("files left for the next cycle (time limit): 2", lines[0])
+            self.assertIn("files the judge could not take: 0", lines[0])
 
     def test_retry_puts_parked_files_back(self):
         with tempfile.TemporaryDirectory() as d:

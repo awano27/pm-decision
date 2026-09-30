@@ -9,6 +9,7 @@ Per backend, with its production threshold profile:
   top-1 accuracy    the model's first choice, ignoring thresholds
 plus per-graph breakdown, pairwise agreement, and every confident-wrong item.
 Jev numbers must stay private (TypeSafe terms): write the output outside the repo.
+The coefficients `kimeru calibrate --apply` wrote to the state folder are not read, unless you pass --user-thresholds.
 """
 import importlib.util
 import json
@@ -20,7 +21,8 @@ HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("run_eval", HERE / "run_eval.py")
 ev = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ev)
-from kimeru.profiles import PROFILES  # noqa: E402  (run_eval put the repo on sys.path)
+from kimeru import profiles  # noqa: E402  (run_eval put the repo on sys.path)
+from kimeru.profiles import PROFILES  # noqa: E402
 
 
 def top1(node, exp, a):
@@ -52,7 +54,11 @@ def evaluate(ans, profile):
 def main(argv):
     specs = [a.split("=", 1) for a in argv if "=" in a and not a.startswith("--")]
     prof = {k: PROFILES[k] for k in ("jev", "kev", "clm")}
-    res = {name: evaluate(ev.load_answers(path), prof.get(name, PROFILES["jev"])) for name, path in specs}
+    user = "--user-thresholds" in argv
+    if user and profiles.overrides_note():
+        print(profiles.overrides_note())
+    with profiles.ignoring_overrides(not user):
+        res = {name: evaluate(ev.load_answers(path), prof.get(name, PROFILES["jev"])) for name, path in specs}
     names = [n for n, _ in specs]
 
     def pct(x, n):

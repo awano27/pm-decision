@@ -62,7 +62,8 @@ function DiagText {
 function YesNo($q) { (Read-Host "$q [y/N]") -match '^\s*([yYｙＹ]|はい)' }   # tolerate stray keys after y ("y[")
 function Self($action, [string[]]$extra = @()) {
   $out = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'teams-self.ps1') -Action $action @extra 2>&1 | Out-String
-  try { return ($out.Trim().TrimStart([char]0xFEFF) | ConvertFrom-Json) } catch { return [pscustomobject]@{ ok = $false; error = (Short $out) } }
+  # the script's own output is JSON with fixed messages; anything else (screen text, a stack trace) is never recorded: only its length
+  try { return ($out.Trim().TrimStart([char]0xFEFF) | ConvertFrom-Json) } catch { return [pscustomobject]@{ ok = $false; error = "出力を解析できず（$($out.Length) 文字、内容は記録しない）" } }
 }
 function Probe($label, $keepAs = $null) {
   $o = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'probe-teams.ps1') -Label $label 2>&1 | Out-String
@@ -266,9 +267,16 @@ if ($uia -and $selfOk -and (Want 'T23')) {
     if (-not $pv.Count) { Rec 'T23' 'SKIP プレビューのあるチャットがありません' }
     else {
       $len = @($pv | ForEach-Object { $_.Length } | Sort-Object)
-      $cut = @($pv | Where-Object { $_ -match '(…|\.\.\.)$' }).Count
+      $cutL = @($pv | Where-Object { $_ -match '(…|\.\.\.)$' } | ForEach-Object { $_.Length } | Sort-Object)
+      $whole = @($pv | Where-Object { $_ -notmatch '(…|\.\.\.)$' } | ForEach-Object { $_.Length } | Sort-Object)
+      $cut = $cutL.Count
       $nl = @($pv | Where-Object { $_ -match "[\r\n]" }).Count
-      Rec 'T23' ("件数={0} 文字数 最小={1} 中央値={2} 最大={3} 末尾が省略記号={4} 改行あり={5}" -f $pv.Count, $len[0], $len[[int]($len.Count / 2)], $len[-1], $cut, $nl)
+      # preview_cut_len (a length at which a preview counts as cut even without a mark): between the longest preview that was not
+      # cut and the shortest that was. Lengths only, never text.
+      $cutMin = if ($cutL.Count) { $cutL[0] } else { '-' }
+      $wholeMax = if ($whole.Count) { $whole[-1] } else { '-' }
+      $hint = if ($cutL.Count -and $whole.Count -and $whole[-1] -lt $cutL[0]) { "preview_cut_len の目安={0}〜{1}" -f ($whole[-1] + 1), $cutL[0] } elseif ($cutL.Count -and $whole.Count) { 'preview_cut_len は決められない（切れていないものが、切れたものより長い）' } else { 'preview_cut_len は決められない（切れた例か、切れていない例が無い）' }
+      Rec 'T23' ("件数={0} 文字数 最小={1} 中央値={2} 最大={3} 末尾が省略記号={4} 切れたものの最短={5} 切れていないものの最長={6} 改行あり={7} {8}" -f $pv.Count, $len[0], $len[[int]($len.Count / 2)], $len[-1], $cut, $cutMin, $wholeMax, $nl, $hint)
     }
   }
 }
@@ -277,16 +285,28 @@ if ($uia -and $selfOk -and (Want 'T23')) {
 if ($uia -and $selfOk -and (Want 'T24')) {
   Say "T24 チャットを開いて全文を読む（開くと、そのチャットは既読になります）"
   $c = Self 'chats'
-  $pick = if ($c.ok) { @($c.chats | Where-Object { $_.kind -ne 'self' -and $_.preview -and -not $_.unread } | Select-Object -First 1) } else { @() }
-  if (-not $pick.Count) { Rec 'T24' 'SKIP 既読のチャットが一覧にありません（未読の印を変えないため、既読のものだけを使います）' }
+  $pick = if ($c.ok) { @($c.chats | Where-Object { $_.kind -ne 'self' -and ([string]$_.preview).Trim().Length -ge 12 -and -not $_.unread } | Select-Object -First 1) } else { @() }
+  if (-not $pick.Count) { Rec 'T24' 'SKIP 既読で、プレビューが 12 字以上のチャットが一覧にありません（未読の印を変えないため、既読のものだけを使います）' }
   elseif (-not (YesNo "   既読のチャット 1 件を開いて、直近のメッセージを読みます（読み取りだけ。終わったら元のチャットへ戻します）。よろしいですか")) { Rec 'T24' 'SKIP' }
   else {
-    Write-Host "   数秒間マウス・キーボードに触らないでください"
-    $r = Self 'readchat' @('-ChatId', [string]$pick[0].id, '-Count', '5')
-    if (-not $r.ok) { Rec 'T24' ('NG ' + $r.error) }
+    Write-Host "   6 秒間、マウス・キーボードに触らず、Teams も前面に出さないでください（本番の待ちは 30 秒。試験では 5 秒にします）"
+    Start-Sleep -Seconds 6
+    $savedIdle = $env:KIMERU_READ_IDLE_SEC; $env:KIMERU_READ_IDLE_SEC = '5'
+    # the start of the list preview goes with it: a screen that reports no selection is checked against it
+    $head = (([string]$pick[0].preview -replace '\s+', ' ').Trim()).TrimEnd(' ', '.', [char]0x2026)
+    if ($head.Length -gt 40) { $head = $head.Substring(0, 40) }
+    try { $r = Self 'readchat' @('-ChatId', [string]$pick[0].id, '-Count', '5', '-Preview', $head) }
+    finally { $env:KIMERU_READ_IDLE_SEC = $savedIdle }
+    # what the script says about putting the chat back is on the sheet even when the reading failed (fixed words only)
+    $back = "元のチャットへ戻れた={0} 復元={1}" -f $r.returned, $r.restore
+    if (-not $r.ok -and ([string]$r.error) -match '^(Teams is in use|the keyboard / mouse has been in use)') { Rec 'T24' ("SKIP Teams が前面か、入力欄にフォーカスがあるか、操作中でした（何も開いていません）。{0}" -f $back) }
+    elseif (-not $r.ok) { Rec 'T24' ("NG {0} {1}" -f (Short $r.error), $back) }
     else {
       $lens = @($r.messages | ForEach-Object { ([string]$_.text).Length })
-      Rec 'T24' ("{0} 読めた件数={1} 文字数=[{2}] 元のチャットへ戻れた={3} 取り方={4}" -f $(if ($lens.Count -gt 0) { 'OK' } else { 'NG 0 件' }), $lens.Count, ($lens -join ','), $r.returned, $r.how)
+      $last = if ($r.messages) { [string]@($r.messages)[-1].text } else { '' }
+      # the script's own verdict (previewMatched): it also handles a leading "name: " in the preview, which a plain Contains would miss
+      $fits = if ($head.Length -lt 12) { '（プレビューが短く、確かめられない）' } else { [string]$r.previewMatched }
+      Rec 'T24' ("{0} 読めた件数={1} 文字数=[{2}] {3} 選択の報告={4} 読んだ文がプレビューと合った={5} 取り方={6}" -f $(if ($lens.Count -gt 0 -and $r.returned -and $fits -eq 'True') { 'OK' } else { 'NG' }), $lens.Count, ($lens -join ','), $back, $r.verified, $fits, $r.how)
     }
   }
 }
@@ -302,7 +322,11 @@ if ($selfOk -and (Want 'T22')) {
     New-Item -ItemType Directory -Force $out22 | Out-Null
     $base = Get-Random -Minimum 100 -Maximum 899
     [IO.File]::WriteAllText((Join-Path $out22 'approvals.json'), "{`"next`": $base, `"items`": {}}")
+    # the target the work item "came from": the settings' organization and project (kimeru writes only where the item came from)
+    $tgt = (Py @('-c', 'import json; from kimeru import config, pull; config.apply([]); o, p = pull.ado_names(config.value("ado_org"), config.value("ado_project")); print(json.dumps({"org": o, "project": p}))')).Trim()
+    $origin = try { $tgt | ConvertFrom-Json } catch { $null }
     $rec = [ordered]@{ graph = 'check'; event_kind = 'ado.workitem.created'; event_id = "t22-$wi"; node = 'request_info'; outcome = 'decide'; needs_human = $true; advice = ''
+      event = @{ origin = @{ org = [string]$origin.org; project = [string]$origin.project } }
       actions = @(@{ type = 'ado.comment'; id = $wi; text = 'kimeru の試験です。このコメントは、承認のあとに 1 回だけ書かれます。' }) }
     [IO.File]::WriteAllText((Join-Path $out22 'queue.jsonl'), (($rec | ConvertTo-Json -Compress -Depth 8) + "`n"), (New-Object Text.UTF8Encoding $false))
     $env:KIMERU_EXECUTE = 'ado.comment'
@@ -312,9 +336,9 @@ if ($selfOk -and (Want 'T22')) {
     else {
       Write-Host ("   Teams の自分とのチャットで「OK {0}」と返信してください（最大 {1} 秒）" -f $base, $WaitSec) -ForegroundColor Green
       $deadline = (Get-Date).AddSeconds($WaitSec); $ex = Join-Path $out22 'executions.jsonl'
-      while ((Get-Date) -lt $deadline -and -not (Test-Path $ex)) { Start-Sleep -Seconds 10; [void](Py @('-m', 'kimeru', '--out', $out22, 'approvals')) }
+      while ((Get-Date) -lt $deadline -and -not (Test-Path $ex)) { Start-Sleep -Seconds 10; [void](Py @('-m', 'kimeru', '--out', $out22, 'approvals', '--send')) }
       # two more reads: the same reply is still on the screen, and it must not write again
-      [void](Py @('-m', 'kimeru', '--out', $out22, 'approvals')); [void](Py @('-m', 'kimeru', '--out', $out22, 'approvals'))
+      [void](Py @('-m', 'kimeru', '--out', $out22, 'approvals', '--send')); [void](Py @('-m', 'kimeru', '--out', $out22, 'approvals', '--send'))
       $rows = if (Test-Path $ex) { @(Get-Content -Encoding UTF8 $ex | ForEach-Object { $_ | ConvertFrom-Json }) } else { @() }
       $done = @($rows | Where-Object { $_.state -eq 'done' }).Count
       $failed = @($rows | Where-Object { $_.state -eq 'failed' } | ForEach-Object { $_.error })
@@ -331,10 +355,16 @@ if ($selfOk -and (Want 'T22')) {
 # ---- T21: the phone notification routes (counts only; you say whether it reached the iPhone) ----
 if (Want 'T21') {
   Say "T21 iPhone への通知の経路（件数だけの試験の 1 行を送ります）"
-  if (-not $env:KIMERU_PUSH) { Rec 'T21' 'SKIP 経路が未設定（docs/push-notification.md。KIMERU_PUSH と URL の環境変数）' }
+  $o = $null
+  # the routes may come from the environment or from the config file: ask kimeru (config show prints no value of a secret)
+  $pushSet = @(((Py @('-m', 'kimeru', 'config', 'show')) -split "`n") | Where-Object { $_ -match '^push {2,}[^-\s]' }).Count -gt 0   # the table row only: 'push routes: none' (a status line) is not a setting
+  if (-not $pushSet) { Rec 'T21' 'SKIP 経路が未設定（docs/push-notification.md。config set push と URL の環境変数）' }
   elseif (-not (YesNo "   設定した経路に、固定の試験の 1 行（件数も本文もありません）を送ります。よろしいですか")) { Rec 'T21' 'SKIP' }
   else {
     $o = Py @('-m', 'kimeru', 'push', 'test')
+    if ($o -match '\(none\)') { Rec 'T21' 'SKIP 経路が未設定（config set push と URL の環境変数）'; $o = $null }
+  }
+  if ($o) {
     $sent = @(($o -split "`n") | Where-Object { $_ -match ': sent' }).Count
     $bad = @(($o -split "`n") | Where-Object { $_ -match ': failed' } | ForEach-Object { ($_ -replace '\s+$', '') })
     if ($sent -eq 0) { Rec 'T21' ('NG ' + (Short ($bad -join ' / '))) }

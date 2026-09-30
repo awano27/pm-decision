@@ -1,12 +1,20 @@
 """Reading a chat in full: only when enabled and needed, within limits, verified, forgotten after the decision. Teams is always a fake."""
+try:   # isolation from the real state folder, whichever way the tests are started
+    from . import isolate  # noqa: F401
+except ImportError:
+    import isolate  # noqa: F401
+
 import json
 import os
+import re
+import subprocess
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
+from kimeru.cli import _no_action
 from kimeru import brief, cli, config, daily, events, fulltext, graph, notify, plan, pull, writer
 from kimeru.backends import StubBackend
 from tests.test_daily import FakeTeams
@@ -15,6 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PBS = plan.load_playbooks(ROOT / "playbooks")
 GRAPHS = graph.load_dir(ROOT / "graphs", PBS)
 BODY = "本文-FULLBODY-ZZ"
+Q = "これは何ですか。至急の確認をお願いします"     # a preview long enough (12 characters or more) to identify a chat
 LONG = "これは何ですか。" + "詳しく言うと、" * 60 + "以上です。"        # a message far longer than a preview
 
 
@@ -90,7 +99,8 @@ class TestWhenToOpen(Base):
         self.teams.chat_messages = chats
         r = self.drop_and_cycle([self.ev(i, f"{i}番の依頼です。これは何ですか") for i in range(1, 5)])
         self.assertEqual(len(self.teams.opened), 2)                        # never more than the limit
-        self.assertEqual(r["waiting"], 2)                                  # the others stay in the inbox
+        self.assertEqual(r["waiting"], 0)                                  # the judge is fine: not a failure
+        self.assertEqual(r["left_for_next_cycle"], 2)                      # the others stay in the inbox
         self.assertEqual(r["perf"]["left_for_next_cycle"], 2)
         self.drop_and_cycle([])                                            # next cycle
         self.assertEqual(len(self.teams.opened), 4)
@@ -114,7 +124,7 @@ class TestSafety(Base):
                 raise RuntimeError("could not confirm that the chat is open (the title and the selection did not agree); nothing was read " + BODY)
 
         self.teams = Cannot()
-        self.drop_and_post([self.ev(1, "これは何ですか")])
+        self.drop_and_post([self.ev(1, Q)])
         rec = self.decisions()[0]
         self.assertEqual(rec["read_full"]["state"], "preview_only")
         posts = "\n".join(t for t, _ in self.teams.posts)
@@ -129,7 +139,7 @@ class TestSafety(Base):
     def test_text_that_does_not_fit_the_preview_is_not_used(self):
         self.enable()
         self.teams.chat_messages = {"19:c1@thread.v2": ["まったく別のチャットの内容です"]}
-        self.drop_and_post([self.ev(1, "これは何ですか")])
+        self.drop_and_post([self.ev(1, Q)])
         self.assertEqual(self.decisions()[0]["read_full"]["state"], "preview_only")
         self.assertIn("別のチャット", self.decisions()[0]["read_full"]["why"])
 
@@ -230,9 +240,9 @@ class TestDedupAndMerge(Base):
 
     def test_a_follow_up_in_the_same_chat_joins_the_waiting_item(self):
         chat = "19:same@thread.v2"
-        cli.process(self.ev(1, "これは何ですか", chat), GRAPHS, StubBackend(), self.out, PBS, dedup=True)
+        cli.process({**self.ev(1, "これは何ですか", chat), "author": "田中"}, GRAPHS, StubBackend(), self.out, PBS, dedup=True)
         notify.notify(self.out, self.teams, send=True)
-        cli.process(self.ev(2, "あと、期限は今週です", chat), GRAPHS, StubBackend(), self.out, PBS, dedup=True)
+        cli.process({**self.ev(2, "あと、期限は今週です", chat), "author": "田中"}, GRAPHS, StubBackend(), self.out, PBS, dedup=True)
         ap = notify.Approvals(self.out)
         self.assertEqual(len(ap.data["items"]), 1)                        # not a second item
         item = next(iter(ap.data["items"].values()))
@@ -241,7 +251,45 @@ class TestDedupAndMerge(Base):
         self.teams.posts.clear()
         notify.notify(self.out, self.teams, send=True)
         self.assertIn("続きのメッセージ", self.teams.posts[0][0])
-        self.assertEqual(len(self.decisions()), 1)
+        self.assertEqual(len(self.decisions()), 2)                        # judged, not skipped; only the item is shared
+
+    def test_a_follow_up_is_still_judged_when_it_joins(self):
+        chat = "19:same@thread.v2"
+        cli.process({**self.ev(1, "これは何ですか", chat), "author": "田中"}, GRAPHS, StubBackend(), self.out, PBS, dedup=True)
+        notify.notify(self.out, self.teams, send=True)
+        res = cli.process({**self.ev(2, "あと、期限は今週です", chat), "author": "田中"}, GRAPHS, StubBackend(), self.out, PBS, dedup=True)
+        self.assertEqual(len(res), 1)                                     # the judge was asked
+        self.assertTrue(res[0].get("merged"))
+
+    def test_another_person_in_the_same_group_chat_is_a_matter_of_its_own(self):
+        chat = "19:group@thread.v2"
+        cli.process({**self.ev(1, "これは何ですか", chat), "author": "田中"}, GRAPHS, StubBackend(), self.out, PBS, dedup=True)
+        notify.notify(self.out, self.teams, send=True)
+        res = cli.process({**self.ev(2, "本番でエラーが出て、全ユーザーがログインできません", chat), "author": "鈴木"},
+                          GRAPHS, StubBackend(), self.out, PBS, dedup=True)
+        self.assertFalse(res[0].get("merged"))
+        self.assertTrue(res[0]["notify"])                                 # an incident: reaches the PM, is filed as a bug
+        self.assertEqual([a["type"] for a in res[0]["actions"]], ["ado.create"])
+        self.assertEqual(len(notify.Approvals(self.out).data["items"]), 1)   # the earlier item is not touched
+        self.assertNotIn("followups", next(iter(notify.Approvals(self.out).data["items"].values()))["record"])
+
+    def test_a_thanks_from_the_same_person_joins_the_waiting_item(self):
+        chat = "19:same@thread.v2"
+        cli.process({**self.ev(1, "これは何ですか", chat), "author": "田中"}, GRAPHS, StubBackend(), self.out, PBS, dedup=True)
+        notify.notify(self.out, self.teams, send=True)
+        res = cli.process({**self.ev(2, "ありがとうございます", chat), "author": "田中"}, GRAPHS, StubBackend(), self.out, PBS, dedup=True)
+        self.assertTrue(_no_action(res[0]))
+        self.assertTrue(res[0].get("merged"))
+        item = next(iter(notify.Approvals(self.out).data["items"].values()))
+        self.assertEqual(item["record"]["followups"][0]["text"], "ありがとうございます")
+
+    def test_a_different_destination_from_the_same_person_is_a_matter_of_its_own(self):
+        chat = "19:same@thread.v2"
+        cli.process({**self.ev(1, "これは何ですか", chat), "author": "田中"}, GRAPHS, StubBackend(), self.out, PBS, dedup=True)
+        notify.notify(self.out, self.teams, send=True)
+        res = cli.process({**self.ev(2, "本番でエラーが出て、全ユーザーがログインできません", chat), "author": "田中"},
+                          GRAPHS, StubBackend(), self.out, PBS, dedup=True)
+        self.assertFalse(res[0].get("merged"))                            # it notifies: never folded into the earlier item
 
 
 class TestBridgeCall(unittest.TestCase):
@@ -252,30 +300,141 @@ class TestBridgeCall(unittest.TestCase):
         run.assert_called_once_with("-Action", "readchat", "-ChatId", "19:abc@thread.v2", "-Count", "4")
 
 
+def _ps_functions(text):
+    """{name: body} of every function in the script (brace matching; comments are not part of the body)."""
+    out = {}
+    for m in re.finditer(r"(?m)^function ([\w-]+)", text):
+        i = text.index("{", m.end())
+        depth, j = 0, i
+        while j < len(text):
+            depth += {"{": 1, "}": -1}.get(text[j], 0)
+            j += 1
+            if depth == 0:
+                break
+        out[m.group(1)] = re.sub(r"(?m)(^|\s)#[^\n]*", "", text[i:j])
+    return out
+
+
 class TestScriptGuards(unittest.TestCase):
     """The script cannot run here; the rules it must keep are checked in its text."""
 
     @classmethod
     def setUpClass(cls):
         cls.text = (ROOT / "tools" / "teams-self.ps1").read_text(encoding="utf-8-sig")
-        i = cls.text.index("if ($Action -eq 'readchat')")
-        cls.block = cls.text[i:i + 2500]
+        i = cls.text.index("if ($Action -eq 'readchat') {\n")
+        j = cls.text.index("if ($Action -eq 'chats') {")
+        cls.block = cls.text[i:j]
+        cls.funcs = _ps_functions(cls.text)
 
-    def test_it_never_touches_the_input_box_or_sends(self):
-        for bad in ("SendKeys", "Send-Box", "Clear-OurBox", "Paste", "SetValue", "Get-Box"):
-            self.assertNotIn(bad, self.block)
+    @classmethod
+    def block_text(cls):
+        cls.funcs_text()
+        return re.sub(r"(?m)(^|\s)#[^\n]*", "", cls.block)
 
-    def test_it_confirms_by_title_and_selection_and_goes_back(self):
-        self.assertIn("Select-Chat", self.block)
-        self.assertIn("Test-ChatOpen", self.text)
-        i = self.text.index("function Test-ChatOpen")
-        self.assertIn(".Contains(\"| $title |\")", self.text[i:i + 700])     # the title
-        self.assertIn("Test-Selected", self.text[i:i + 900])                  # the selection
-        self.assertIn("returned", self.block)
+    @classmethod
+    def funcs_text(cls):
+        if not hasattr(cls, "funcs"):
+            cls.setUpClass()
+        return cls.funcs
+
+    @classmethod
+    def reachable_text(cls):
+        cls.funcs_text()
+        return cls.reachable(cls)
+
+    def reachable(self):
+        """readchat's own text and every function it calls, directly or through another (the whole of it)."""
+        seen, todo, body = set(), [re.sub(r"(?m)(^|\s)#[^\n]*", "", self.block)], []
+        while todo:
+            t = todo.pop()
+            body.append(t)
+            for name, fn in self.funcs.items():
+                if name not in seen and re.search(r"(?<![\w-])" + re.escape(name) + r"(?![\w-])", t):
+                    seen.add(name)
+                    todo.append(fn)
+        return seen, "\n".join(body)
+
+    def test_readchat_and_everything_it_calls_never_touch_the_input_box_or_send(self):
+        seen, body = self.reachable()
+        self.assertTrue({"Select-Chat", "Restore-Original", "Select-Notes", "Get-ChatMessages", "Test-ChatOpen", "Assert-Foreground"} <= seen, seen)
+        for bad in ("SendKeys", "SendWait", "SetFocus", "Clipboard", "SetValue", "ValuePattern", "TextPattern", "Paste",
+                    "Get-Box", "Send-Box", "Clear-OurBox", "Test-BoxFocused", "Open-SelfChat", "new-message"):
+            self.assertNotIn(bad, body, f"{bad} is reachable from readchat")
+        self.assertNotIn("Open-SelfChat", seen)
+
+    def test_it_confirms_by_title_and_selection_and_a_title_alone_is_not_enough(self):
+        self.assertIn(".Contains(\"| $title |\")", self.funcs["Test-ChatOpen"])     # the title
+        self.assertIn("Test-Selected", self.funcs["Test-ChatOpen"])                 # the selection
+        self.assertIn("'title'", self.funcs["Test-ChatOpen"])                        # only the title agreed: reported as such
+        self.assertIn("$state -eq 'title' -and -not $matched", self.block)          # ... then the text read must match the preview
+        self.assertIn("Test-PreviewMatch", self.block)
+        self.assertIn(".Length -lt 12", self.block)                                  # a short preview cannot confirm anything there
+        self.assertIn("$head.Length -lt 12", self.funcs["Test-PreviewMatch"])         # the same minimum on every route
+        self.assertIn("(.{12,})", self.funcs["Test-PreviewMatch"])                   # ... also after "name:" is taken off
+        self.assertNotIn("-not $origId -and $head.Length", self.block)                # not only on a screen that reports no selection
+
+    def test_every_way_out_of_readchat_puts_the_chat_back(self):
+        blk = re.sub(r"(?m)(^|\s)#[^\n]*", "", self.block)
+        self.assertIn("if ($script:InRead) { throw", self.funcs["Fail"])            # a failure does not end the script
+        self.assertIn("$script:InRead = $true", blk)
+        try_end = blk.index("} catch {")
+        restore_at = blk.index("Restore-Original", try_end)
+        self.assertLess(try_end, restore_at)                                         # after the try / catch, whatever happened
+        self.assertNotIn("exit", blk[:restore_at])                                   # nothing leaves before it
+        self.assertNotIn("Restore-Original", blk[:try_end])                          # and it is not only on the success path
+        self.assertIn("Restore-Foreground", blk[restore_at:])
+        for k in ("restore", "returned", "hadOriginal"):                            # reported on failure too
+            self.assertIn(k + " = ", blk[blk.index("if ($errMsg)"):blk.index("exit 2")])
+
+    def test_the_original_chat_is_remembered_by_selection_and_by_title_and_the_self_chat_is_the_fallback(self):
+        self.assertIn("Get-SelectedChatId", self.block)
+        self.assertIn("Get-WinChatTitle", self.block)
+        body = self.funcs["Restore-Original"]
+        self.assertLess(body.index("Test-OrigOpen"), body.index("Select-Chat"))
+        self.assertLess(body.index("Select-Chat"), body.index("Select-Notes"))       # the original first, the self chat after it
+        self.assertIn("'failed'", body)                                              # neither worked: reported (the PC is notified)
+
+    def test_the_keyboard_and_mouse_are_checked_before_each_operation(self):
+        sc = self.funcs["Select-Chat"]
+        self.assertIn("Assert-Idle", sc)
+        self.assertLess(sc.index("Assert-Idle"), sc.index("ScrollIntoView"))
+        loop = sc[sc.index("foreach ($how"):]
+        self.assertLess(loop.index("Assert-Idle"), loop.index("switch ($how)"))      # before select, invoke and click
+        self.assertLess(loop.index("Assert-Idle"), loop.index("Assert-Foreground"))
+        self.assertIn("Fail", self.funcs["Assert-Idle"])
+        self.assertIn("Test-UserIdle", self.funcs["Select-Notes"])
+        self.assertIn("Wait-IdleSoft", self.funcs["Restore-Original"])
+        self.assertIn("Mark-OwnInput", sc)                                           # our own click is not mistaken for the person
+        self.assertIn(fulltext.BUSY, self.funcs["Assert-Idle"])                       # the words the Python side recognises
+
+    def test_the_window_the_person_was_in_is_brought_back(self):
+        self.assertIn("$script:PrevFg = $cur", self.funcs["Assert-Foreground"])
+        self.assertIn("SetForegroundWindow($script:PrevFg)", self.funcs["Restore-Foreground"])
 
     def test_it_takes_the_lock_and_waits_for_a_quiet_keyboard(self):
-        self.assertIn("'readchat'", self.text.split("Enter-UiLock }")[0].split("\n")[-1])
-        self.assertIn("Wait-UserIdle", self.text.split("Enter-UiLock }")[1].split("\n")[1])
+        lock = next(l for l in self.text.splitlines() if l.startswith("if ($Action -in 'open', 'post', 'send', 'read', 'readchat')"))
+        self.assertIn("Enter-UiLock", lock)
+        idle = next(l for l in self.text.splitlines() if l.startswith("if ($Action -in 'post', 'send')"))
+        self.assertIn("Wait-UserIdle", idle)
+        self.assertNotIn("Wait-UserIdle", self.block)             # readchat does not wait for the person: it checks and postpones
+
+    def test_the_self_chat_opener_sends_enter_only_when_a_list_item_has_the_focus(self):
+        body = self.funcs["Open-SelfChat"]
+        enter = body[body.index("'enter' {"):]
+        self.assertLess(enter.index("Test-ListItemFocused"), enter.index("SendWait"))
+        f = self.funcs["Test-ListItemFocused"]
+        self.assertIn("new-message-*", f)
+        self.assertIn("return $false", f)
+        self.assertIn("ListItem", f)
+
+    def test_the_script_parses(self):
+        if not __import__("shutil").which("powershell"):
+            self.skipTest("PowerShell not available")
+        for name in ("teams-self.ps1", "check.ps1"):
+            cmd = ("& { param($f) $e=$null;$t=$null;[void][System.Management.Automation.Language.Parser]::ParseFile($f,[ref]$t,[ref]$e);"
+                   "if($e){$e|%{$_.Message};exit 1} } '" + str(ROOT / "tools" / name) + "'")
+            r = subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, text=True, timeout=60)
+            self.assertEqual(r.returncode, 0, name)
 
 
 @unittest.skipUnless(__import__("shutil").which("powershell"), "PowerShell not available")
@@ -300,6 +459,671 @@ class TestThroughTheFakeScript(unittest.TestCase):
                     b.readchat("19:none@thread.v2", 2)
                 self.assertIn("nothing was opened", str(cm.exception))
             self.assertEqual(log.read_text(encoding="utf-8-sig").split(), ["19:x@thread.v2"])
+
+    def test_a_failed_read_still_reports_how_the_chat_was_put_back(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "chats.json"
+            f.write_text(json.dumps({"chats": [{"id": "19:y@thread.v2", "kind": "group", "title": "T", "preview": "P…", "time": "09:00",
+                                                 "messages": ["前"], "restore": "self", "error": "could not confirm that the chat is open (the title and the selection did not agree); nothing was read"}]},
+                                    ensure_ascii=False), encoding="utf-8")
+            with mock.patch.dict(os.environ, {"KIMERU_FAKE_CHATS": str(f), "KIMERU_FAKE_CHAT": str(Path(d) / "self.json")}):
+                b = notify.PowerShellBridge(script=ROOT / "tests" / "fake-teams-self.ps1")
+                r = fulltext.Reader(b)({"chat_id": "19:y@thread.v2", "text": Q + "…"})
+        self.assertFalse(r["ok"])
+        self.assertEqual((r["restore"], r["returned"]), ("self", False))
+
+
+class CountingBackend(StubBackend):
+    """The stub judge, counting what it is asked about (by a marker in the text)."""
+
+    def __init__(self):
+        super().__init__()
+        self.texts = []
+
+    def ask(self, state, questions):
+        self.texts.append(str(state.get("text", "")))
+        return super().ask(state, questions)
+
+    def judged(self, marker):
+        return sum(1 for t in self.texts if marker in t)
+
+
+class CountingM365(writer.M365PromptWriter):
+    """No LLM: counts how often a paste-in request (a draft) is written."""
+
+    def __init__(self):
+        self.n = 0
+        self.seen = []
+
+    def request(self, res, event, instruction=None):
+        self.n += 1
+        self.seen.append(event.get("text", ""))
+        return super().request(res, event, instruction)
+
+
+def all_text(*dirs):
+    """Every file under the given folders, as one string (what is left on the disk)."""
+    parts = []
+    for d in dirs:
+        for f in Path(d).rglob("*"):
+            if f.is_file():
+                parts.append(f.read_text(encoding="utf-8", errors="replace"))
+    return "\n".join(parts)
+
+
+def long_text(n=2500):
+    """A long request in which every 100-character stretch has its own marker (so a leak of any part can be found)."""
+    s = "これは何ですか。"
+    i = 0
+    while len(s) < n:
+        s += f"【区間{i:02d}】" + "詳しく言うと、" * 12
+        i += 1
+    return s[:n]
+
+
+class TestPutBackAndRecord(Base):
+    """Whether the chat that was open could be put back is recorded whatever the decision was; a chat that could not be put back
+    is reported on this PC. (The screen work itself is in the script; its text is checked in TestScriptGuards.)"""
+
+    def run_cycle(self, teams, toasts=None, text=Q, **kw):
+        (self.inbox / "a.json").write_text(json.dumps(self.ev(1, text), ensure_ascii=False), encoding="utf-8")
+        return daily.cycle(self.out, self.inbox, GRAPHS, StubBackend(), PBS, cli.process, bridge=teams, send=True,
+                           toaster=(lambda a, b: toasts.append((a, b))) if toasts is not None else (lambda a, b: None), **kw)
+
+    def test_a_chat_that_could_not_be_read_is_recorded_with_how_it_was_put_back(self):
+        self.enable()
+
+        class Failing(FakeTeams):
+            def readchat(self, chat_id, count=5, preview=None):
+                raise notify.BridgeError("could not confirm that the chat is open (the title and the selection did not agree); nothing was read",
+                                         {"restore": "restored", "returned": True, "hadOriginal": True})
+
+        self.run_cycle(Failing())
+        rf = self.decisions()[0]["read_full"]
+        self.assertEqual((rf["state"], rf["returned"], rf["restore"]), ("preview_only", True, "restored"))
+        self.assertNotIn("note", rf)                       # back where it was: nothing to warn about
+
+    def test_a_failure_in_the_middle_is_recorded_too(self):
+        self.enable()
+
+        class Slow(FakeTeams):
+            def readchat(self, chat_id, count=5, preview=None):
+                raise notify.BridgeError("unexpected error while reading the chat (InvalidOperationException)", {"restore": "restored", "returned": True})
+
+        self.run_cycle(Slow())
+        rf = self.decisions()[0]["read_full"]
+        self.assertEqual((rf["state"], rf["returned"]), ("preview_only", True))
+        self.assertEqual(rf["why"], "unexpected error while reading the chat")   # the reason is the script's own fixed text, without its detail
+
+    def test_a_chat_that_could_not_be_put_back_moves_to_the_self_chat_and_the_pc_is_notified(self):
+        self.enable()
+
+        class ToSelf(FakeTeams):
+            def readchat(self, chat_id, count=5, preview=None):
+                r = super().readchat(chat_id, count)
+                return {**r, "returned": False, "restore": "self", "hadOriginal": True}
+
+        teams, toasts = ToSelf(), []
+        teams.chat_messages = {"19:c1@thread.v2": [LONG]}
+        self.run_cycle(teams, toasts, LONG[:60])
+        rf = self.decisions()[0]["read_full"]
+        self.assertEqual((rf["state"], rf["returned"], rf["restore"]), ("full", False, "self"))     # recorded although the decision was made
+        self.assertIn("自分とのチャットへ移しました", rf["note"])
+        self.assertIn("自分とのチャットへ移しました", "\n".join(t for t, _ in teams.posts))
+        told = [t for t in toasts if "チャットの表示" in t[0]]
+        self.assertEqual(len(told), 1)                                                              # the PC is told
+        self.assertIn("自分とのチャット", told[0][1])
+
+    def test_when_even_the_self_chat_cannot_be_opened_the_pc_is_told_to_look(self):
+        self.enable()
+
+        class Lost(FakeTeams):
+            def readchat(self, chat_id, count=5, preview=None):
+                raise notify.BridgeError("the script did not finish in time", {"restore": "failed"})
+
+        toasts = []
+        self.run_cycle(Lost(), toasts)
+        rf = self.decisions()[0]["read_full"]
+        self.assertEqual((rf["state"], rf["returned"], rf["restore"]), ("preview_only", False, "failed"))
+        self.assertIn("戻せませんでした", rf["note"])
+        told = [t for t in toasts if "チャットの表示" in t[0]]
+        self.assertEqual(len(told), 1)
+        self.assertIn("Teams を確認", told[0][1])
+
+    def test_no_notification_when_the_chat_was_put_back(self):
+        self.enable()
+        teams, toasts = FakeTeams(), []
+        teams.chat_messages = {"19:c1@thread.v2": [LONG]}
+        self.run_cycle(teams, toasts, LONG[:60])
+        self.assertEqual([t for t in toasts if "チャットの表示" in t[0]], [])
+
+    def test_the_person_at_the_keyboard_means_nothing_is_done_and_the_file_waits(self):
+        self.enable()
+
+        class Busy(FakeTeams):
+            def readchat(self, chat_id, count=5, preview=None):
+                raise notify.BridgeError("the keyboard / mouse has been in use; stopped (set KIMERU_IDLE_SEC=0 to switch this off)",
+                                         {"restore": "none", "returned": True, "hadOriginal": True})
+
+        r = self.run_cycle(Busy())
+        self.assertEqual(self.decisions(), [])               # not decided from the preview
+        self.assertEqual(r["left_for_next_cycle"], 1)         # it waits for the next cycle
+        self.assertEqual(r["waiting"], 0)
+
+
+class TestShortPreview(Base):
+    def test_a_preview_of_three_characters_is_not_read_and_the_preview_decides(self):
+        self.enable()
+        self.teams.chat_messages = {"19:c1@thread.v2": ["お願いします。この件を確認してください"]}
+        (self.inbox / "a.json").write_text(json.dumps(self.ev(1, "お願い…"), ensure_ascii=False), encoding="utf-8")
+        daily.cycle(self.out, self.inbox, GRAPHS, StubBackend(), PBS, cli.process, bridge=self.teams, send=True, toaster=lambda a, b: None)
+        self.assertEqual(getattr(self.teams, "opened", []), [])          # nothing was opened
+        rf = self.decisions()[0]["read_full"]
+        self.assertEqual(rf["state"], "preview_only")
+        self.assertIn("短く", rf["why"])
+        self.assertIn("プレビューだけで判断しました", "\n".join(t for t, _ in self.teams.posts))
+
+    def test_a_short_preview_matches_almost_any_text_so_it_is_not_accepted(self):
+        self.assertFalse(fulltext._fits("はい…", "はいはい、それはそうですね。ところで別の話です"))
+        self.assertTrue(fulltext._fits("来週のリリースについて確認…", "来週のリリースについて確認したいことがあります"))
+        self.assertTrue(fulltext._fits("田中: 来週のリリースについて確認…", "来週のリリースについて確認したいことがあります"))
+
+    def test_the_minimum_length_is_a_setting(self):
+        text = "お願いします。この件を確認してください、よろしく"      # 24 characters
+        self.teams.chat_messages = {"19:c1@thread.v2": [text + "。以上です"]}
+        self.enable(KIMERU_READ_MIN_PREVIEW="30")                      # stricter than the floor: 24 characters are too few
+        fulltext.Reader(self.teams)(self.ev(1, text + "…"))
+        self.assertEqual(getattr(self.teams, "opened", []), [])
+        self.enable(KIMERU_READ_MIN_PREVIEW="20")
+        fulltext.Reader(self.teams)(self.ev(1, text + "…"))
+        self.assertEqual(self.teams.opened, ["19:c1@thread.v2"])
+
+    def test_the_floor_is_12_characters_whatever_the_setting(self):
+        self.enable(KIMERU_READ_MIN_PREVIEW="2")
+        self.teams.chat_messages = {"19:c1@thread.v2": ["お願いします。この件を確認してください"]}
+        r = fulltext.Reader(self.teams)(self.ev(1, "お願い…"))
+        self.assertFalse(r["ok"])
+        self.assertEqual(getattr(self.teams, "opened", []), [])
+
+
+class TestCutOffByLength(Base):
+    def test_the_preview_length_can_decide_that_a_preview_is_cut(self):
+        self.assertFalse(fulltext.truncated("あ" * 100))                 # the default: the ellipsis only
+        self.enable(KIMERU_PREVIEW_CUT_LEN="80")
+        self.assertTrue(fulltext.truncated("あ" * 80))
+        self.assertFalse(fulltext.truncated("あ" * 79))
+        self.assertTrue(fulltext.truncated("短いが…"))                   # the ellipsis still counts
+
+    def test_a_long_preview_without_a_mark_is_read_when_the_length_says_so(self):
+        self.enable(KIMERU_PREVIEW_CUT_LEN="60")
+        self.teams.chat_messages = {"19:c1@thread.v2": [BODY * 8 + "以上"]}
+        (self.inbox / "a.json").write_text(json.dumps(self.ev(1, (BODY * 8)[:70]), ensure_ascii=False), encoding="utf-8")
+        daily.cycle(self.out, self.inbox, GRAPHS, StubBackend(), PBS, cli.process, bridge=self.teams, send=False)
+        self.assertEqual(self.teams.opened, ["19:c1@thread.v2"])
+
+
+class TestDraftOnceAndBudget(Base):
+    def event_for(self, i, marker):
+        return self.ev(i, f"{marker}番の依頼です。これは何ですか")
+
+    def teams_for(self, ids):
+        t = FakeTeams()
+        t.chat_messages = {f"19:c{i}@thread.v2": [f"{i}番の依頼です。これは何ですか。" + "詳しくは以下の通りです。" * 30] for i in ids}
+        return t
+
+    def test_a_confirmation_for_the_pm_is_drafted_once_even_though_it_was_judged_twice(self):
+        self.enable()
+        w, b = CountingM365(), CountingBackend()
+        self.teams = self.teams_for([1])
+        cli.process(self.event_for(1, 1), GRAPHS, b, self.out, PBS, writer=w, dedup=True, reader=fulltext.Reader(self.teams))
+        self.assertEqual(self.teams.opened, ["19:c1@thread.v2"])         # it was read
+        self.assertEqual(w.n, 1)                                          # the writer was asked once
+        self.assertIn("以下の通り", w.seen[0])                            # ... for the whole text, not the preview
+        base = CountingBackend()
+        cli.process(self.event_for(1, 1), GRAPHS, base, self.out / "b", PBS, writer=CountingM365(), dedup=True)
+        self.assertEqual(len(b.texts), 2 * len(base.texts))               # judged from the preview, then from the whole text
+
+    def test_a_cut_off_preview_is_read_first_and_also_drafted_once(self):
+        self.enable()
+        w = CountingM365()
+        self.teams = self.teams_for([1])
+        cli.process(self.ev(1, "1番の依頼です。これは何ですか…"), GRAPHS, StubBackend(), self.out, PBS, writer=w, dedup=True, reader=fulltext.Reader(self.teams))
+        self.assertEqual(w.n, 1)
+
+    def test_an_event_over_the_opening_limit_is_judged_and_drafted_once_however_many_cycles_it_waits(self):
+        self.enable(KIMERU_READ_MAX_OPEN="1")
+        w, b = CountingM365(), CountingBackend()
+        self.teams = self.teams_for([1, 2, 3, 4])
+        evs = [self.event_for(i, i) for i in (1, 2, 3, 4)]
+        counts = []
+        for cycle_no in range(4):
+            rd = fulltext.Reader(self.teams)                              # a new budget every cycle
+            for e in evs:
+                try:
+                    cli.process(e, GRAPHS, b, self.out, PBS, writer=w, dedup=True, reader=rd)
+                except fulltext.BudgetExhausted:
+                    pass
+            counts.append((b.judged("4番の依頼"), sum(1 for t in w.seen if "4番の依頼" in t)))
+        # event 4 waited in cycles 1, 2 and 3: one judgment (the preview) and no draft; the fourth cycle reads it: the whole
+        # text is judged and drafted, once
+        self.assertEqual(counts[0], (1, 0))
+        self.assertEqual(counts[1], (1, 0))
+        self.assertEqual(counts[2], (1, 0))
+        self.assertEqual(counts[3], (2, 1))
+        self.assertEqual(len(self.decisions()), 4)
+        self.assertEqual(w.n, 4)                                          # each event drafted once
+        self.assertFalse((self.out / "read_pending.json").exists() and json.loads((self.out / "read_pending.json").read_text(encoding="utf-8")))
+
+    def test_the_pending_judgments_are_not_kept_forever(self):
+        pend = cli._PreviewJudgments(self.out)
+        pend.put("k", {"a": 1})
+        self.assertEqual(pend.get("k"), {"a": 1})
+        pend.data["k"]["t"] -= 3 * 24 * 3600
+        self.assertIsNone(pend.get("k"))
+
+    def test_a_limit_of_zero_means_the_preview_decides_and_nothing_waits(self):
+        for key in ("KIMERU_READ_MAX_OPEN", "KIMERU_READ_BUDGET"):
+            with self.subTest(key):
+                self.enable(**{key: "0"})
+                self.teams = self.teams_for([1])
+                out = self.out / key
+                res = cli.process(self.event_for(1, 1), GRAPHS, StubBackend(), out, PBS, dedup=True, reader=fulltext.Reader(self.teams))
+                self.assertEqual(getattr(self.teams, "opened", []), [])
+                self.assertEqual(len(res), 1)                              # decided (not left for the next cycle)
+                self.assertEqual(res[0]["read_full"]["state"], "preview_only")
+                self.assertNotIn("returned", res[0]["read_full"])          # nothing was opened, so nothing to put back
+                self.assertFalse(res[0].get("merged"))
+                del os.environ[key]
+
+
+class TestNoFullTextLeftBehind(Base):
+    def setUp(self):
+        super().setUp()
+        self.long = long_text(2500)
+        self.marks = {f"【区間{i:02d}】": self.long.index(f"【区間{i:02d}】") for i in range(20) if f"【区間{i:02d}】" in self.long}
+
+    def flow(self):
+        self.enable()
+        self.teams.chat_messages = {"19:c1@thread.v2": [self.long]}
+        w = writer.M365PromptWriter()
+        cli.process(self.ev(1, self.long[:70] + "…"), GRAPHS, StubBackend(), self.out, PBS, writer=w, dedup=True, reader=fulltext.Reader(self.teams))
+        return notify.notify(self.out, self.teams, send=True)
+
+    def test_a_2500_character_text_is_in_no_jsonl_file_and_the_request_still_carries_it(self):
+        posted = self.flow()
+        self.assertEqual(len(posted), 1)
+        late = next(m for m, at in self.marks.items() if 300 < at < 1500)      # a stretch beyond the excerpt (200 characters)
+        for f in Path(self.out).rglob("*.jsonl"):
+            self.assertNotIn(late, f.read_text(encoding="utf-8"), f.name)
+        approvals = (self.out / "approvals.json").read_text(encoding="utf-8")
+        self.assertNotIn(late, approvals)                                       # the record holds the excerpt
+        self.assertIn(late, (self.out / "full_text.json").read_text(encoding="utf-8"))   # the whole text waits here, apart
+        request = next(t for t, _ in self.teams.posts if "Copilot 用" in t)
+        self.assertIn(late, request)                                            # what the person pastes into Copilot has the whole text
+
+    def test_after_the_approval_no_file_holds_any_part_of_it(self):
+        self.flow()
+        n = next(iter(notify.Approvals(self.out).data["items"]))
+        self.teams.timeline += [f"R:OK {n}"]
+        self.teams.replies = [f"OK {n}"]
+        notify.collect(self.out, self.teams)
+        left = all_text(self.out, self.dir.name)
+        for mark, at in self.marks.items():
+            if at > 250:                       # the excerpt keeps the first 200 characters, nothing else
+                self.assertNotIn(mark, left, mark)
+        self.assertIsNone(fulltext.load(self.out, next(iter(notify.Approvals(self.out).data["items"].values()))["key"]))
+
+
+class TestKeepPeriod(Base):
+    def wait_for_the_pm(self):
+        self.enable()
+        self.teams.chat_messages = {"19:c1@thread.v2": [LONG]}
+        (self.inbox / "a.json").write_text(json.dumps(self.ev(1, LONG[:60] + "…"), ensure_ascii=False), encoding="utf-8")
+        daily.cycle(self.out, self.inbox, GRAPHS, StubBackend(), PBS, cli.process, bridge=self.teams, send=True, toaster=lambda a, b: None)
+        return next(iter(notify.Approvals(self.out).data["items"].values()))["key"]
+
+    def test_the_full_text_of_a_waiting_item_is_deleted_after_seven_days(self):
+        key = self.wait_for_the_pm()
+        self.assertIsNotNone(fulltext.load(self.out, key))
+        soon = datetime.now(timezone.utc) + timedelta(days=6)
+        self.assertEqual(fulltext.purge(self.out, now=soon), [])
+        self.assertIsNotNone(fulltext.load(self.out, key, now=soon))
+        later = datetime.now(timezone.utc) + timedelta(days=8)
+        self.assertIsNone(fulltext.load(self.out, key, now=later))            # treated as gone at once
+        self.assertEqual(fulltext.purge(self.out, now=later), [key])
+        self.assertFalse((self.out / "full_text.json").exists() or (self.out / "full_text.json.bak").exists())   # no copy is left
+        rec = next(iter(notify.Approvals(self.out).data["items"].values()))["record"]
+        self.assertEqual(rec["read_full"]["state"], "preview_only")           # decided from the preview from now on
+        self.assertIn("保存期限", rec["read_full"]["why"])
+        self.teams.posts.clear()
+        rec2 = dict(rec)
+        self.assertIn("プレビューだけで判断しました", notify.format_post(1, rec2, fulltext.load(self.out, key)))
+
+    def test_the_period_is_a_setting_and_the_daily_cycle_does_the_deleting(self):
+        key = self.wait_for_the_pm()
+        data = json.loads((self.out / "full_text.json").read_text(encoding="utf-8"))
+        data[key]["at"] = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat(timespec="seconds")
+        (self.out / "full_text.json").write_text(json.dumps(data), encoding="utf-8")
+        self.assertIsNotNone(fulltext.load(self.out, key))                     # 3 days: within 7
+        self.enable(KIMERU_FULL_TEXT_KEEP_DAYS="2")
+        r = daily.cycle(self.out, self.inbox, GRAPHS, StubBackend(), PBS, cli.process, bridge=self.teams, send=False)
+        self.assertEqual(r.get("full_text_purged"), 1)
+        self.assertIsNone(fulltext.load(self.out, key))
+
+    def test_a_full_text_entry_without_a_date_does_not_stay_forever(self):
+        fulltext.save(self.out, "k", {"text": "t"})
+        data = json.loads((self.out / "full_text.json").read_text(encoding="utf-8"))
+        del data["k"]["at"]
+        (self.out / "full_text.json").write_text(json.dumps(data), encoding="utf-8")
+        self.assertIsNone(fulltext.load(self.out, "k"))
+        self.assertEqual(fulltext.purge(self.out), ["k"])
+
+
+class TestRedraftKeepsTheWholeTextApart(Base):
+    def test_a_redraft_request_holds_the_excerpt_in_the_record_and_the_whole_text_in_full_text_json(self):
+        self.enable()
+        long = long_text(2500)
+        self.teams.chat_messages = {"19:c1@thread.v2": [long]}
+        w = writer.M365PromptWriter()
+        cli.process(self.ev(1, long[:70] + "…"), GRAPHS, StubBackend(), self.out, PBS, writer=w, dedup=True, reader=fulltext.Reader(self.teams))
+        notify.notify(self.out, self.teams, send=True)
+        ap = notify.Approvals(self.out)
+        it = next(iter(ap.data["items"].values()))
+        late = "【区間05】"
+        self.assertIn(late, long)
+        notify._redraft(it, "もっと短く", w, self.out)
+        ap.save()
+        self.assertNotIn(late, (self.out / "approvals.json").read_text(encoding="utf-8"))
+        self.assertIn(late, (self.out / "full_text.json").read_text(encoding="utf-8"))
+
+
+class TestBriefMentionsWhatWasOpened(Base):
+    def test_a_chat_opened_but_not_read_and_a_chat_not_put_back_are_in_the_brief(self):
+        self.enable()
+
+        class Lost(FakeTeams):
+            def readchat(self, chat_id, count=5, preview=None):
+                raise notify.BridgeError("the script did not finish in time", {"restore": "failed"})
+
+        (self.inbox / "a.json").write_text(json.dumps(self.ev(1, "ありがとうございました。またよろ…"), ensure_ascii=False), encoding="utf-8")
+        daily.cycle(self.out, self.inbox, GRAPHS, StubBackend(), PBS, cli.process, bridge=Lost(), send=False)
+        text, _ = brief.build(self.out, StubBackend())
+        self.assertIn("開いて読みましたが、対応は不要でした", text)                    # it was opened, so it is read in Teams now
+        self.assertIn("元へ戻せなかった件が 1 件", text)
+
+
+class TestBridgeErrors(unittest.TestCase):
+    def test_a_failure_of_the_script_carries_what_it_says_about_putting_the_chat_back(self):
+        b = notify.PowerShellBridge()
+        fake = mock.Mock(returncode=2, stdout=json.dumps({"ok": False, "error": "x", "restore": "self", "returned": False}), stderr="")
+        with mock.patch("subprocess.run", return_value=fake):
+            with self.assertRaises(notify.BridgeError) as cm:
+                b.readchat("19:abc@thread.v2", 3, preview="来週のリリースについて")
+        self.assertEqual(cm.exception.data["restore"], "self")
+
+    def test_a_script_that_timed_out_could_not_put_the_chat_back(self):
+        import subprocess as sp
+        b = notify.PowerShellBridge()
+        with mock.patch("subprocess.run", side_effect=sp.TimeoutExpired("x", 300)):
+            with self.assertRaises(notify.BridgeError) as cm:
+                b.readchat("19:abc@thread.v2", 3)
+        self.assertEqual(cm.exception.data["restore"], "failed")
+
+    def test_the_start_of_the_preview_is_passed_to_the_script(self):
+        b = notify.PowerShellBridge()
+        with mock.patch.object(b, "_run", return_value={"ok": True, "messages": []}) as run:
+            b.readchat("19:abc@thread.v2", 4, preview="来週のリリース")
+        run.assert_called_once_with("-Action", "readchat", "-ChatId", "19:abc@thread.v2", "-Count", "4", "-Preview", "来週のリリース")
+
+    def test_the_reader_passes_only_the_start_of_the_preview(self):
+        seen = {}
+
+        class Spy(FakeTeams):
+            def readchat(self, chat_id, count=5, preview=None):
+                seen["preview"] = preview
+                return super().readchat(chat_id, count)
+
+        spy = Spy()
+        spy.chat_messages = {"19:c1@thread.v2": ["田中: 来週のリリースについて確認したいことがあります。よろしくお願いします。"]}
+        r = fulltext.Reader(spy)({"chat_id": "19:c1@thread.v2", "text": "田中: 来週のリリースについて確認したいことがあります。よろしくお願いします。…"})
+        self.assertTrue(r["ok"])
+        self.assertLessEqual(len(seen["preview"]), 40)
+        self.assertNotIn("…", seen["preview"])
+
+
+class TestNotWhenThePersonIsWorking(Base):
+    """Teams in front / the focus in an input box: nothing is opened, the event waits (the script checks it read only, before anything)."""
+
+    def in_use_teams(self):
+        class InUse(FakeTeams):
+            def readchat(self, chat_id, count=5, preview=None):
+                self.opened = getattr(self, "opened", []) + [chat_id]
+                raise notify.BridgeError("Teams is in use (it is in front, or an input box has the focus); nothing was opened",
+                                         {"restore": "none", "returned": True, "hadOriginal": False})
+        return InUse()
+
+    def run_cycle(self, teams, toasts=None, text=Q):
+        (self.inbox / "a.json").write_text(json.dumps(self.ev(1, text), ensure_ascii=False), encoding="utf-8")
+        return daily.cycle(self.out, self.inbox, GRAPHS, StubBackend(), PBS, cli.process, bridge=teams, send=True,
+                           toaster=(lambda a, b: toasts.append((a, b))) if toasts is not None else (lambda a, b: None))
+
+    def test_teams_in_front_or_the_focus_in_an_input_box_postpones_and_decides_nothing(self):
+        self.enable()
+        toasts = []
+        r = self.run_cycle(self.in_use_teams(), toasts)
+        self.assertEqual(self.decisions(), [])
+        self.assertEqual((r["left_for_next_cycle"], r["waiting"]), (1, 0))
+        self.assertEqual([t for t in toasts if "チャットの表示" in t[0]], [])      # nothing was changed: no "may be left open" notice
+
+    def test_the_reader_raises_deferred_for_it(self):
+        self.enable()
+        with self.assertRaises(fulltext.Deferred):
+            fulltext.Reader(self.in_use_teams())(self.ev(1, Q + "…"))
+
+    def test_the_script_checks_it_before_it_touches_anything(self):
+        blk = TestScriptGuards.block_text()
+        self.assertLess(blk.index("Test-TeamsInUse"), blk.index("Show-ChatApp"))
+        self.assertLess(blk.index("Test-TeamsInUse"), blk.index("Select-Chat"))
+        self.assertLess(blk.index("Assert-Idle"), blk.index("Show-ChatApp"))
+        self.assertIn(fulltext.IN_USE, blk)
+
+
+class TestSameTitleAndShortMatch(Base):
+    def test_a_chat_with_the_same_title_is_not_read_and_the_self_chat_is_opened(self):
+        self.enable()
+
+        class SameTitle(FakeTeams):
+            def readchat(self, chat_id, count=5, preview=None):
+                self.opened = getattr(self, "opened", []) + [chat_id]
+                raise notify.BridgeError("the chat that is open has the same title as the chat to read, so they cannot be told apart on this screen; nothing was read",
+                                         {"restore": "self", "returned": False, "hadOriginal": True})
+
+        teams, toasts = SameTitle(), []
+        (self.inbox / "a.json").write_text(json.dumps(self.ev(1, Q), ensure_ascii=False), encoding="utf-8")
+        daily.cycle(self.out, self.inbox, GRAPHS, StubBackend(), PBS, cli.process, bridge=teams, send=True, toaster=lambda a, b: toasts.append((a, b)))
+        rf = self.decisions()[0]["read_full"]
+        self.assertEqual((rf["state"], rf["restore"]), ("preview_only", "self"))
+        self.assertIn("same title", rf["why"])                        # the script's own fixed sentence, no chat text
+        self.assertIn("自分とのチャットへ移しました", rf["note"])
+        self.assertEqual(len([t for t in toasts if "チャットの表示" in t[0]]), 1)
+
+    def test_the_script_does_not_trust_the_title_when_the_list_reports_no_selection(self):
+        blk = TestScriptGuards.block_text()
+        self.assertIn("$origTitle -eq $title", blk)
+        self.assertLess(blk.index("$origTitle -eq $title"), blk.index("Select-Chat"))
+        self.assertIn("Restore-Original $null ''", blk)                                # straight to the self chat
+
+    def test_a_six_character_match_does_not_read_and_twelve_does(self):
+        self.enable(KIMERU_READ_MIN_PREVIEW="6")                                      # the setting cannot go below 12
+        self.teams.chat_messages = {"19:c1@thread.v2": ["来週の会議の件について確認です"]}
+        self.assertFalse(fulltext.Reader(self.teams)(self.ev(1, "来週の会議の件…"))["ok"])      # 7 characters
+        self.assertEqual(getattr(self.teams, "opened", []), [])
+        self.assertTrue(fulltext.Reader(self.teams)(self.ev(1, "来週の会議の件について確認です…"))["ok"])   # 15 characters
+        self.assertEqual(self.teams.opened, ["19:c1@thread.v2"])
+
+    def test_after_the_name_is_taken_off_the_match_is_still_12_characters(self):
+        self.assertFalse(fulltext._fits("田中: 来週の会議の件…", "来週の会議の件について確認です"))          # 7 characters remain
+        self.assertTrue(fulltext._fits("田中: 来週の会議の件について確認…", "来週の会議の件について確認です"))
+        self.assertIn("(.{12,})", TestScriptGuards.funcs_text()["Test-PreviewMatch"])
+
+
+class TestEveryWayOutGoesThroughTheSelfChat(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = self.tmp.name
+        clean = {k: v for k, v in os.environ.items() if not k.startswith("KIMERU_")}
+        clean.update({"KIMERU_STATE_DIR": self.dir, "KIMERU_READ_FULL": "1"})
+        self.env = mock.patch.dict(os.environ, clean, clear=True)
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def test_a_time_out_or_an_interruption_while_putting_the_original_back_still_tries_the_self_chat(self):
+        body = TestScriptGuards.funcs_text()["Restore-Original"]
+        tried = body[body.index("Select-Chat"):body.index("Select-Notes")]
+        self.assertIn("} catch {}", tried)                                              # Select-Chat may throw (Test-Deadline, Assert-Idle): caught here
+        self.assertNotIn("return 'failed'", tried)                                      # ... and does not end the function
+
+    def test_a_fixed_link_that_brings_teams_to_the_front_is_put_back_too(self):
+        sn = TestScriptGuards.funcs_text()["Select-Notes"]
+        self.assertLess(sn.index("Save-Foreground"), sn.index("Start-Process"))
+        self.assertIn("SetForegroundWindow($script:PrevFg)", TestScriptGuards.funcs_text()["Restore-Foreground"])
+        blk = TestScriptGuards.block_text()
+        self.assertLess(blk.index("Restore-Original", blk.index("} catch {")), blk.index("Restore-Foreground"))
+
+    def test_nothing_changed_means_no_may_be_left_open(self):
+        f = TestScriptGuards.funcs_text()["Restore-Original"]
+        self.assertLess(f.index("Test-OrigOpen"), f.index("Wait-IdleSoft"))            # read only, before waiting for a quiet keyboard
+        self.assertIn("$script:Acted", TestScriptGuards.block_text())                   # nothing operated: 'none'
+        self.assertIn("$script:Acted = $true", TestScriptGuards.funcs_text()["Select-Chat"])
+
+    def stuck_teams(self):
+        class Stuck(FakeTeams):
+            def readchat(self, chat_id, count=5, preview=None):
+                r = super().readchat(chat_id, count)
+                return {**r, "returned": False, "restore": "failed", "hadOriginal": True}
+        t = Stuck()
+        t.chat_messages = {"19:c1@thread.v2": [LONG]}
+        return t
+
+    def cycle(self, teams, toaster, env=None, send=True):
+        with mock.patch.dict(os.environ, env or {}):
+            config.apply([])
+            inbox = Path(self.dir) / "inbox"
+            inbox.mkdir(exist_ok=True)
+            (inbox / "a.json").write_text(json.dumps({"kind": "teams.chat", "id": "1", "chat_id": "19:c1@thread.v2", "author": "相手1",
+                                                      "text": LONG[:60], "mentions_me": True}, ensure_ascii=False), encoding="utf-8")
+            return daily.cycle(Path(self.dir) / "out", inbox, GRAPHS, StubBackend(), PBS, cli.process, bridge=teams, send=send, toaster=toaster)
+
+    def test_the_notice_comes_with_the_toast_switched_off_as_a_post_to_the_self_chat(self):
+        toasts, teams = [], self.stuck_teams()
+        self.cycle(teams, lambda a, b: toasts.append((a, b)), {"KIMERU_TOAST": "0"})
+        self.assertEqual([t for t in toasts if "チャットの表示" in t[0]], [])          # the PC notification is off
+        self.assertEqual(len([t for t, _ in teams.posts if t.startswith("[kimeru 通知]") and "開いたままの可能性" in t]), 1)
+
+    def test_the_notice_falls_back_to_the_self_chat_when_the_pc_notification_fails(self):
+        teams = self.stuck_teams()
+
+        def boom(a, b):
+            raise OSError("no notification")
+        self.cycle(teams, boom, {"KIMERU_TOAST": "1"})
+        self.assertEqual(len([t for t, _ in teams.posts if t.startswith("[kimeru 通知]") and "開いたままの可能性" in t]), 1)
+
+    def test_a_cycle_that_does_not_post_only_logs_it(self):
+        teams = self.stuck_teams()
+        self.cycle(teams, lambda a, b: None, {"KIMERU_TOAST": "0"}, send=False)
+        self.assertEqual([t for t, _ in teams.posts if t.startswith("[kimeru 通知]")], [])
+        self.assertIn("read_restore", (Path(self.dir) / "out" / "daily.log.jsonl").read_text(encoding="utf-8"))
+
+
+class TestPuttingOff(Base):
+    def busy_teams(self):
+        class Busy(FakeTeams):
+            def readchat(self, chat_id, count=5, preview=None):
+                self.opened = getattr(self, "opened", []) + [chat_id]
+                raise notify.BridgeError("Teams is in use (it is in front, or an input box has the focus); nothing was opened",
+                                         {"restore": "none", "returned": True, "hadOriginal": False})
+        return Busy()
+
+    def attempt(self, teams, ev=None):
+        try:
+            return cli.process(ev or self.ev(1, Q), GRAPHS, StubBackend(), self.out, PBS, dedup=True, reader=fulltext.Reader(teams))
+        except fulltext.BudgetExhausted:
+            return None
+
+    def test_after_the_limit_the_preview_decides_and_nothing_is_opened_again(self):
+        self.enable(KIMERU_READ_MAX_DEFER="3")
+        teams = self.busy_teams()
+        for _ in range(3):
+            self.assertIsNone(self.attempt(teams))                      # put off three times
+        self.assertEqual(len(teams.opened), 3)
+        res = self.attempt(teams)
+        self.assertEqual(len(teams.opened), 3)                          # the fourth try does not open
+        self.assertEqual(len(res), 1)
+        self.assertEqual(res[0]["read_full"]["state"], "preview_only")
+        self.assertIn("延期が上限", res[0]["read_full"]["why"])
+        pending = self.out / "read_pending.json"
+        self.assertFalse(pending.exists() and json.loads(pending.read_text(encoding="utf-8")))
+
+    def test_the_limit_also_holds_for_a_cut_off_preview(self):
+        self.enable(KIMERU_READ_MAX_DEFER="2")
+        teams = self.busy_teams()
+        ev = self.ev(1, BODY + "…")
+        self.assertIsNone(self.attempt(teams, ev))
+        self.assertIsNone(self.attempt(teams, ev))
+        res = self.attempt(teams, ev)
+        self.assertEqual(len(teams.opened), 2)
+        self.assertEqual(res[0]["read_full"]["state"], "preview_only")
+
+    def test_the_time_limit_counts_from_the_first_delay(self):
+        pend = cli._PreviewJudgments(self.out)
+        pend.put("k", {"a": 1})
+        first = pend.data["k"]["t"] - 23 * 3600
+        pend.data["k"]["t"] = first                                     # the first delay was 23 hours ago
+        pend.put("k")
+        self.assertEqual(pend.data["k"]["t"], first)                    # a later delay does not move it
+        self.assertEqual(pend.deferrals("k"), 2)
+        self.assertEqual(pend.get("k"), {"a": 1})
+        pend.data["k"]["t"] = first - 2 * 3600
+        self.assertEqual((pend.get("k"), pend.deferrals("k")), (None, 0))
+
+    def test_the_defaults(self):
+        self.assertEqual(fulltext.max_defer(), 12)
+        self.assertEqual(config.value("read_idle_sec"), "30")
+        self.assertEqual(config.value("read_click"), "0")
+        self.assertEqual(config.value("read_min_preview"), "12")
+
+
+class TestScriptStaysReadOnlyEvenBeforeTheClick(unittest.TestCase):
+    def test_bringing_teams_to_the_front_and_clicking_are_not_on_the_default_path(self):
+        seen, body = TestScriptGuards.reachable_text()
+        parts = TestScriptGuards.funcs_text()
+        # the only readers of these are: the click branch of Select-Chat (behind read_click) and the functions that put the window back
+        rest = body
+        for name in ("Select-Chat", "Assert-Foreground", "Restore-Foreground", "Save-Foreground"):
+            rest = rest.replace(parts[name], "")
+        for bad in ("SetCursorPos", "mouse_event", "SetForegroundWindow", "ShowWindow", "Assert-Foreground"):
+            self.assertNotIn(bad, rest, f"{bad} is reachable from readchat outside the click branch")
+        sc = parts["Select-Chat"]
+        self.assertLess(sc.index("Test-ReadClickAllowed"), sc.index("'click'"))
+        self.assertIn("$hows += 'click'", sc)
+        self.assertIn("'select', 'invoke'", sc)
+        self.assertIn("KIMERU_READ_CLICK", parts["Test-ReadClickAllowed"])
+
+    def test_the_idle_threshold_of_a_read_is_30_seconds_and_can_be_set(self):
+        f = TestScriptGuards.funcs_text()["Get-IdleNeed"]
+        self.assertIn("return 30", f)
+        self.assertIn("KIMERU_READ_IDLE_SEC", f)
+        self.assertIn("Get-IdleNeed", TestScriptGuards.funcs_text()["Test-UserIdle"])
+
+    def test_t24_uses_the_scripts_own_verdict(self):
+        t = (ROOT / "tools" / "check.ps1").read_text(encoding="utf-8-sig")
+        i = t.index("# ---- T24")
+        blk = t[i:t.index("# ---- T22", i)]
+        self.assertIn("previewMatched", blk)
+        self.assertNotIn(".Contains($head)", blk)
 
 
 if __name__ == "__main__":

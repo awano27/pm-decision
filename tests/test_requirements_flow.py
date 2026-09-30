@@ -1,4 +1,9 @@
 """The "please work out the requirements for X" request: its own intent, playbook and drafting hint."""
+try:   # isolation from the real state folder, whichever way the tests are started
+    from . import isolate  # noqa: F401
+except ImportError:
+    import isolate  # noqa: F401
+
 import json
 import unittest
 from pathlib import Path

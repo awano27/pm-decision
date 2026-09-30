@@ -1,3 +1,8 @@
+try:   # isolation from the real state folder, whichever way the tests are started
+    from . import isolate  # noqa: F401
+except ImportError:
+    import isolate  # noqa: F401
+
 import json
 import subprocess
 import tempfile
@@ -40,6 +45,19 @@ class TestSchedule(unittest.TestCase):
             self.assertEqual(cli.schedule(a), 0)
             vbs = (out / "run-daily.vbs").read_text(encoding="utf-16")
             self.assertIn('--ado-org ""contoso"" --ado-project ""My Project""', vbs)
+
+
+class TestStateFolderIsolation(unittest.TestCase):
+    def test_a_preset_state_dir_is_never_written_by_the_tests(self):
+        import os
+        import subprocess as sp
+        import sys
+        with tempfile.TemporaryDirectory() as a:
+            env = {**os.environ, "KIMERU_STATE_DIR": a}
+            r = sp.run([sys.executable, "-m", "unittest", "-q", "tests.test_setup.TestSchedule"], env=env,
+                       cwd=str(Path(__file__).resolve().parent.parent), capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(list(Path(a).iterdir()), [])
 
 
 class TestKevNotUpYet(unittest.TestCase):

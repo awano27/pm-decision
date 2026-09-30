@@ -22,6 +22,7 @@ priority, paging...), not only the terminal name.
 
   python eval/e2e.py --backend kev [--out results.jsonl]
 Jev numbers must stay private (TypeSafe terms): write output outside the repo.
+The coefficients `kimeru calibrate --apply` wrote to the state folder are not read, unless you pass --user-thresholds.
 """
 import argparse
 import json
@@ -32,7 +33,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from kimeru import graph, plan  # noqa: E402
+from kimeru import graph, plan, profiles  # noqa: E402
 from kimeru.backends import ClmBackend, JevBackend, KevBackend  # noqa: E402
 
 SEVERE = {"page", "page_planned", "set_p1", "set_p1_critical", "prevent_now"}
@@ -126,11 +127,16 @@ def main():
     ap.add_argument("--backend", choices=["jev", "kev", "clm"], required=True)
     ap.add_argument("--out")
     ap.add_argument("--fixtures", default="fixtures.jsonl", help="file under eval/ (fixtures_holdout.jsonl: never tuned on)")
+    ap.add_argument("--user-thresholds", action="store_true",
+                    help="also read the coefficients `kimeru calibrate --apply` wrote (default: not read)")
     a = ap.parse_args()
     be = {"kev": KevBackend, "clm": ClmBackend}.get(a.backend, JevBackend)()
     rows, t0 = [], time.time()
-    for fx in fixtures(a.fixtures):
-        rows.append(run_one(fx, be))
+    if a.user_thresholds and profiles.overrides_note():
+        print(profiles.overrides_note())
+    with profiles.ignoring_overrides(not a.user_thresholds):
+        for fx in fixtures(a.fixtures):
+            rows.append(run_one(fx, be))
     if a.out:
         Path(a.out).write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
     n = len(rows)

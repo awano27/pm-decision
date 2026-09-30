@@ -1,4 +1,9 @@
 """Measuring, ordering, posting as soon as ready, a time budget, fewer questions, one-call batches. No model is called."""
+try:   # isolation from the real state folder, whichever way the tests are started
+    from . import isolate  # noqa: F401
+except ImportError:
+    import isolate  # noqa: F401
+
 import json
 import os
 import tempfile
@@ -120,7 +125,8 @@ class TestBudget(Base):
         with mock.patch("time.monotonic", lambda: next(ticks)):
             r = daily.cycle(self.out, self.inbox, GRAPHS, StubBackend(), PBS, cli.process, bridge=FakeTeams(), send=False, budget=1)
         self.assertEqual(r["perf"]["left_for_next_cycle"], 1)
-        self.assertEqual(r["waiting"], 1)                           # the second file is still in the inbox
+        self.assertEqual(r["left_for_next_cycle"], 1)               # the second file is still in the inbox ...
+        self.assertEqual(r["waiting"], 0)                           # ... but that is the time limit, not a judge that is down
         r2 = daily.cycle(self.out, self.inbox, GRAPHS, StubBackend(), PBS, cli.process, bridge=FakeTeams(), send=False)
         self.assertEqual(r2["waiting"], 0)
         decided = [json.loads(l) for l in (self.out / "decisions.jsonl").read_text(encoding="utf-8").splitlines()]

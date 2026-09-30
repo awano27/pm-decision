@@ -68,6 +68,8 @@ def ado_workitem_created(p):
         "priority": f.get("Microsoft.VSTS.Common.Priority"),
         "description": _strip_html(f.get("System.Description") or f.get("Microsoft.VSTS.TCM.ReproSteps") or ""),
         "acceptance_criteria": _strip_html(f.get("Microsoft.VSTS.Common.AcceptanceCriteria") or ""),
+        # where `pull ado` took it from ({"org", "project"}); a service-hook payload has none: nothing is written back to it
+        "origin": p.get("kimeru_origin") if isinstance(p.get("kimeru_origin"), dict) else None,
     }]
 
 
@@ -163,15 +165,19 @@ def summary(event, limit=120):
     return s if len(s) <= limit else s[:limit - 1] + "…"
 
 
+JUDGE_HIDDEN = ("raw", "thread", "full", "chat_title", "origin")   # origin: where `pull ado` took it from (execute.py), not for the judge
+
+
 def state_of(event):
     """What the judge sees: the event without its raw payload and the earlier messages of a thread (they are for the writer);
+    `chat_title` is kept on the event but not sent (it repeats `author`; an extra field lowers Kev's confidence);
     `text` is cut at `judge_text_max` characters (Kev refuses input that is too long, and a long text lowers its confidence)."""
     from . import config
     try:
         cap = max(100, int(config.value("judge_text_max")))
     except ValueError:
         cap = 1200
-    s = {k: v for k, v in event.items() if k not in ("raw", "thread", "full")}
+    s = {k: v for k, v in event.items() if k not in JUDGE_HIDDEN}
     if isinstance(s.get("text"), str) and len(s["text"]) > cap:
         s["text"] = s["text"][:cap]
     return s

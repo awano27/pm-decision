@@ -4,6 +4,11 @@ Escape sequences written through tooling have turned "\\t", "\\b", "\\v" and "\\
 TAB/BACKSPACE/VT/CR characters more than once (broken paths like "examples<TAB>eams_chat.json",
 a regex "\\b" that became BACKSPACE). This fails fast instead of on the managed PC.
 """
+try:   # isolation from the real state folder, whichever way the tests are started
+    from . import isolate  # noqa: F401
+except ImportError:
+    import isolate  # noqa: F401
+
 import re
 import unittest
 from pathlib import Path

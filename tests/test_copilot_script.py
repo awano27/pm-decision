@@ -4,6 +4,11 @@ The script drives the real Teams window, so it cannot run here. What can be chec
 decide "this is the Copilot compose box" / "this is a meeting chat". A request once went to a meeting chat because these
 were too loose; the cases below are the ones that must never pass again.
 """
+try:   # isolation from the real state folder, whichever way the tests are started
+    from . import isolate  # noqa: F401
+except ImportError:
+    import isolate  # noqa: F401
+
 import re
 import shutil
 import subprocess

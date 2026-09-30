@@ -109,19 +109,29 @@ def format_post(ranked, total, pending, date=None):
     return "\n".join(lines)
 
 
-def quiet_reads(out, now=None, days=1):
-    """Chats kimeru opened to read in full that turned out to need no action. Opening marks a chat as read in Teams, so the
-    PM would otherwise lose the unread mark and never see them: the brief lists them by chat name."""
+def _opened_rows(out, now, days):
     now = now or datetime.now(timezone.utc)
     since = now - timedelta(days=days)
-    names = []
     for rec in _rows(Path(out) / "decisions.jsonl"):
         at = rec.get("at")
-        if not at or datetime.fromisoformat(at) < since:
-            continue
-        if (rec.get("read_full") or {}).get("state") == "full" and not rec.get("needs_human") and not rec.get("notify"):
+        rf = rec.get("read_full") or {}
+        if at and datetime.fromisoformat(at) >= since and ("returned" in rf or rf.get("state") == "full"):   # a chat was opened
+            yield rec, rf
+
+
+def quiet_reads(out, now=None, days=1):
+    """Chats kimeru opened that turned out to need no action (read in full, or opened and not read). Opening a chat marks it
+    as read in Teams, so the PM would otherwise lose the unread mark and never see them: the brief lists them by chat name."""
+    names = []
+    for rec, rf in _opened_rows(out, now, days):
+        if not rec.get("needs_human") and not rec.get("notify"):
             names.append(((rec.get("event") or {}).get("chat_title") or (rec.get("event") or {}).get("author") or "（名前なし）")[:30])
     return names
+
+
+def not_put_back(out, now=None, days=1):
+    """How many chats kimeru opened could not be put back (whatever was decided): the person may find another chat open."""
+    return sum(1 for _, rf in _opened_rows(out, now, days) if rf.get("returned") is False)
 
 
 def build(out, backend, top=3, now=None, date=None):
@@ -134,4 +144,7 @@ def build(out, backend, top=3, now=None, date=None):
     if quiet:
         text += (f"\n開いて読みましたが、対応は不要でした: {len(quiet)} 件（{'、'.join(quiet[:5])}{' ほか' if len(quiet) > 5 else ''}）"
                  "。開いたので、Teams では既読になっています")
+    lost = not_put_back(out, now=now)
+    if lost:
+        text += f"\n⚠ 開いたチャットを元へ戻せなかった件が {lost} 件あります。Teams で開いているチャットを確認してください"
     return text, ranked

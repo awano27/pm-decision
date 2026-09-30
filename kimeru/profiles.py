@@ -65,11 +65,44 @@ def overrides():
     return data
 
 
+_ignore = {"on": False}
+
+
+def ignoring_overrides(ignore=True):
+    """Context manager: inside it the user's local coefficients are not laid over any profile. The eval scripts use it, so
+    a number they print does not depend on what one PC has tuned (they read the file only when asked to)."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def cm():
+        before = _ignore["on"]
+        _ignore["on"] = bool(ignore)
+        try:
+            yield
+        finally:
+            _ignore["on"] = before
+    return cm()
+
+
+def overrides_note():
+    """One line saying which local coefficients are in use ('' when there are none): printed by an eval that read them."""
+    o = overrides()
+    if not o:
+        return ""
+    return "注意: 利用者の係数の上書き（" + OVERRIDE_FILE + "）を使っています: " + ", ".join(
+        f"{n} conf_scale={v.get('conf_scale', '-')} noul_scale={v.get('noul_scale', '-')}" for n, v in sorted(o.items()))
+
+
 def effective(profile=None):
     """The profile with the user's local coefficients laid over it."""
     p = profile or DEFAULT
-    o = overrides().get(p.get("name", "jev"))
+    o = None if _ignore["on"] else overrides().get(p.get("name", "jev"))
     return {**p, **o} if o else p
+
+
+# The judge that made a recorded answer -> the profile its coefficients belong to. Any other judge (the offline stub, an
+# unknown one) has no profile of its own: nothing is tuned or applied for it.
+JUDGE_PROFILE = {"Jev": "jev", "Kev": "kev", "CLM": "clm"}
 
 
 def conf(node, key, default, profile=None):

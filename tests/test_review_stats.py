@@ -1,4 +1,9 @@
 """Review, week digest, sharing, calibration: local data only, the model is never called."""
+try:   # isolation from the real state folder, whichever way the tests are started
+    from . import isolate  # noqa: F401
+except ImportError:
+    import isolate  # noqa: F401
+
 import importlib.util
 import io
 import json

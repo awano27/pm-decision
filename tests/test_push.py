@@ -1,5 +1,10 @@
 """Notification routes: counts and numbers only, one state per route, and nothing goes out unless a route is set up.
 Every send is mocked: no webhook, mail or Outlook is ever contacted."""
+try:   # isolation from the real state folder, whichever way the tests are started
+    from . import isolate  # noqa: F401
+except ImportError:
+    import isolate  # noqa: F401
+
 import json
 import os
 import tempfile
@@ -38,6 +43,7 @@ class Base(unittest.TestCase):
         for k, v in extra.items():
             os.environ[k] = v
         config.apply([])
+        push.run(self.out, now=0.0, sender=lambda r, t: None)      # the first run only records the baseline (sends nothing)
 
     def add_items(self, posted=(), unposted=()):
         """Approvals with texts that must never leave the PC."""
@@ -68,7 +74,7 @@ class TestNothingByDefault(Base):
         self.assertEqual(rec.calls, [])
 
     def test_the_default_cycle_touches_no_url(self):
-        with mock.patch.object(urllib.request, "urlopen") as u, mock.patch("subprocess.run") as sp:
+        with mock.patch.object(push, "_urlopen") as u, mock.patch("subprocess.run") as sp:
             self.add_items(posted=[1])
             push.run(self.out)
         u.assert_not_called()
@@ -115,7 +121,7 @@ class TestContent(Base):
 
         self.route("teams_webhook,webhook", KIMERU_PUSH_TEAMS_URL=SECRET_URL, KIMERU_PUSH_WEBHOOK_URL=SECRET_URL + "2")
         self.add_items(posted=[1])
-        with mock.patch.object(urllib.request, "urlopen", fake_urlopen):
+        with mock.patch.object(push, "_urlopen", fake_urlopen):
             res = push.run(self.out, now=1000.0)
         self.assertEqual(res, {"teams_webhook": "sent", "webhook": "sent"})
         card = json.loads(sent[0][1])
@@ -135,7 +141,7 @@ class TestContent(Base):
         self.route("webhook", KIMERU_PUSH_WEBHOOK_URL=SECRET_URL,
                    KIMERU_PUSH_WEBHOOK_BODY='{"channel": "me", "message": "{text}"}')
         self.add_items(posted=[1])
-        with mock.patch.object(urllib.request, "urlopen", lambda req, timeout=0: (sent.append(req.data), R())[1]):
+        with mock.patch.object(push, "_urlopen", lambda req, timeout=0: (sent.append(req.data), R())[1]):
             push.run(self.out, now=1000.0)
         self.assertEqual(json.loads(sent[0])["channel"], "me")
         self.assertIn("確認待ち", json.loads(sent[0])["message"])
@@ -152,7 +158,7 @@ class TestSecretUrl(Base):
         def boom(req, timeout=0):
             raise urllib.error.URLError(OSError(f"cannot reach {SECRET_URL}"))
 
-        with mock.patch.object(urllib.request, "urlopen", boom):
+        with mock.patch.object(push, "_urlopen", boom):
             res = push.run(self.out, now=1000.0)
         self.assertNotIn("SECRET", json.dumps(res))
         state = (self.out / "push_state.json").read_text(encoding="utf-8")
@@ -160,7 +166,7 @@ class TestSecretUrl(Base):
         self.assertNotIn("SECRET", json.dumps(config.report()))
         self.assertNotIn("SECRET", "\n".join(push.status_lines(self.out)))
         for e in (urllib.error.HTTPError(SECRET_URL, 404, "x", {}, None),):
-            with mock.patch.object(urllib.request, "urlopen", side_effect=e):
+            with mock.patch.object(push, "_urlopen", side_effect=e):
                 self.assertNotIn("SECRET", json.dumps(push.test()))
 
     def test_config_show_says_set_or_not_only(self):
@@ -177,7 +183,7 @@ class TestSecretUrl(Base):
 
 class TestPerRoute(Base):
     def test_one_failing_route_does_not_stop_the_others(self):
-        self.route("webhook,teams_webhook,outlook", KIMERU_PUSH_MAIL_TO="me@example.invalid")
+        self.route("webhook,teams_webhook,outlook")
         self.add_items(posted=[1])
         rec = Recorder(fail={"webhook"})
         res = push.run(self.out, now=1000.0, sender=rec)
@@ -203,7 +209,7 @@ class TestPerRoute(Base):
         self.assertNotIn("#1", rec.calls[1][1])          # only the new one
 
     def test_routes_have_separate_state(self):
-        self.route("webhook,outlook", KIMERU_PUSH_MAIL_TO="me@example.invalid")
+        self.route("webhook,outlook")
         self.add_items(posted=[1])
         push.run(self.out, now=1000.0, sender=Recorder(fail={"outlook"}))
         rec = Recorder()
@@ -273,7 +279,7 @@ class TestInTheCycle(Base):
                 def __exit__(self, *a): return False
             return R()
 
-        with mock.patch.object(urllib.request, "urlopen", fake):
+        with mock.patch.object(push, "_urlopen", fake):
             r = self.cycle()
         self.assertTrue(r["push"]["webhook"].startswith("failed"))
         self.assertEqual(r["push"]["teams_webhook"], "sent")
@@ -282,7 +288,7 @@ class TestInTheCycle(Base):
     def test_no_push_without_send(self):
         self.route("webhook", KIMERU_PUSH_WEBHOOK_URL=SECRET_URL)
         self.add_items(posted=[1])
-        with mock.patch.object(urllib.request, "urlopen") as u:
+        with mock.patch.object(push, "_urlopen") as u:
             self.cycle(send=False)
         u.assert_not_called()
 
@@ -297,6 +303,284 @@ class TestInTheCycle(Base):
         os.environ["KIMERU_TOAST"] = "1"
         self.cycle(toaster=lambda a, b: shown.append((a, b)))
         self.assertEqual(len(shown), 1)
+
+
+class Ok:
+    status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class TestEndlessAndBaseline(Base):
+    def add_many(self, n):
+        ap = notify.Approvals(self.out)
+        start = ap.data["next"] + 1000
+        for i in range(start, start + n):
+            num = ap.add(f"g:{i}:n", {"graph": "g", "event_id": str(i), "node": "n", "summary": "", "advice": "", "actions": []})
+            ap.data["items"][str(num)]["posted"] = True
+        ap.data.setdefault("notices", []).extend(f"k{start}-{i}" for i in range(n))
+        ap.save()
+
+    def test_250_pending_and_250_notices_are_announced_once_then_never_again(self):
+        self.route("webhook")
+        self.add_many(250)
+        rec = Recorder()
+        t = 1000.0
+        results = []
+        for _ in range(6):
+            results.append(push.run(self.out, now=t, sender=rec)["webhook"])
+            t += 3600
+        self.assertEqual(results, ["sent"] + ["nothing new"] * 5)
+        self.assertEqual(len(rec.calls), 1)
+        self.assertIn("250", rec.calls[0][1])
+        self.add_many(3)                                      # only the new ones go out afterwards
+        push.run(self.out, now=t, sender=rec)
+        self.assertEqual(len(rec.calls), 2)
+        self.assertIn("自動決定の通知 3 件", rec.calls[1][1])
+        self.assertEqual(push.run(self.out, now=t + 3600, sender=rec), {"webhook": "nothing new"})
+
+    def test_what_was_there_before_the_route_was_turned_on_is_not_sent(self):
+        self.add_many(5)
+        self.route("webhook")                                # the baseline run happens here
+        rec = Recorder()
+        self.assertEqual(push.run(self.out, now=1000.0, sender=rec), {"webhook": "nothing new"})
+        self.assertEqual(rec.calls, [])
+        self.add_items(posted=[1])
+        self.assertEqual(push.run(self.out, now=1000.0, sender=rec), {"webhook": "sent"})
+        self.assertNotIn("自動決定", rec.calls[0][1])
+
+    def test_the_first_run_itself_sends_nothing(self):
+        self.add_many(5)
+        os.environ["KIMERU_PUSH"] = "webhook"
+        config.apply([])
+        rec = Recorder()
+        self.assertIn("baseline", push.run(self.out, now=1000.0, sender=rec)["webhook"])
+        self.assertEqual(rec.calls, [])
+
+
+class TestUrlNeverShown(Base):
+    BAD = ("hooks.example.invalid/SECRET-PATH-123?sig=SECRET-SIG", "https://example.invalid/SECRET PATH?sig=SECRET-SIG",
+           "ftp://example.invalid/SECRET-PATH", "https:///SECRET-PATH", "https://[SECRET-PATH")
+
+    def test_a_malformed_url_shows_no_part_of_itself(self):
+        import io
+        from contextlib import redirect_stdout, redirect_stderr
+        from kimeru import cli
+        for bad in self.BAD:
+            self.route("teams_webhook,webhook", KIMERU_PUSH_TEAMS_URL=bad, KIMERU_PUSH_WEBHOOK_URL=bad)
+            with mock.patch.object(push, "_urlopen") as u:
+                res = push.test()
+            u.assert_not_called()
+            self.assertEqual(set(res), {"teams_webhook", "webhook"})
+            self.assertTrue(all(v.startswith("failed") for v in res.values()), res)
+            self.assertNotIn("SECRET", json.dumps(res, ensure_ascii=False))
+            buf = io.StringIO()
+            with redirect_stdout(buf), redirect_stderr(buf):
+                cli.main(["--out", str(self.out), "push", "test"])
+            self.assertNotIn("SECRET", buf.getvalue())
+
+    def test_an_unexpected_error_text_holding_the_url_is_not_shown(self):
+        self.route("teams_webhook", KIMERU_PUSH_TEAMS_URL=SECRET_URL)
+        with mock.patch.object(push, "_urlopen", side_effect=RuntimeError(SECRET_URL)):
+            self.assertNotIn("SECRET", json.dumps(push.test()))
+
+    def test_http_is_refused_with_a_reason_and_nothing_is_sent(self):
+        self.route("webhook,teams_webhook", KIMERU_PUSH_WEBHOOK_URL="http://example.invalid/SECRET", KIMERU_PUSH_TEAMS_URL="http://example.invalid/SECRET")
+        self.add_items(posted=[1])
+        with mock.patch.object(push, "_urlopen") as u:
+            res = push.test()
+            res2 = push.run(self.out, now=1000.0)
+        u.assert_not_called()
+        for r in list(res.values()) + list(res2.values()):
+            self.assertIn("https", r)
+            self.assertNotIn("SECRET", r)
+
+    def test_push_test_tries_the_other_routes_after_an_unexpected_error(self):
+        self.route("teams_webhook,webhook,outlook")
+        seen = []
+
+        def sender(route, text):
+            seen.append(route)
+            if route == "teams_webhook":
+                raise RuntimeError(SECRET_URL)
+
+        res = push.test(sender=sender)
+        self.assertEqual(seen, ["teams_webhook", "webhook", "outlook"])
+        self.assertTrue(res["teams_webhook"].startswith("failed"))
+        self.assertNotIn("SECRET", json.dumps(res))
+        self.assertEqual((res["webhook"], res["outlook"]), ("sent", "sent"))
+
+    def test_daily_log_holds_no_url(self):
+        c = TestInTheCycle("cycle")
+        c.dir, c.out = self.dir, self.out
+        self.route("webhook,teams_webhook", KIMERU_PUSH_WEBHOOK_URL=SECRET_URL, KIMERU_PUSH_TEAMS_URL="http://example.invalid/SECRET-HTTP")
+        self.add_items(posted=[1])
+        with mock.patch.object(push, "_urlopen", side_effect=urllib.error.URLError(SECRET_URL)):
+            c.cycle()
+        log = self.out / "daily.log.jsonl"
+        self.assertTrue(log.exists())
+        self.assertIn("push", log.read_text(encoding="utf-8"))
+        text = "\n".join(p.read_text(encoding="utf-8") for p in self.out.iterdir() if p.is_file())
+        self.assertNotIn("SECRET", text)
+
+
+class TestOutlookRecipient(Base):
+    def test_the_recipient_is_not_configurable(self):
+        (Path(self.dir.name) / "config.json").write_text(json.dumps({"push_mail_to": "other@example.invalid", "push": "outlook"}), encoding="utf-8")
+        os.environ["KIMERU_PUSH_MAIL_TO"] = "other@example.invalid"
+        warnings = config.apply([])
+        self.assertTrue(any("push_mail_to" in w for w in warnings))     # the old setting is unknown now
+        self.assertNotIn("push_mail_to", config.SETTINGS)
+        with mock.patch("subprocess.run") as sp:
+            sp.return_value = mock.Mock(returncode=0, stdout='{"ok":true,"verified":true}')
+            self.assertEqual(push.test(), {"outlook": "sent"})
+        args = sp.call_args[0][0]
+        self.assertNotIn("-To", args)
+        self.assertFalse(any("other@" in str(a) for a in args))
+        script = (Path(push.HERE) / "tools" / "outlook-mail.ps1").read_text(encoding="utf-8")
+        self.assertNotIn("$To", script)
+        self.assertIn("Session.CurrentUser", script)
+
+
+class TestWebhookKey(Base):
+    def capture(self):
+        sent = []
+        return sent, mock.patch.object(push, "_urlopen", lambda req, timeout=0: (sent.append((req.headers, req.data.decode("utf-8"))), Ok())[1])
+
+    def test_the_key_goes_in_a_header_by_default(self):
+        self.route("webhook", KIMERU_PUSH_WEBHOOK_URL=SECRET_URL, KIMERU_PUSH_WEBHOOK_KEY="KEY-123")
+        sent, patch = self.capture()
+        with patch:
+            self.assertEqual(push.test(), {"webhook": "sent"})
+        self.assertEqual(sent[0][0].get("Authorization"), "Bearer KEY-123")
+        self.assertNotIn("KEY-123", sent[0][1])
+
+    def test_the_key_can_be_placed_in_the_body_and_is_never_shown(self):
+        self.route("webhook", KIMERU_PUSH_WEBHOOK_URL=SECRET_URL, KIMERU_PUSH_WEBHOOK_KEY='KEY"123',
+                   KIMERU_PUSH_WEBHOOK_BODY='{"k": "{key}", "m": "{text}"}')
+        sent, patch = self.capture()
+        with patch:
+            push.test()
+        self.assertEqual(json.loads(sent[0][1])["k"], 'KEY"123')
+        self.assertNotIn("Authorization", sent[0][0])
+        rows = dict((k, v) for k, v, _ in config.rows())
+        self.assertEqual(rows["push_webhook_body"], "(set)")
+        self.assertNotIn("123", json.dumps(rows))
+        self.assertTrue(config.secrets_status()["KIMERU_PUSH_WEBHOOK_KEY"])
+        self.assertNotIn("123", json.dumps(config.secrets_status()))
+        self.assertNotIn("123", json.dumps(config.report()))
+
+
+class TestRedirectIsNotFollowed(Base):
+    def test_a_redirect_is_a_failure_and_the_key_is_never_sent_on(self):
+        import email.message
+        import io
+        import urllib.response
+        self.route("webhook", KIMERU_PUSH_WEBHOOK_URL=SECRET_URL, KIMERU_PUSH_WEBHOOK_KEY="KEY-123")
+        seen = []
+
+        def https_open(handler, req):
+            seen.append((req.full_url, dict(req.header_items())))
+            h = email.message.Message()
+            h["Location"] = "http://other.invalid/elsewhere"
+            r = urllib.response.addinfourl(io.BytesIO(b""), h, req.full_url, 302)
+            r.msg = "Found"
+            return r
+
+        def http_open(handler, req):
+            raise AssertionError("the redirect was followed")
+        with mock.patch.object(urllib.request.HTTPSHandler, "https_open", https_open), \
+                mock.patch.object(urllib.request.HTTPHandler, "http_open", http_open):
+            res = push.test()
+        self.assertEqual(len(seen), 1)                              # one request, to the address that was set
+        self.assertEqual(res, {"webhook": "failed: HTTP 302"})
+        self.assertNotIn("SECRET", json.dumps(res))
+        self.assertNotIn("other.invalid", json.dumps(res))
+
+
+class TestPushSettingValue(Base):
+    def test_a_url_is_refused_and_not_written_or_shown(self):
+        with self.assertRaises(config.ConfigError) as cm:
+            config.set_value("push", "https://example.invalid")
+        self.assertNotIn("example.invalid", str(cm.exception))
+        self.assertFalse(config.path().exists())
+        for bad in ("teams_webhook,https://example.invalid/x", "Webhook2", "mail"):
+            with self.assertRaises(config.ConfigError):
+                config.set_value("push", bad)
+
+    def test_route_names_and_an_empty_value_are_accepted(self):
+        config.set_value("push", "teams_webhook, outlook")
+        self.assertEqual(json.loads(config.path().read_text(encoding="utf-8"))["push"], "teams_webhook, outlook")
+        config.set_value("push", "")
+
+    def test_a_url_in_the_environment_is_never_shown(self):
+        os.environ["KIMERU_PUSH"] = SECRET_URL
+        warnings = config.apply([])
+        self.assertEqual(config.value("push"), "")
+        self.assertEqual(push.enabled_routes(), [])
+        shown = json.dumps(config.rows()) + json.dumps(config.share_rows()) + json.dumps(config.report()) + json.dumps(warnings)
+        self.assertNotIn("SECRET", shown)
+        self.assertNotIn("example.invalid", shown)
+
+
+class TestOutlookOwnAddress(Base):
+    def test_a_mail_that_the_script_did_not_verify_counts_as_not_sent(self):
+        self.route("outlook")
+        with mock.patch("subprocess.run") as sp:
+            sp.return_value = mock.Mock(returncode=0, stdout='{"ok":true}')
+            self.assertIn("failed", push.test()["outlook"])
+            sp.return_value = mock.Mock(returncode=2, stdout='{"ok":false}')
+            self.assertIn("failed", push.test()["outlook"])
+            sp.return_value = mock.Mock(returncode=0, stdout='{"ok":true,"verified":true}')
+            self.assertEqual(push.test(), {"outlook": "sent"})
+
+    def test_the_script_uses_the_address_and_compares_before_it_sends(self):
+        script = (Path(push.HERE) / "tools" / "outlook-mail.ps1").read_text(encoding="utf-8")
+        self.assertNotIn("Recipients.Add($me.Name)", script)
+        self.assertIn("Recipients.Add($mine)", script)
+        self.assertIn("resolved address is not your own", script)
+        self.assertLess(script.index("resolved address is not your own"), script.index(".Send()"))
+        self.assertIn('"verified":true', script)
+
+
+class TestEnabledMoment(Base):
+    def test_what_came_while_all_routes_were_off_is_not_sent_when_they_come_back(self):
+        os.environ.update({"KIMERU_PUSH": "webhook", "KIMERU_PUSH_WEBHOOK_URL": SECRET_URL})
+        config.apply([])
+        self.add_items(posted=[1])
+        push.begin_cycle(self.out, now=100.0)
+        push.run(self.out, now=100.0, sender=lambda r, t: None)
+        os.environ["KIMERU_PUSH"] = ""                        # every route off
+        config.apply([])
+        self.add_items(posted=[2])
+        push.begin_cycle(self.out, now=200.0)                 # a cycle runs while it is off (run() is not called then)
+        self.assertEqual(push.status_lines(self.out)[0].startswith("push routes: none"), True)
+        os.environ["KIMERU_PUSH"] = "webhook"
+        config.apply([])
+        self.add_items(posted=[3])                             # also came while it was off
+        push.begin_cycle(self.out, now=300.0)                 # first cycle after: baseline
+        rec = Recorder()
+        self.assertEqual(push.run(self.out, now=1000.0, sender=rec), {"webhook": "nothing new"})
+        self.assertEqual(rec.calls, [])
+
+    def test_an_item_posted_in_the_first_cycle_after_turning_it_on_is_sent(self):
+        self.add_items(posted=[1])
+        os.environ.update({"KIMERU_PUSH": "webhook", "KIMERU_PUSH_WEBHOOK_URL": SECRET_URL})
+        config.apply([])
+        push.begin_cycle(self.out, now=100.0)                 # the start of the cycle: #1 is old
+        self.add_items(posted=[2])                             # this cycle's notify posts #2
+        rec = Recorder()
+        self.assertEqual(push.run(self.out, now=1000.0, sender=rec), {"webhook": "sent"})
+        self.assertIn("#2", rec.calls[0][1])
+        self.assertNotIn("#1", rec.calls[0][1])
+
+    def test_a_cycle_with_send_starts_by_recording_the_moment(self):
+        src = (Path(push.HERE) / "kimeru" / "daily.py").read_text(encoding="utf-8")
+        self.assertLess(src.index("push.begin_cycle(out)"), src.index("pull.pull_teams(inbox"))
 
 
 if __name__ == "__main__":

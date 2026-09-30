@@ -7,12 +7,20 @@ body:
     attributes:
       value: |
         **実際のメッセージの本文、社名、人名、ID、URL、トークン、パスを書かないでください。** 公開の場所です。
-        下の欄には、`kimeru digest --week --share`（数値と環境だけを出す）などの出力を貼ってください。
+        下の欄には、`kimeru config show --share`、`kimeru digest --week --share`（どちらも、数値と環境だけを出す）などの出力を貼ってください。
   - type: input
     id: teams
     attributes:
       label: Teams の版
       description: Teams の「設定 > Teams について」に出る版
+    validations:
+      required: true
+  - type: textarea
+    id: share
+    attributes:
+      label: "config show --share の出力（python -m kimeru config show --share）"
+      description: 版、OS、Python、画面の倍率、効いている設定が出ます。パス・組織・サブスクリプションは出ません。貼る前に、目で確かめてください。
+      render: text
     validations:
       required: true
   - type: input

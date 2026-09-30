@@ -1,3 +1,8 @@
+try:   # isolation from the real state folder, whichever way the tests are started
+    from . import isolate  # noqa: F401
+except ImportError:
+    import isolate  # noqa: F401
+
 import json
 import os
 import tempfile
@@ -5,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from kimeru import graph, notify, plan, writer
+from kimeru import config, graph, notify, plan, writer
 from kimeru.backends import StubBackend
 from kimeru.cli import process
 
@@ -411,12 +416,15 @@ class TestWriter(unittest.TestCase):
         self.assertEqual(memo["missing"], ["原因", "復旧見込み"])
         self.assertFalse(any("{" in x for k in ("missing", "options") for x in memo[k]))
 
-    def test_daily_refuses_to_start_with_a_misspelled_writer(self):
+    def test_daily_goes_on_with_a_misspelled_writer_and_says_why(self):
         import os
         from unittest import mock
         from kimeru import cli
-        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"KIMERU_WRITER": "m365_auto"}):
-            self.assertEqual(cli.main(["--out", d, "daily", "--once", "--inbox", str(Path(d) / "in")]), 2)
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"KIMERU_WRITER": "m365_auto"}),                 mock.patch("kimeru.daily.cycle", return_value={"judge": 0}) as cyc:
+            self.assertEqual(cli.main(["--out", d, "daily", "--once", "--inbox", str(Path(d) / "in")]), 0)   # the scheduler is not stopped
+            self.assertTrue(cyc.called)
+            self.assertEqual(os.environ["KIMERU_WRITER"], "")                                            # decided without a writer
+            self.assertTrue([w for w in config.WARNINGS if "writer" in w and "m365_auto" in w])           # and the reason is recorded
 
     def test_key_points_for_the_morning(self):
         class Asker:
@@ -719,8 +727,9 @@ class TestCodexModelIsPinned(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("-m") + 1], "gpt-6-sol")
         self.assertIn('model_reasoning_effort="medium"', cmd)
 
-    def test_empty_env_leaves_the_choice_to_codex(self):
+    def test_empty_env_counts_as_not_set(self):
+        # one rule for every setting: an empty variable is not set, so the default applies (never an empty model name)
         with mock.patch.dict(os.environ, {"KIMERU_CODEX_MODEL": "", "KIMERU_CODEX_EFFORT": ""}):
             cmd = self.cmd_of()
-        self.assertNotIn("-m", cmd)
-        self.assertFalse([a for a in cmd if "model_reasoning_effort" in a])
+        self.assertEqual(cmd[cmd.index("-m") + 1], "gpt-6-luna")
+        self.assertIn('model_reasoning_effort="low"', cmd)

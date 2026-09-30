@@ -22,10 +22,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import actions, config, events, execute, graph
+from . import actions, config, events, execute, fsutil, graph
 from . import writer as writer_mod
 from . import plan as planner
-from .backends import BackendUnavailable, ClmBackend, JevBackend, KevBackend, StubBackend
+from .backends import BackendUnavailable, ClmBackend, JevBackend, KevBackend, StubBackend, judge_name
 
 HERE = Path(__file__).resolve().parent.parent
 DEFAULT_PLAYBOOKS = HERE / "playbooks"
@@ -48,7 +48,58 @@ def _append(path, rec):
 
 
 EVENT_KEEP = ("kind", "id", "author", "text", "item", "meeting", "title", "description", "work_item_type",
-              "rule", "severity", "condition", "mentions_me", "context", "date", "chat_id", "chat_title")
+              "rule", "severity", "condition", "mentions_me", "context", "date", "chat_id", "chat_title", "origin")
+
+
+EVENT_TEXT = ("text", "description", "item", "title", "meeting", "condition", "context")   # free text: cut in the records
+EVENT_TEXT_SUMMARY = 120     # what the records kept before the event was recorded at all: the length of `summary`
+EVENT_TEXT_FULL = 2000       # with the setting record_event_full=1
+
+
+def _recorded_event(ev):
+    """The event as decisions.jsonl keeps it. By default its free text is cut to the length of a summary (SECURITY.md);
+    record_event_full=1 keeps up to 2,000 characters, which makes `kimeru review` examples better and the record more sensitive."""
+    limit = EVENT_TEXT_FULL if config.value("record_event_full") == "1" else EVENT_TEXT_SUMMARY
+    out = {}
+    for k, v in ev.items():
+        if k not in EVENT_KEEP or v in (None, ""):
+            continue
+        if isinstance(v, str) and k in EVENT_TEXT and len(v) > limit:
+            v = v[:limit - 1] + "…" if limit == EVENT_TEXT_SUMMARY else v[:limit]
+        out[k] = v
+    return out
+
+
+def _record_limit():
+    return EVENT_TEXT_FULL if config.value("record_event_full") == "1" else EVENT_TEXT_SUMMARY
+
+
+def _cut(v, limit):
+    return v[:limit - 1] + "…" if limit == EVENT_TEXT_SUMMARY else v[:limit]
+
+
+def _seal_material(res, held, out, key, ev_run, merged):
+    """A writer works from the whole text, but the records that stay (decisions.jsonl, queue.jsonl) keep a summary-length
+    excerpt like everything else (SECURITY.md). The longer text of the free-text fields, and the request built from it, wait in
+    full_text.json while the item waits for the PM. Returns (res, held) as the records may keep them."""
+    from . import fulltext
+    limit = _record_limit()
+    mat = res.get("material_event") or {}
+    long = {k: v for k, v in mat.items() if k in EVENT_TEXT and isinstance(v, str) and len(v) > limit}
+    if not long:
+        return res, held
+    keep = {**mat, **{k: _cut(v, limit) for k, v in long.items()}}
+    request = res.get("copilot_request")
+    for k, v in long.items():
+        res, held = fulltext.scrub(res, v, keep[k]), fulltext.scrub(held, v, keep[k])
+    res["material_event"] = keep
+    if request:
+        res["copilot_request"] = writer_mod.human_request(res, keep)
+    if res.get("needs_human") and not merged:
+        fulltext.save(out, key, {"text": long.get("text", ""), "thread": ev_run.get("thread", []),
+                                 "author": mat.get("author", "")}, request=request,
+                      material={k: v for k, v in long.items() if k != "text"})
+    return res, held
 
 
 class Meter:
@@ -76,7 +127,7 @@ def _judge_info(backend):
     seen = 0
     while hasattr(backend, "inner") and seen < 5:
         backend, seen = backend.inner, seen + 1
-    return {"name": getattr(backend, "NAME", type(backend).__name__), "model": str(getattr(backend, "model", ""))[:60]}
+    return {"name": judge_name(backend), "model": str(getattr(backend, "model", ""))[:60]}
 
 
 def _graph_version(g):
@@ -88,29 +139,46 @@ def _processed(out):
     return set(p.read_text(encoding="utf-8").split()) if p.exists() else set()
 
 
-def _merge_into_pending(out, ev):
+def _no_action(res):
+    """Decided as needing nothing from anyone: no notice, and every action is only a log line."""
+    return (res.get("outcome") == "decide" and not res.get("notify") and not res.get("needs_human")
+            and all(a.get("type") == "log.only" for a in res.get("actions") or []))
+
+
+def _merge_into_pending(out, ev, res):
     """A new message in a chat whose earlier message still waits for the PM joins that item (posted again under the same
-    number) instead of becoming a second one. Returns True when it was merged."""
-    if ev.get("kind") != "teams.chat" or not ev.get("chat_id"):
+    number) instead of becoming a second one, but only when all of these hold; otherwise it is a matter of its own:
+    the same sender as the waiting item, a result that raises no notice, and a result that goes to the same place as the
+    waiting item or needs nothing. `res` is the judgment of the new message. Returns True when it was merged."""
+    if ev.get("kind") != "teams.chat" or not ev.get("chat_id") or not ev.get("author") or res.get("notify"):
         return False
     from . import notify
     ap = notify.Approvals(out)
     for it in ap.data["items"].values():
         rec = it["record"]
-        if it["status"] in ("pending", "held") and (rec.get("event") or {}).get("chat_id") == ev["chat_id"]:
-            rec.setdefault("followups", []).append({"text": " ".join(str(ev.get("text", "")).split())[:300],
-                                                   "at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
-            it["posted"], it["request_posted"] = False, False      # posted again, with the follow-up, under the same number
-            ap.save()
-            _append(out / "merged.jsonl", {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "into": it["key"], "event_id": ev.get("id")})
-            return True
+        old = rec.get("event") or {}
+        if it["status"] not in ("pending", "held") or old.get("chat_id") != ev["chat_id"]:
+            continue
+        if old.get("author") != ev.get("author"):
+            continue
+        if not (_no_action(res) or res.get("node") == rec.get("node")):
+            continue
+        rec.setdefault("followups", []).append({"text": " ".join(str(ev.get("text", "")).split())[:300],
+                                               "at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+        it["posted"], it["request_posted"] = False, False      # posted again, with the follow-up, under the same number
+        ap.save()
+        _append(out / "merged.jsonl", {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "into": it["key"], "event_id": ev.get("id")})
+        return True
     return False
 
 
-def _judge_and_draft(g, ev, backend, playbooks, writer):
-    """One pass: the graph, then the writer. Returns (res, held)."""
-    meter = Meter(backend)
-    res = graph.run(g, ev, meter, playbooks=playbooks)
+def _judge(g, ev, meter, playbooks):
+    """The graph only: no writer is called."""
+    return graph.run(g, ev, meter, playbooks=playbooks)
+
+
+def _draft(res, ev, meter, writer):
+    """The writer, once, for the judgment that stands. Returns (res, held)."""
     held = []
     t_writer = time.perf_counter()
     drafted_any = writer_mod.apply(res, ev, writer)
@@ -127,6 +195,51 @@ def _judge_and_draft(g, ev, backend, playbooks, writer):
     return res, held
 
 
+def _ends_at_pm(res, writer):
+    """Would this judgment end at the PM (a confirmation, a notice, or a draft that waits for approval)? Known before the
+    writer is called, so that the chat can be read first and the draft written once."""
+    if res.get("needs_human") or res.get("notify"):
+        return True
+    if res.get("outcome") != "decide":
+        return False
+    return bool(writer is not None and writer_mod.targets(res)) or any(execute.is_gated(a) for a in res["actions"])
+
+
+class _PreviewJudgments:
+    """Events whose chat could not be read yet (the cycle's opening budget was used up, the person was at the PC, Teams was in use):
+    the next cycle continues from the reading. Holds the preview's judgment (what the records keep anyway; None for an event that
+    was not judged yet) and how many times the event was put off. KEEP runs from the first time it was put off (a later delay does
+    not extend it); after `read_max_defer` delays the preview decides. Dropped when the event is finished."""
+
+    KEEP = 24 * 3600
+
+    def __init__(self, out):
+        self.path = Path(out) / "read_pending.json"
+        self.data = fsutil.read_json(self.path, {})
+
+    def _live(self, e):
+        return isinstance(e, dict) and time.time() - e.get("t", 0) < self.KEEP
+
+    def get(self, key):
+        e = self.data.get(key)
+        return e.get("res") if self._live(e) else None
+
+    def deferrals(self, key):
+        e = self.data.get(key)
+        return int(e.get("n", 1)) if self._live(e) else 0
+
+    def put(self, key, res=None):
+        self.data = {k: e for k, e in self.data.items() if self._live(e)}
+        old = self.data.get(key) or {}
+        self.data[key] = {"t": old.get("t", time.time()), "n": int(old.get("n", 0)) + 1, "res": res if res is not None else old.get("res")}
+        fsutil.write_atomic(self.path, json.dumps(self.data, ensure_ascii=False))
+
+    def drop(self, key):
+        if key in self.data:
+            del self.data[key]
+            fsutil.write_atomic(self.path, json.dumps(self.data, ensure_ascii=False))
+
+
 def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=False, reader=None):
     """Judge every event in `payload`. dedup=True (inbox/daily) skips an event already decided
     by the same graph version, so a retried or re-dropped file does not decide twice.
@@ -135,11 +248,11 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
     if playbooks is None:
         playbooks = planner.load_playbooks(DEFAULT_PLAYBOOKS)
     if writer is None:
-        try:
-            writer = writer_mod.get_writer()
-        except ValueError as e:   # a misspelled KIMERU_WRITER: decide without a writer, say so, never park the file
-            writer = None
-            _append(out / "warnings.jsonl", {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "writer": str(e)})
+        writer = writer_mod.get_writer()   # a misspelled KIMERU_WRITER reads as unset: decide without a writer, say so, never park the file
+        for key, msg in config.not_allowed():
+            if key != "writer":
+                continue
+            _append(out / "warnings.jsonl", {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), key: msg})
     seen = _processed(out) if dedup else set()
     results = []
     for ev in events.normalize(payload):
@@ -147,20 +260,40 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
             key = f"{g['name']}@{_graph_version(g)}:{ev['kind']}:{ev.get('id')}".replace(" ", "_")
             if key in seen:
                 continue
-            if dedup and _merge_into_pending(out, ev):
-                with (out / "processed.txt").open("a", encoding="utf-8") as f:
-                    f.write(key + "\n")
-                seen.add(key)
-                continue
             can_read = reader is not None and ev["kind"] == "teams.chat" and bool(ev.get("chat_id"))
             read_info, ev_run = None, ev
+            meter = Meter(backend)
+            pend = _PreviewJudgments(out) if can_read else None
+            # put off too often (the person was at the PC, Teams in use, the cycle's limit): the preview decides
+            tired = bool(pend) and pend.deferrals(key) >= fulltext.max_defer()
             if can_read and fulltext.truncated(ev.get("text")):        # the preview is cut off: read before judging
-                ev_run, read_info = fulltext.deepen(reader, ev)
-            res, held = _judge_and_draft(g, ev_run, backend, playbooks, writer)
-            if can_read and read_info is None and (res["needs_human"] or res.get("notify")):
-                ev_run, read_info = fulltext.deepen(reader, ev)         # a decision that ends at the PM: look at the whole chat
-                if read_info["state"] == "full":
-                    res, held = _judge_and_draft(g, ev_run, backend, playbooks, writer)
+                if tired:
+                    read_info = fulltext.gave_up(fulltext.max_defer())
+                else:
+                    try:
+                        ev_run, read_info = fulltext.deepen(reader, ev)   # (over the limit: nothing has been judged yet)
+                    except fulltext.BudgetExhausted:
+                        pend.put(key)                                  # counted: the next cycle tries again, up to read_max_defer times
+                        raise
+                res = _judge(g, ev_run, meter, playbooks)
+            else:
+                res = pend.get(key) if pend else None                 # a preview judged in an earlier cycle: continue from the reading
+                if res is None:
+                    res = _judge(g, ev, meter, playbooks)
+                if can_read and _ends_at_pm(res, writer):              # a decision that ends at the PM: look at the whole chat
+                    if tired:
+                        read_info = fulltext.gave_up(fulltext.max_defer())
+                    else:
+                        try:
+                            ev_run, read_info = fulltext.deepen(reader, ev)
+                        except fulltext.BudgetExhausted:
+                            pend.put(key, res)                         # the next cycle reads; it does not judge again
+                            raise
+                    if read_info["state"] == "full":
+                        res = _judge(g, ev_run, meter, playbooks)      # the whole text may change the judgment
+            if pend:
+                pend.drop(key)
+            res, held = _draft(res, ev_run, meter, writer)            # the draft is written once, for the judgment that stands
             if read_info:
                 res["read_full"] = read_info
             # decide runs now; advise actions are only proposed until approved (see notify.collect)
@@ -169,22 +302,29 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
             res["at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
             res["summary"] = events.summary(ev_run)
             kept = fulltext.persistable(ev_run)   # a full text is kept only while the item waits (full_text.json)
-            res["event"] = {k: (str(v)[:2000] if isinstance(v, str) else v) for k, v in kept.items()
-                            if k in EVENT_KEEP and v not in (None, "")}   # local only: lets `kimeru review` build a labeled example
+            res["event"] = _recorded_event(kept)   # local only: lets `kimeru review` build a labeled example
             if ev_run.get("full") and res.get("material_event"):
                 res["material_event"] = {**res["material_event"], "text": kept["text"]}
                 res["material_event"].pop("直前のやり取り", None)
             res["judge"] = _judge_info(backend)
             res["graph_key"] = key
+            # a chat's new message is always judged; it joins a waiting item only under the rules of _merge_into_pending
+            merged = dedup and _merge_into_pending(out, ev, res)
             if ev_run.get("full"):
-                # the records that stay hold an excerpt; the whole text waits in full_text.json until the PM decides
+                # the records that stay hold an excerpt; the whole text waits in full_text.json until the PM decides.
+                # No .jsonl file gets it: the paste-in request for Copilot is rebuilt from the excerpt for the record
+                request = fulltext.redact_request(res, ev_run)
                 res_keep = fulltext.scrub(res, ev_run["text"], kept["text"])
                 held = fulltext.scrub(held, ev_run["text"], kept["text"])
-                if res["needs_human"]:
-                    fulltext.save(out, f"{res.get('graph')}:{res.get('event_id')}:{res.get('node')}", ev_run)
+                if res["needs_human"] and not merged:
+                    fulltext.save(out, f"{res.get('graph')}:{res.get('event_id')}:{res.get('node')}", ev_run, request=request)
                 res = res_keep
+            else:
+                res, held = _seal_material(res, held, out, f"{res.get('graph')}:{res.get('event_id')}:{res.get('node')}", ev_run, merged)
             _append(out / "decisions.jsonl", res)
-            if res["needs_human"]:
+            if merged:
+                res["merged"] = True
+            elif res["needs_human"]:
                 _append(out / "queue.jsonl", {**res, "actions": held} if held and res["outcome"] == "decide" else res)
             elif res.get("notify"):   # decided automatically, but the PM should know (paging, P1, today's decision)
                 _append(out / "notices.jsonl", res)
@@ -223,29 +363,34 @@ def _safe_streams():
 
 
 def _brief_hour():
-    try:
-        return int(config.value("brief_hour"))
-    except ValueError:
-        return 8
+    return config.int_value("brief_hour")
+
+
+class _Parser(argparse.ArgumentParser):
+    """No abbreviated options (`--back` for `--backend`): config.apply() reads the command line by the full names,
+    so an abbreviation would work for argparse and not reach the settings."""
+
+    def __init__(self, *a, **k):
+        k["allow_abbrev"] = False
+        super().__init__(*a, **k)
 
 
 def main(argv=None):
     _safe_streams()
     argv_list = list(sys.argv[1:] if argv is None else argv)
+    broken = None
     try:   # settings: argument > environment > config file > default (read once, here)
         for w in config.apply(argv_list):
             print(f"kimeru: warning: {w}", file=sys.stderr)
     except config.ConfigError as e:
-        if not (argv_list[-2:] == ["config", "path"] or argv_list[-1:] == ["path"] and "config" in argv_list):
-            print(f"kimeru: the config file is broken: {e}", file=sys.stderr)
-            return 2
-    ap = argparse.ArgumentParser(prog="kimeru")
+        broken = e   # decided after parsing: some commands must work without a readable config file
+    ap = _Parser(prog="kimeru")
     ap.add_argument("--graphs", default=str(HERE / "graphs"))
     ap.add_argument("--playbooks", default=str(DEFAULT_PLAYBOOKS))
     ap.add_argument("--out", default="out")
-    ap.add_argument("--backend", choices=["stub", "jev", "kev", "clm"], default=os.environ.get("KIMERU_BACKEND", "stub"))
+    ap.add_argument("--backend", type=lambda v: v.strip().lower(), choices=["stub", "jev", "kev", "clm"], default=config.value("backend"))
     ap.add_argument("--model", default="jev-latest")
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub = ap.add_subparsers(dest="cmd", required=True, parser_class=_Parser)
     sub.add_parser("validate")
     p_run = sub.add_parser("run")
     p_run.add_argument("files", nargs="+")
@@ -265,7 +410,8 @@ def main(argv=None):
     p_cal.add_argument("--revert", action="store_true", help="remove the local thresholds file")
     p_n = sub.add_parser("notify", help="post human-queue items to Teams self chat")
     p_n.add_argument("--send", action="store_true", help="actually press Enter (default: paste only)")
-    sub.add_parser("approvals", help="read OK/NG/保留 replies from Teams self chat")
+    p_ap = sub.add_parser("approvals", help="read OK/NG/保留/再実行/済 replies from Teams self chat; carries out approved kinds that are switched on")
+    p_ap.add_argument("--send", action="store_true", help="send the results and texts ready to copy (default: paste only)")
     p_b = sub.add_parser("brief", help="rank today's work; print or post to Teams self chat")
     p_b.add_argument("--top", type=int, default=3)
     p_b.add_argument("--post", action="store_true", help="paste into Teams self chat")
@@ -299,6 +445,7 @@ def main(argv=None):
     p_c.add_argument("action", choices=["show", "set", "unset", "path"])
     p_c.add_argument("key", nargs="?")
     p_c.add_argument("value", nargs="?")
+    p_c.add_argument("--share", action="store_true", help="with show: no path, organization, subscription or address; safe to paste into an issue")
     p_r = sub.add_parser("retry", help="put inbox/done/*.error files back into the inbox (after fixing what parked them)")
     p_r.add_argument("--inbox", default="inbox")
     p_p = sub.add_parser("pull", help="poll ADO / Azure Monitor with your az login into an inbox")
@@ -311,6 +458,19 @@ def main(argv=None):
     p_p.add_argument("--login", action="store_true", help="ado: first `az login` into the organization's tenant")
     a = ap.parse_args(argv)
     out = Path(a.out)
+    exempt = (a.cmd == "config" or (a.cmd == "schedule" and a.action in ("remove", "status"))
+              or (a.cmd == "demo" and a.replay))   # these must work when the file is broken or a value is wrong
+    file_ok = exempt and not (a.cmd == "config" and a.action != "path")   # `config show/set/unset` need a readable file
+    if broken is not None and not file_ok:
+        print(f"kimeru: the config file is broken: {broken}", file=sys.stderr)
+        return 2
+    if not exempt:
+        bad = config.problems()
+        if bad:
+            for b in bad:
+                print(f"kimeru: {b}", file=sys.stderr)
+            print("kimeru: fix it with `kimeru config set <setting> <value>` (or unset the environment variable)", file=sys.stderr)
+            return 2
 
     if a.cmd == "schedule":
         return schedule(a, out)
@@ -371,10 +531,13 @@ def main(argv=None):
         bridge = nt.PowerShellBridge()
         try:
             if a.cmd == "notify":
-                ids = nt.notify(out, bridge, send=a.send)
+                ids = nt.notify(out, bridge, send=a.send, real=True)
                 print(f"{'posted' if a.send else 'pasted (not sent)'}: {ids}")
             else:
-                for ch in nt.collect(out, bridge):
+                res = nt.collect(out, bridge, real=True, send=a.send)
+                if getattr(res, "busy", False):
+                    print("another approvals run is in progress (the daily cycle, or another window): nothing was read or applied. Try again in a minute.")
+                for ch in res:
                     print(f"#{ch['id']} -> {ch['status']}" + (f" ({len(ch['executed'])} actions planned)" if "executed" in ch else ""))
         except Exception as e:  # one readable line instead of a traceback (the check script records it)
             print(f"{a.cmd} failed: {type(e).__name__}: {e}", file=sys.stderr)
@@ -443,15 +606,10 @@ def main(argv=None):
         return 0
     if a.cmd == "daily":
         from . import daily
-        try:
-            writer_mod.get_writer()
-        except ValueError as e:   # fail at the start, where a person or the scheduler's exit code can see it
-            print(f"kimeru: {e}", file=sys.stderr)
-            return 2
         ado = (a.ado_org, a.ado_project) if a.ado_org and a.ado_project else None
         while True:
             r = daily.cycle(out, a.inbox, gs, be, pbs, process, send=a.send, ado=ado,
-                            subscription=a.subscription, brief_hour=a.brief_hour, budget=a.interval)
+                            subscription=a.subscription, brief_hour=a.brief_hour, budget=a.interval, real=True)
             print(datetime.now().strftime("%H:%M"), json.dumps(r, ensure_ascii=False), flush=True)
             if a.once:   # non-zero when a step failed, so Task Scheduler's "last result" shows it
                 failed = any(isinstance(v, str) and v.startswith("error:") for v in r.values())
@@ -504,8 +662,15 @@ def digest(out):
 
 
 def config_cmd(a):
+    if a.share and a.action != "show":
+        print("kimeru: --share goes with `config show` only", file=sys.stderr)
+        return 2
     if a.action == "path":
         print(config.path())
+        return 0
+    if a.action == "show" and a.share:
+        from . import stats
+        print(stats.config_share())
         return 0
     if a.action == "show":
         print(f"config file: {config.path()}" + ("" if config.path().exists() else "  (not created yet)"))
@@ -524,7 +689,13 @@ def config_cmd(a):
             if not a.key or a.value is None:
                 print("kimeru: config set needs a setting and a value", file=sys.stderr)
                 return 2
-            config.set_value(a.key, a.value)
+            val = a.value
+            if a.key == "push_webhook_body" and val.startswith("@"):   # quotes do not survive every shell: the body comes from a file
+                try:
+                    val = Path(val[1:]).read_text(encoding="utf-8-sig").strip()
+                except (OSError, UnicodeDecodeError) as e:
+                    raise config.ConfigError(f"cannot read {val[1:]} ({type(e).__name__})") from None
+            config.set_value(a.key, val)
             print(f"set {a.key} in {config.path()}")
             if a.key == "execute":
                 from . import execute
@@ -562,13 +733,15 @@ def schedule(a, state_out=None):
     runner = pyw if pyw.exists() else exe
     out = Path(a.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
-    backend = f"--backend {a.backend}" if a.backend != "stub" else ""
+    backend = f"--backend {a.backend}"   # always: the environment must not change the judge of a scheduled run
     ado = getattr(a, "ado_org", ""), getattr(a, "ado_project", "")
     extra = (f'--ado-org "{ado[0]}" --ado-project "{ado[1]}" ' if all(ado) else "") + (a.extra or "")
     # the settings in effect now are kept in the config file: the scheduled runs read it (a task has no shell profile)
-    saved = config.save_effective({"backend": a.backend if a.backend != "stub" else "",
-                                   "ado_org": ado[0], "ado_project": ado[1]})
-    line = (f'cmd /c cd /d "{HERE}" && "{runner}" -m kimeru --out "{out}" {backend} daily --once --send '
+    saved = config.save_effective({"backend": a.backend, "ado_org": ado[0], "ado_project": ado[1]})
+    # the state folder is carried over (the task has no shell profile, and the config file lives there); the other
+    # machine-specific variables (KIMERU_WRITER_CMD, KIMERU_*_EXE) are not: set them as user environment variables
+    state = f'set "KIMERU_STATE_DIR={os.environ["KIMERU_STATE_DIR"]}" && ' if os.environ.get("KIMERU_STATE_DIR") else ""
+    line = (f'cmd /c {state}cd /d "{HERE}" && "{runner}" -m kimeru --out "{out}" {backend} daily --once --send '
             f'--inbox "{out / "inbox"}" {extra}').strip()
     vbs = out / "run-daily.vbs"
     # VBS string literal: double every quote; window style 0 = hidden, wait for completion

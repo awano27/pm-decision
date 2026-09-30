@@ -11,6 +11,7 @@ Per draft, deterministic checks (no LLM judge, so runs are comparable before / a
   specific    it uses at least one concrete word from the material (a name, id, number, product)
   invented    dates / numbers / people not in the material (the writer's own check)
 A draft is "good" when all pass. Reading the drafts (--show) is still the real review.
+The coefficients `kimeru calibrate --apply` wrote to the state folder are not read, unless you pass --user-thresholds.
 """
 import argparse
 import json
@@ -21,7 +22,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from kimeru import graph, plan, writer  # noqa: E402
+from kimeru import profiles, graph, plan, writer  # noqa: E402
 from kimeru.backends import JevBackend, KevBackend, StubBackend  # noqa: E402
 
 TOKEN = re.compile(r"[一-龠]{2,}|[ァ-ヶー]{3,}|[A-Za-z][A-Za-z0-9_\-]{2,}|\d+(?:\.\d+)?[%件日人分時]?")
@@ -60,6 +61,8 @@ def main():
     ap.add_argument("--fixtures", default="fixtures.jsonl")
     ap.add_argument("--out")
     ap.add_argument("--show", action="store_true", help="print every draft next to its template")
+    ap.add_argument("--user-thresholds", action="store_true",
+                    help="also read the coefficients `kimeru calibrate --apply` wrote (default: not read)")
     a = ap.parse_args()
     be = {"kev": KevBackend, "jev": JevBackend}.get(a.backend, StubBackend)()
     w = writer.get_writer(a.writer)
@@ -135,4 +138,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    with profiles.ignoring_overrides("--user-thresholds" not in sys.argv):   # a number printed here must not depend on what one PC has tuned
+        main()

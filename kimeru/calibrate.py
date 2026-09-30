@@ -118,6 +118,8 @@ def propose(qs, current, min_questions=MIN_QUESTIONS, allow_wider=False):
 
 
 def apply(profile_name, values):
+    if profile_name not in profiles.JUDGE_PROFILE.values():   # the stub or an unknown judge: nothing reads that name
+        raise ValueError(f"no threshold profile named {profile_name!r} to apply to")
     p = profiles.override_path()
     data = {}
     if p.exists():
@@ -140,25 +142,47 @@ def revert():
 
 
 def run(out, graphs, min_questions=MIN_QUESTIONS, allow_wider=False, do_apply=False, print_fn=print):
+    """Search and (with do_apply) apply, one judge at a time: the coefficients belong to the judge that made the answers,
+    so a record that mixes judges is split first. A record whose judge is not known (the offline stub, an unknown name)
+    is never tuned or applied: the file would be written under a name nothing reads. Returns {profile name: proposal}
+    or None."""
     qs = labeled_questions(out, graphs)
-    judges = sorted({q["judge"] for q in qs})
-    name = (max(set(q["judge"] for q in qs), key=[q["judge"] for q in qs].count).lower() if qs else "kev")
-    prof = profiles.PROFILES.get(name, profiles.PROFILES["kev"])
-    current = profiles.effective(prof)
-    if "Jev" in judges:
-        # Jev's accuracy must not be published: a proposal is fine, the counts that describe accuracy are not printed
-        if len(qs) < min_questions:
-            print_fn(f"足りません: 正誤を付けた質問が {len(qs)} 問です（下限 {min_questions} 問）。何も変えません。")
-            return None
-        proposal, _ = propose(qs, current, min_questions, allow_wider)
-        print_fn("判断モデルが Jev のため、件数の内訳は出しません（TypeSafe の利用規約）。")
-        print_fn(f"提案: {proposal}" if proposal else "変更は提案しません。")
-    else:
-        proposal, lines = propose(qs, current, min_questions, allow_wider)
-        for l in lines:
-            print_fn(l)
-    if proposal and do_apply:
-        print_fn(f"適用しました: {apply(name, proposal)}（元に戻すには kimeru calibrate --revert）")
-    elif proposal:
-        print_fn("適用するには: kimeru calibrate --apply")
-    return proposal
+    if not qs:
+        print_fn(f"足りません: 正誤を付けた質問が 0 問です（下限 {min_questions} 問）。`kimeru review` で増やしてください。何も変えません。")
+        return None
+    by_judge = {}
+    for q in qs:
+        by_judge.setdefault(q["judge"], []).append(q)
+    proposals, skipped = {}, []
+    for judge in sorted(by_judge):
+        jq = by_judge[judge]
+        name = profiles.JUDGE_PROFILE.get(judge)
+        tag = f"[{judge}] " if len(by_judge) > 1 else ""
+        if name is None:
+            skipped.append(judge)
+            print_fn(f"{tag}判断モデルが分からない、または係数を持たない記録（{judge}）の {len(jq)} 問は、係数を探しません。適用もしません。"
+                     "（Jev・Kev・CLM の判断を確かめた記録だけが対象です）")
+            continue
+        current = profiles.effective(profiles.PROFILES[name])
+        if judge == "Jev":
+            # Jev's accuracy must not be published: a proposal is fine, the counts that describe accuracy are not printed
+            if len(jq) < min_questions:
+                print_fn(f"{tag}足りません: 正誤を付けた質問が {len(jq)} 問です（下限 {min_questions} 問）。何も変えません。")
+                continue
+            proposal, _ = propose(jq, current, min_questions, allow_wider)
+            print_fn(f"{tag}判断モデルが Jev のため、件数の内訳は出しません（TypeSafe の利用規約）。")
+            print_fn(f"{tag}提案: {proposal}" if proposal else f"{tag}変更は提案しません。")
+        else:
+            proposal, lines = propose(jq, current, min_questions, allow_wider)
+            for l in lines:
+                print_fn(tag + l)
+        if proposal:
+            proposals[name] = proposal
+            if do_apply:
+                print_fn(f"{tag}適用しました: {apply(name, proposal)}（元に戻すには kimeru calibrate --revert）")
+            else:
+                print_fn(f"{tag}適用するには: kimeru calibrate --apply")
+    if do_apply and not proposals:
+        print_fn("適用しませんでした: " + ("係数を探せる判断モデルの記録がありません（上を見てください）。" if skipped and len(skipped) == len(by_judge)
+                                      else "適用できる提案がありません。"))
+    return proposals or None

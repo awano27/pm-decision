@@ -1,3 +1,8 @@
+try:   # isolation from the real state folder, whichever way the tests are started
+    from . import isolate  # noqa: F401
+except ImportError:
+    import isolate  # noqa: F401
+
 import io
 import json
 import os
@@ -162,6 +167,81 @@ class TestScheduleSavesSettings(Env):
         out = self.install("data2", "stub")
         vbs = (out / "run-daily.vbs").read_text(encoding="utf-16")
         self.assertTrue(vbs.startswith("WScript.Quit "))
+
+
+class TestArgumentsAndFile(Env):
+    def test_argument_reaches_config_show_and_the_record(self):
+        self.write({"backend": "kev", "brief_hour": "7"})
+        rc, out, _ = self.run_cli("--backend", "stub", "config", "show")
+        row = next(l for l in out.splitlines() if l.startswith("backend"))
+        self.assertIn("stub", row)
+        self.assertIn("arg", row)
+        config.apply(["--brief-hour", "9", "daily"])
+        self.assertEqual(config.value("brief_hour"), "9")
+        self.assertEqual(config.report()["effective"]["brief_hour"], {"source": "arg", "value": "9"})
+        config.apply(["--brief-hour=10"])
+        self.assertEqual(config.value("brief_hour"), "10")
+
+    def test_schedule_install_with_the_default_value_replaces_the_files_old_one(self):
+        self.write({"backend": "kev", "future_setting": "keep"})
+        out = Path(self.dir.name) / "o"
+        with mock.patch.object(subprocess, "run", return_value=SimpleNamespace(returncode=0)), redirect_stdout(io.StringIO()):
+            rc, *_ = self.run_cli("--out", str(out), "--backend", "stub", "schedule", "install")
+        self.assertEqual(rc, 0)
+        saved = json.loads(self.file.read_text(encoding="utf-8"))
+        self.assertEqual(saved["backend"], "stub")
+        self.assertEqual(saved["future_setting"], "keep")
+
+    def test_empty_environment_variable_counts_as_not_set(self):
+        self.write({"writer": "m365"})
+        os.environ["KIMERU_WRITER"] = ""
+        config.apply([])
+        self.assertEqual((config.value("writer"), config.SOURCES["writer"]), ("m365", "file"))
+        self.assertEqual(os.environ["KIMERU_WRITER"], "m365")
+
+    def test_unknown_choice_is_refused_by_set_and_by_reading(self):
+        rc, _, err = self.run_cli("config", "set", "backend", "kevv")
+        self.assertEqual(rc, 2)
+        self.assertIn("kev", err)
+        self.assertFalse(self.file.exists())
+        self.write({"backend": "kevv"})
+        rc, _, err = self.run_cli("validate")
+        self.assertEqual(rc, 2)
+        self.assertIn("backend='kevv'", err)
+        self.assertEqual(self.run_cli("config", "set", "backend", "kev")[0], 0)   # the fix itself still works
+        self.assertEqual(self.run_cli("validate")[0], 0)
+
+    def test_broken_file_does_not_stop_status_remove_help_or_replay(self):
+        self.file.write_text("not json", encoding="utf-8")
+        out = Path(self.dir.name) / "o"
+        with mock.patch.object(subprocess, "run", return_value=SimpleNamespace(returncode=0)):
+            self.assertEqual(self.run_cli("--out", str(out), "schedule", "status")[0], 0)
+            self.assertEqual(self.run_cli("--out", str(out), "schedule", "remove")[0], 0)
+        with self.assertRaises(SystemExit) as cm, redirect_stdout(io.StringIO()):
+            self.run_cli("--help")
+        self.assertEqual(cm.exception.code, 0)
+        self.assertEqual(self.run_cli("config", "show")[0], 2)
+
+    def test_set_and_unset_keep_unknown_keys_and_unset_removes_a_secret(self):
+        self.write({"writer": "m365", "from_a_newer_version": {"a": 1}, "api_key": "x"})
+        self.run_cli("config", "set", "toast", "0")
+        self.run_cli("config", "unset", "writer")
+        saved = json.loads(self.file.read_text(encoding="utf-8"))
+        self.assertEqual(saved, {"from_a_newer_version": {"a": 1}, "api_key": "x", "toast": "0"})
+        self.assertIn("unset", self.run_cli("config", "unset", "api_key")[1])
+        self.assertNotIn("api_key", json.loads(self.file.read_text(encoding="utf-8")))
+
+
+class TestLogSize(Env):
+    def test_daily_log_stays_under_its_limit_and_status_reads_the_tail(self):
+        out = Path(self.dir.name) / "out"
+        for i in range(2000):
+            daily._log(out, {"step": "cycle", "n": i, "pad": "x" * 200, "report": {"judge": i}})
+        p = out / "daily.log.jsonl"
+        self.assertLessEqual(p.stat().st_size, daily.LOG_MAX_BYTES)
+        rows = daily._tail_rows(p)
+        self.assertEqual(rows[-1]["n"], 1999)
+        self.assertIn("last cycle:", "\n".join(daily.status_lines(out)))
 
 
 if __name__ == "__main__":

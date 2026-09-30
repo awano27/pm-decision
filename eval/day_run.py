@@ -9,6 +9,7 @@ approval posts -> replies -> actions -> morning brief) and checks what a PM woul
   - no text drafted by the writer was executed without an OK
   - the same event dropped twice is decided once
 Prints a timeline and a pass/fail list. No Teams, no real data.
+The coefficients `kimeru calibrate --apply` wrote to the state folder are not read, unless you pass --user-thresholds.
 """
 import argparse
 import json
@@ -20,7 +21,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from kimeru import daily, graph, notify, plan, writer  # noqa: E402
+from kimeru import profiles, daily, graph, notify, plan, writer  # noqa: E402
 from kimeru.backends import JevBackend, KevBackend, StubBackend  # noqa: E402
 from kimeru.cli import process  # noqa: E402
 
@@ -34,7 +35,7 @@ class FakeTeams:
     def chats(self):
         return []
 
-    def readchat(self, chat_id, count=5):
+    def readchat(self, chat_id, count=5, preview=None):
         """Opening a chat to read it in full: the messages set in `chat_messages` (nothing is opened when it is unknown)."""
         self.opened = getattr(self, "opened", []) + [chat_id]
         msgs = getattr(self, "chat_messages", {}).get(chat_id)
@@ -87,6 +88,8 @@ def main():
     ap.add_argument("--writer", default="copilot")
     ap.add_argument("--n", type=int, default=2, help="events per kind")
     ap.add_argument("--out", default=str(ROOT / "out" / f"day-{datetime.now():%Y%m%d-%H%M%S}"))
+    ap.add_argument("--user-thresholds", action="store_true",
+                    help="also read the coefficients `kimeru calibrate --apply` wrote (default: not read)")
     a = ap.parse_args()
     be = {"kev": KevBackend, "jev": JevBackend}.get(a.backend, StubBackend)()
     os.environ["KIMERU_WRITER"] = a.writer   # approvals (修正 N) use the same writer
@@ -140,6 +143,9 @@ def main():
     else:
         check("at least 3 approval posts to answer", False, f"{len(nums)} posted")
 
+    # this script never asks for real execution (daily.cycle is called without its real flag): whatever the settings say, nothing is written to ADO
+    check("nothing was written to ADO (records only)", not (out / "executions.jsonl").exists())
+
     # drafted text never executed without an OK
     decisions = [json.loads(l) for l in (out / "decisions.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
     leaked = [d["event_id"] for d in decisions for e in d.get("executed", []) if e["action"].get("drafted_by")]
@@ -168,4 +174,5 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    with profiles.ignoring_overrides("--user-thresholds" not in sys.argv):   # a number printed here must not depend on what one PC has tuned
+        sys.exit(main())

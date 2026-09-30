@@ -33,6 +33,8 @@ import subprocess
 import tempfile
 import time
 
+from . import config
+
 SYSTEM = (
     "あなたはプロジェクトマネージャーの下書き係です。与えられた材料だけを使い、"
     "材料にない事実（日付・人名・数値・約束）を作らないでください。"
@@ -199,8 +201,7 @@ QUOTA_REST = 6 * 3600   # seconds: a plan's monthly quota does not come back wit
 
 
 def _state_file(name):
-    base = os.environ.get("KIMERU_STATE_DIR") or os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "kimeru")
-    return os.path.join(base, name)
+    return os.path.join(str(config.state_dir()), name)
 
 
 def _rest_left(name):
@@ -225,8 +226,9 @@ def find_exe(name, env_var=None):
     """The CLI's path: KIMERU_<NAME>_EXE, then PATH, then where the Windows installers put it (winget links / packages,
     npm global, ~/.local/bin). A scheduled task or a fresh shell often has a shorter PATH than the one it was tested in."""
     import glob
-    if env_var and os.environ.get(env_var) and os.path.exists(os.environ[env_var]):
-        return os.environ[env_var]
+    given = (os.environ.get(env_var) or "").strip() if env_var else ""   # empty = not set
+    if given and os.path.exists(given):
+        return given
     found = shutil.which(name)
     if found:
         return found
@@ -253,7 +255,7 @@ class ClaudeWriter:
     NAME = "claude"
 
     def __init__(self, model=None, timeout=180, exe=None):
-        self.model = model or os.environ.get("KIMERU_WRITER_MODEL", "sonnet")
+        self.model = model or config.value("writer_model") or "sonnet"
         self.timeout = timeout
         self.exe = exe or find_exe("claude", "KIMERU_CLAUDE_EXE")
 
@@ -276,7 +278,7 @@ class CopilotWriter:
     NAME = "copilot"
 
     def __init__(self, model=None, timeout=180, exe=None):
-        self.model = model or os.environ.get("KIMERU_WRITER_MODEL", "")
+        self.model = model or config.value("writer_model")
         self.timeout = timeout
         self.exe = exe or find_exe("copilot", "KIMERU_COPILOT_EXE")
 
@@ -321,8 +323,8 @@ class CodexWriter:
     DEFAULT_EFFORT = "low"
 
     def __init__(self, model=None, timeout=240, exe=None, effort=None):
-        self.model = model if model is not None else os.environ.get("KIMERU_CODEX_MODEL", self.DEFAULT_MODEL)
-        self.effort = effort if effort is not None else os.environ.get("KIMERU_CODEX_EFFORT", self.DEFAULT_EFFORT)
+        self.model = model if model is not None else (config.value("codex_model") or self.DEFAULT_MODEL)
+        self.effort = effort if effort is not None else (config.value("codex_effort") or self.DEFAULT_EFFORT)
         self.timeout = timeout
         self.exe = exe or find_exe("codex", "KIMERU_CODEX_EXE")
 
@@ -350,7 +352,7 @@ class GrokWriter:
     NAME = "grok"
 
     def __init__(self, model=None, timeout=240, exe=None):
-        self.model = model or os.environ.get("KIMERU_GROK_MODEL", "")
+        self.model = model or config.value("grok_model")
         self.timeout = timeout
         self.exe = exe or find_exe("grok", "KIMERU_GROK_EXE")
 
@@ -463,8 +465,7 @@ class M365AutoWriter(M365PromptWriter):
         self.script = script or str(Path(__file__).resolve().parent.parent / "tools" / "teams-copilot.ps1")
 
     def _state_file(self):
-        base = os.environ.get("KIMERU_STATE_DIR") or os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "kimeru")
-        return os.path.join(base, "m365-auto.json")
+        return os.path.join(str(config.state_dir()), "m365-auto.json")
 
     def _resting(self):
         """Seconds left of the rest after a failure, else 0. A failing screen automation would otherwise take the
@@ -537,7 +538,7 @@ WRITERS = {"claude": ClaudeWriter, "copilot": CopilotWriter, "codex": CodexWrite
 
 
 def get_writer(name=None):
-    name = (name if name is not None else os.environ.get("KIMERU_WRITER", "")).strip().lower()
+    name = (name if name is not None else config.value("writer")).strip().lower()
     if not name:
         return None
     if name not in WRITERS:

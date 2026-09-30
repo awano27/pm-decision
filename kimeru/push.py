@@ -4,19 +4,26 @@ A post in the Teams self chat never notifies the PM's own devices. Besides the W
 (notify.show_toast), this module can send a short line to one or more routes the PM sets up:
 
   teams_webhook  a Teams Workflows (Power Automate) flow the PM built; its URL is the secret KIMERU_PUSH_TEAMS_URL
-  webhook        any HTTP endpoint: KIMERU_PUSH_WEBHOOK_URL (secret) and a body template (push_webhook_body)
-  outlook        a mail to the PM's own address through the desktop Outlook (tools/outlook-mail.ps1)
+  webhook        any https endpoint: KIMERU_PUSH_WEBHOOK_URL (secret), an optional key KIMERU_PUSH_WEBHOOK_KEY (secret,
+                 sent as a Bearer header, or put into the body where the template says {key}) and a body template
+  outlook        a mail to the address Outlook is signed in with, and nobody else (tools/outlook-mail.ps1)
 
 Nothing else is ever sent: no message text, no sender, no subject; not even with KIMERU_TOAST=detail.
 URLs come from the environment only and never appear in a log, a record or an error text.
 Every route has its own state (what it announced, when, failures, a rest after repeated failures) in
 <out>/push_state.json, so one broken route never affects another route or the cycle.
+When a route is turned on, what was pending before that moment is only recorded (nothing old is sent), but what is posted
+from the start of that cycle on is announced (begin_cycle is called first in the cycle). A route that is turned off loses its
+state, so turning it on again starts from a fresh baseline: what came while it was off is never sent.
+A webhook that answers with a redirect (30x) is a failure: the request is never sent on, and the key header with it.
 """
 import json
 import os
+import re
 import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -28,7 +35,6 @@ URL_ENV = {"teams_webhook": "KIMERU_PUSH_TEAMS_URL", "webhook": "KIMERU_PUSH_WEB
 FAILS_BEFORE_REST = 3
 REST_BASE = 30 * 60          # seconds; doubles with every further failure, at most 6 hours
 REST_MAX = 6 * 3600
-KEEP_KEYS = 200              # announced keys kept per route
 
 
 def enabled_routes():
@@ -62,17 +68,50 @@ class PushError(Exception):
     pass
 
 
-def _post_json(url, payload):
-    req = urllib.request.Request(url, data=payload.encode("utf-8"), headers={"Content-Type": "application/json"}, method="POST")
+def check_url(url):
+    """Raise PushError (with no part of the URL in it) unless `url` is a well-formed https URL."""
+    if re.search(r"\s", url):
+        raise PushError("the URL is not valid (it contains a space)")
     try:
-        with urllib.request.urlopen(req, timeout=15) as r:
+        u = urllib.parse.urlsplit(url)
+        host = u.hostname
+    except ValueError:
+        raise PushError("the URL is not valid") from None
+    if u.scheme.lower() == "http":
+        raise PushError("the URL must be https (an http URL is never used)")
+    if u.scheme.lower() != "https" or not host:
+        raise PushError("the URL is not a valid https URL")
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect is never followed: urllib would carry the key header on to the new address, even to another host or http."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def _urlopen(req, timeout=15):
+    return _OPENER.open(req, timeout=timeout)
+
+
+def _post_json(url, payload, headers=None):
+    check_url(url)
+    try:
+        req = urllib.request.Request(url, data=payload.encode("utf-8"),
+                                     headers={"Content-Type": "application/json", **(headers or {})}, method="POST")
+        with _urlopen(req, timeout=15) as r:
             if r.status >= 300:
                 raise PushError(f"HTTP {r.status}")
     except urllib.error.HTTPError as e:
         raise PushError(f"HTTP {e.code}") from None
     except urllib.error.URLError as e:
         raise PushError(f"network error ({type(e.reason).__name__})") from None
-    except (OSError, ValueError) as e:
+    except PushError:
+        raise
+    except Exception as e:   # whatever it is, its text may hold the URL
         raise PushError(f"send failed ({type(e).__name__})") from None
 
 
@@ -86,25 +125,35 @@ def send_teams_webhook(url, text):
 
 def send_webhook(url, text):
     template = config.value("push_webhook_body") or '{"text": "{text}"}'
-    body = template.replace("{text}", json.dumps(text, ensure_ascii=False)[1:-1])
+    key = os.environ.get("KIMERU_PUSH_WEBHOOK_KEY", "")
+    fill = {"text": json.dumps(text, ensure_ascii=False)[1:-1], "key": json.dumps(key, ensure_ascii=False)[1:-1]}
+    body = re.sub(r"\{(text|key)\}", lambda m: fill[m.group(1)], template)   # one pass: a value is never re-read as a placeholder
     try:
         json.loads(body)
     except ValueError:
         raise PushError("the webhook body template does not produce valid JSON") from None
-    _post_json(url, body)
+    headers = {"Authorization": "Bearer " + key} if key and "{key}" not in template else None
+    _post_json(url, body, headers)
 
 
-def send_outlook(to, text):
+def send_outlook(text):
+    """The recipient is fixed inside outlook-mail.ps1: the address Outlook is signed in with. There is no -To."""
     script = HERE / "tools" / "outlook-mail.ps1"
     try:
         r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script),
-                            "-To", to, "-Subject", "kimeru", "-Body", text],
+                            "-Subject", "kimeru", "-Body", text],
                            capture_output=True, text=True, encoding="utf-8", timeout=60,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (OSError, subprocess.SubprocessError) as e:
         raise PushError(f"Outlook could not be started ({type(e).__name__})") from None
     if r.returncode != 0:
         raise PushError("Outlook did not send the mail (is the desktop Outlook installed and signed in?)")
+    try:   # the script says "verified" only after it checked that the resolved address is the signed-in user's own
+        verified = bool(json.loads((r.stdout or "").strip().lstrip("﻿") or "{}").get("verified"))
+    except ValueError:
+        verified = False
+    if not verified:
+        raise PushError("Outlook did not confirm that the recipient is your own address")
 
 
 def _sender(route):
@@ -113,12 +162,10 @@ def _sender(route):
         url = os.environ.get(URL_ENV[route], "")
         if not url:
             raise PushError(f"{URL_ENV[route]} is not set")
+        check_url(url)
         fn = send_teams_webhook if route == "teams_webhook" else send_webhook
         return lambda text: fn(url, text)
-    to = config.value("push_mail_to")
-    if not to:
-        raise PushError("push_mail_to is not set")
-    return lambda text: send_outlook(to, text)
+    return send_outlook
 
 
 # ---- per-route state ----
@@ -144,31 +191,67 @@ def pending(out):
     return posted, list(ap.data.get("notices", [])), unposted
 
 
-def run(out, now=None, sender=None):
-    """Announce what is new to each enabled route. Returns {route: result}. Never raises for a route's failure."""
+def begin_cycle(out, now=None):
+    """Called first in a cycle that sends. A route seen for the first time is baselined NOW, before this cycle posts anything: what
+    was pending until now is not sent, what this cycle posts is. Routes that are off lose their state (also when run() is not
+    called while nothing is enabled), so turning one on again never sends what came while it was off."""
     routes = enabled_routes()
+    data = _load(out)
+    changed = False
+    for r in [r for r in data["routes"] if r not in routes]:
+        del data["routes"][r]
+        changed = True
+    if routes:
+        posted, notices, unposted = pending(out)
+        everything = {f"#{n}" for n in posted} | {f"unposted:{n}" for n in unposted}
+        for route in routes:
+            if "notice_n" not in data["routes"].get(route, {}):
+                data["routes"][route] = {"sent": sorted(everything), "notice_n": len(notices), "fails": 0,
+                                         "enabled_at": time.time() if now is None else now}
+                changed = True
+    if changed:
+        _save(out, data)
+
+
+def run(out, now=None, sender=None):
+    """Announce what is new to each enabled route. Returns {route: result}. Never raises for a route's failure.
+
+    What a route has been told: `sent` = the item keys it announced (only keys still pending are kept, so the list is
+    bounded by the pending items and never cut short), `notice_n` = how many of the notices (an append-only list) it has
+    been told about. A route's first run only records the baseline and sends nothing."""
+    routes = enabled_routes()
+    data = _load(out)
     if not routes:
+        if data["routes"]:
+            data["routes"] = {}
+            _save(out, data)
         return {}
     now = time.time() if now is None else now
     posted, notices, unposted = pending(out)
-    everything = {f"#{n}" for n in posted} | {f"notice:{k}" for k in notices} | {f"unposted:{n}" for n in unposted}
-    data = _load(out)
+    everything = {f"#{n}" for n in posted} | {f"unposted:{n}" for n in unposted}
+    for r in [r for r in data["routes"] if r not in routes]:
+        del data["routes"][r]            # turned off: turning it on again starts from a fresh baseline
     result = {}
     for route in routes:
-        st = data["routes"].setdefault(route, {"sent": [], "fails": 0})
+        st = data["routes"].setdefault(route, {})
+        if "notice_n" not in st:
+            st.update({"sent": sorted(everything), "notice_n": len(notices), "fails": 0})
+            result[route] = "baseline recorded (nothing old is sent)"
+            continue
+        st["sent"] = [k for k in st.get("sent", []) if k in everything]     # forget what is no longer pending
+        st["notice_n"] = min(st["notice_n"], len(notices))
         if st.get("rest_until", 0) > now:
             result[route] = f"resting until {time.strftime('%H:%M', time.localtime(st['rest_until']))}: {st.get('last_error', '')}"
             continue
         new = everything - set(st["sent"])
-        if not new:
+        new_notices = len(notices) - st["notice_n"]
+        if not new and not new_notices:
             result[route] = "nothing new"
             continue
         if now - st.get("last_at", 0) < min_interval():
             result[route] = "waiting for the minimum interval"
             continue
-        text = message([n for n in posted if f"#{n}" in new],
-                       sum(1 for k in notices if f"notice:{k}" in new),
-                       sum(1 for n in unposted if f"unposted:{n}" in new))
+        text = message([n for n in posted if f"#{n}" in new], new_notices, sum(1 for n in unposted if f"unposted:{n}" in new))
         try:
             if sender is None:
                 _sender(route)(text)
@@ -182,7 +265,8 @@ def run(out, now=None, sender=None):
                 st["rest_until"] = now + min(REST_MAX, REST_BASE * 2 ** (st["fails"] - FAILS_BEFORE_REST))
             result[route] = f"failed: {st['last_error']}"
             continue
-        st["sent"] = (st["sent"] + sorted(new))[-KEEP_KEYS:]
+        st["sent"] = sorted(set(st["sent"]) | new)
+        st["notice_n"] = len(notices)
         st.update({"fails": 0, "last_at": now, "last_ok": now, "last_error": ""})
         st.pop("rest_until", None)
         result[route] = "sent"
@@ -203,6 +287,8 @@ def test(sender=None):
             result[route] = "sent"
         except PushError as e:
             result[route] = f"failed: {e}"
+        except Exception as e:   # the text of an unexpected error may hold the URL: the type only
+            result[route] = f"failed: unexpected error ({type(e).__name__})"
     return result
 
 

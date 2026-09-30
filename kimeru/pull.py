@@ -19,6 +19,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -184,7 +185,8 @@ def pull_ado(org, project, inbox, out, http=http_json, token=None, now=None, fir
         items = http("GET", f"{base}/workitems?ids={','.join(map(str, chunk))}&fields={','.join(ADO_FIELDS)}&api-version=7.1", token)
         for wi in items.get("value", []):
             _drop(inbox, f"ado-{org}-{wi['id']}", {"eventType": "workitem.created",
-                                                   "resource": {"id": wi["id"], "fields": wi.get("fields", {})}})
+                                                   "resource": {"id": wi["id"], "fields": wi.get("fields", {})},
+                                                   "kimeru_origin": {"org": org, "project": project}})
             sec["seen"].append(wi["id"])
             n += 1
         sec["seen"] = sec["seen"][-2000:]
@@ -251,32 +253,82 @@ def pull_alerts(subscription, inbox, out, http=http_json, token=None, time_range
 OWN_PREFIXES = ("あなた:", "あなた：", "You:")
 
 
+_CLOCK = re.compile(r"\d{1,2}:\d{2}")
+_WEEKDAY = re.compile(r"^(?:[月火水木金土日](?:曜日?)?|mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?$", re.I)
+
+
+def _time_rank(t):
+    """How far a chat list's time label has aged: clock time (0) -> yesterday (1) -> weekday (2) -> date (3); None if unknown."""
+    t = str(t or "").strip()
+    if not t:
+        return None
+    if "昨日" in t or t.lower() == "yesterday":
+        return 1
+    if _CLOCK.search(t):
+        return 0
+    if _WEEKDAY.match(t):
+        return 2
+    if re.search(r"\d", t):
+        return 3
+    return None
+
+
+def _resent(old, new):
+    """The preview is the same as last time. Is it a new message with the same words (True) or only the label aging (False)?
+    A label only ever ages forward (10:42 -> yesterday -> Wed -> a date); the same or an earlier stage with another value is a
+    new message. When the two cannot be told apart, it counts as new: asking twice does less harm than missing a message."""
+    old, new = str(old or "").strip(), str(new or "").strip()
+    if old == new:
+        return False
+    ro, rn = _time_rank(old), _time_rank(new)
+    if ro is None or rn is None:
+        return True
+    return rn <= ro
+
+
 def teams_events(chats, sec, include_existing=False):
     """Diff the on-screen chat list against the last poll. Returns teams.chat events.
 
-    First poll (no baseline) only records signatures unless include_existing.
-    Only 1:1 chats and chats flagged as mentioning you are emitted; the self chat
-    and your own last messages are ignored.
+    A chat is remembered as {p: hash of its preview, t: its time label, n: events emitted}. A new event comes when the preview
+    changes (A, B, A is three events) or when the same preview comes with a time label that cannot be the old one aged
+    (the same words sent again). Only the label aging (10:42 -> yesterday) is not an event. The event id carries a per-state
+    token and the count, so a repeated text is not taken for one already decided.
+    First poll (no baseline) only records; so does the first poll of a chat remembered in the old format (a string).
+    Only 1:1 chats and chats flagged as mentioning you are emitted; the self chat and your own last messages are ignored.
     """
     import hashlib
     first = not sec.get("sigs")
     sigs = sec.setdefault("sigs", {})
+    gen = sec.get("gen")
+    if not gen:
+        gen = sec["gen"] = uuid.uuid4().hex[:6]
     out = []
     for c in chats:
         cid, kind = c.get("id"), c.get("kind")
         if not cid or kind == "self":
             continue
-        sig = hashlib.sha1(str(c.get("preview") or "").strip().encode("utf-8")).hexdigest()[:16]
-        prev = sigs.get(cid)
-        sigs[cid] = sig
-        if prev == sig or (first and not include_existing):
-            continue
         preview = (c.get("preview") or "").strip()
+        sig = hashlib.sha1(preview.encode("utf-8")).hexdigest()[:16]
+        t = str(c.get("time") or "").strip()
+        prev = sigs.get(cid)
+        if isinstance(prev, str):                      # saved by an older version: take a new baseline, emit nothing
+            sigs[cid] = {"p": sig, "t": t, "n": 0}
+            continue
+        if prev is None:
+            new_msg = True
+            entry = sigs[cid] = {"p": sig, "t": t, "n": 0}
+        else:
+            entry = prev
+            new_msg = entry.get("p") != sig or _resent(entry.get("t"), t)
+            entry["p"], entry["t"] = sig, t
+        if not new_msg or (first and not include_existing):
+            continue
         if not preview or preview.startswith(OWN_PREFIXES):
             continue
         if not (kind == "oneOnOne" or c.get("mention")):
             continue
-        out.append({"kind": "teams.chat", "source": "teams-ui", "id": f"{cid}#{sig}", "chat_id": cid,
+        entry["n"] = int(entry.get("n", 0)) + 1
+        out.append({"kind": "teams.chat", "source": "teams-ui", "id": f"{cid}#{sig}-{gen}-{entry['n']}", "chat_id": cid,
                     "chat_kind": kind, "author": c.get("title"), "chat_title": c.get("title"), "ts": c.get("time"),
                     "mentions_me": bool(c.get("mention")), "unread": bool(c.get("unread")), "text": preview})
     return out

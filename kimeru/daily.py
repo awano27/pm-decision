@@ -11,7 +11,10 @@ from datetime import datetime
 from pathlib import Path
 
 from . import actions, brief as brief_mod, config, events, fsutil, fulltext, graph, notify, pull, push
-from .backends import BackendUnavailable
+from .backends import BackendUnavailable, is_jev
+
+
+LOG_MAX_BYTES = 256 * 1024   # daily.log.jsonl is trimmed to its newest half when it grows past this
 
 
 def _log(out, rec):
@@ -19,19 +22,39 @@ def _log(out, rec):
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a", encoding="utf-8") as f:
         f.write(json.dumps({"at": datetime.now().isoformat(timespec="seconds"), **rec}, ensure_ascii=False) + "\n")
+    try:
+        if p.stat().st_size > LOG_MAX_BYTES:
+            data = p.read_bytes()[-LOG_MAX_BYTES // 2:]
+            data = data[data.find(b"\n") + 1:]   # drop the cut line
+            fsutil.write_atomic(p, data.decode("utf-8", errors="ignore"))
+            p.with_name(p.name + ".bak").unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _tail_rows(p, nbytes=LOG_MAX_BYTES // 2):
+    """The JSON rows in the last `nbytes` of the log (the whole file is never read)."""
+    with p.open("rb") as f:
+        size = f.seek(0, 2)
+        f.seek(max(0, size - nbytes))
+        data = f.read()
+    lines = data.decode("utf-8", errors="ignore").splitlines()
+    if size > nbytes:
+        lines = lines[1:]   # the first line may be cut
+    rows = []
+    for l in lines:
+        try:
+            rows.append(json.loads(l))
+        except ValueError:
+            continue
+    return rows
 
 
 def status_lines(out):
     """`schedule status`: the last cycle, what failed in it, how many wait for the PM, and where the settings came from."""
     out = Path(out)
     p = out / "daily.log.jsonl"
-    rows = []
-    if p.exists():
-        for l in p.read_text(encoding="utf-8").splitlines():
-            try:
-                rows.append(json.loads(l))
-            except ValueError:
-                continue
+    rows = _tail_rows(p) if p.exists() else []
     last = next((r for r in reversed(rows) if r.get("step") == "cycle"), None)
     cfg = next((r for r in reversed(rows) if r.get("step") == "config"), None)
     lines = []
@@ -39,7 +62,8 @@ def status_lines(out):
         rep = last.get("report", {})
         failed = [k for k, v in rep.items() if isinstance(v, str) and v.startswith("error:")]
         lines.append(f"last cycle: {last.get('at')}  failed steps: {', '.join(failed) or 'none'}  "
-                     f"files the judge could not take: {rep.get('waiting', 0)}")
+                     f"files the judge could not take: {rep.get('waiting', 0)}  "
+                     f"files left for the next cycle (time limit): {rep.get('left_for_next_cycle', 0)}")
     else:
         lines.append("last cycle: none recorded yet")
     data = fsutil.read_json(out / "approvals.json", {"items": {}})
@@ -156,9 +180,33 @@ def process_inbox(inbox, out, graphs, backend, playbooks, process, deadline=None
     return n
 
 
+def _alert_left_open(out, alerts, toaster, bridge=None, send=False):
+    """A chat that kimeru opened could not be put back: tell the person. This is never silent: with KIMERU_TOAST=0, or when the
+    PC notification is not available or fails, the notice goes to the self chat instead (only in a cycle that posts)."""
+    _log(out, {"step": "read_restore", "alerts": list(alerts)})
+    title = "kimeru: チャットの表示"
+    body = ("元のチャットへ戻せず、開いたままの可能性があります。Teams を確認してください" if "failed" in alerts
+            else "元のチャットへ戻せなかったため、自分とのチャットへ移しました")
+    if toaster and notify.toast_enabled():
+        try:
+            toaster(title, body)
+            return
+        except Exception as e:   # the log line above stays; the self chat is tried below
+            _log(out, {"step": "read_restore", "toast": f"failed: {type(e).__name__}"})
+    if not (send and bridge is not None):
+        _log(out, {"step": "read_restore", "notice": "not shown (no PC notification, and this cycle does not post)"})
+        return
+    try:
+        bridge.post(f"[kimeru 通知] {body}", True)
+    except Exception as e:
+        _log(out, {"step": "read_restore", "post": f"failed: {type(e).__name__}"})
+
+
 def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=False,
-          ado=None, subscription=None, brief_hour=8, now=None, toaster=None, budget=None):
-    """Run one cycle. Returns a small report dict (also written to daily.log.jsonl)."""
+          ado=None, subscription=None, brief_hour=8, now=None, toaster=None, budget=None, real=False):
+    """Run one cycle. Returns a small report dict (also written to daily.log.jsonl).
+    real=True (the `daily` command only): approvals carry out the kinds switched on with `config set execute`. Anything else
+    that calls this (the eval scripts, tests) only records."""
     now = now or datetime.now()
     out = Path(out)
     # the PC notification goes with the real Teams bridge only (tests and demos pass their own bridge)
@@ -166,6 +214,18 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
     bridge = bridge or notify.PowerShellBridge()
     r = {}
     _log(out, {"step": "config", **config.report()})   # which settings this cycle runs with, and where they came from
+    try:   # full texts kept past their time are deleted (the items are then treated as decided from the preview)
+        purged = fulltext.purge(out)
+    except Exception as e:
+        purged = []
+        _log(out, {"step": "full_text", "error": f"{type(e).__name__}"})
+    if purged:
+        r["full_text_purged"] = len(purged)
+    if send:   # a route turned on is baselined before this cycle posts anything; a route turned off forgets what came meanwhile
+        try:
+            push.begin_cycle(out)
+        except Exception as e:   # the phone routes never fail a cycle
+            _log(out, {"step": "push_begin", "error": type(e).__name__})
     _step(out, "pull_teams", lambda: pull.pull_teams(inbox, out, bridge=bridge), r)
     if ado:
         _step(out, "pull_ado", lambda: pull.pull_ado(ado[0], ado[1], inbox, out), r)
@@ -183,31 +243,45 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
 
     def post_ready():   # what is ready is posted now, not after the rest of the inbox has been judged
         if send:
-            early.extend(notify.notify(out, bridge, send=True))
+            early.extend(notify.notify(out, bridge, send=True, real=real))
             early_notices.extend(notify.notify_notices(out, bridge, send=True))
     reader = fulltext.Reader(bridge) if fulltext.enabled() else None   # opens chats in full only when it is needed (off by default)
     _step(out, "judge", lambda: process_inbox(inbox, out, graphs, backend, playbooks, process,
                                               deadline=deadline, on_file=post_ready, perf=perf, reader=reader), r)
     if reader is not None and reader.opened:
         perf["chats_opened"] = reader.opened
+    if reader is not None and reader.alerts:
+        _alert_left_open(out, reader.alerts, toaster, bridge=bridge, send=send)
     if perf:
+        if is_jev(backend):   # Jev's speed is not written anywhere (TypeSafe's terms); the counts stay
+            perf = {k: v for k, v in perf.items() if k != "judge_sec"}
         r["perf"] = perf
-    _step(out, "notify", lambda: early + notify.notify(out, bridge, send=send), r)
+    _step(out, "notify", lambda: early + notify.notify(out, bridge, send=send, real=real), r)
     _step(out, "notices", lambda: len(early_notices) + len(notify.notify_notices(out, bridge, send=send)), r)
-    r["waiting"] = len(events.inbox_files(Path(inbox)))   # files the judge could not take (down / overloaded)
+    # files the judge could not take (down / overloaded). Files kept back for the time limit or the reading limit are
+    # not that: the judge is fine, the next cycle takes them (reported apart, and they do not fail the run or hold the brief)
+    left = perf.get("left_for_next_cycle", 0)
+    r["waiting"] = max(0, len(events.inbox_files(Path(inbox))) - left)
+    if left:
+        r["left_for_next_cycle"] = left
     if send and toaster and notify.toast_enabled():
         # self-chat posts never notify the PM's own devices: a Windows notification on this PC does. It is built
         # from what is posted and not yet announced, so a failure on item 2 never loses the announcement of item 1.
         # With KIMERU_TOAST=0 nothing is marked as announced: turning it back on announces what waited.
         nums, keys = notify.untoasted(out)
-        unposted = notify.unposted_count(out)
+        unposted_now = notify.unposted_count(out)
+        # the unposted count is announced when it changes, not every cycle while Teams stays unreachable
+        announced = notify.unposted_announced(out)
+        unposted = unposted_now if unposted_now != announced else 0
+        if announced and not unposted_now:
+            notify.mark_toasted(out, [], [], unposted=0)
         if nums or keys or unposted:
             def do_toast():
                 try:
                     toaster(*notify.toast_text(out, nums, len(keys), unposted))
                 except Exception as e:   # a missing notification must not turn the cycle into a failure
                     return f"failed: {type(e).__name__}: {str(e)[:120]}"
-                notify.mark_toasted(out, nums, keys)
+                notify.mark_toasted(out, nums, keys, unposted=unposted_now)
                 return "shown"
             _step(out, "toast", do_toast, r)
     if send:   # the routes that reach a phone (counts and numbers only); each has its own state
@@ -219,7 +293,10 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
     changes = []
 
     def do_collect():
-        changes.extend(notify.collect(out, bridge))
+        got = notify.collect(out, bridge, real=real, send=send)
+        if getattr(got, "busy", False):
+            return "busy: another approvals run holds the lock, nothing was applied this cycle"
+        changes.extend(got)
         return [f"#{c['id']}:{c['status']}" for c in changes]
     _step(out, "approvals", do_collect, r)
     if send and toaster and changes:

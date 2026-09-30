@@ -1,3 +1,8 @@
+try:   # isolation from the real state folder, whichever way the tests are started
+    from . import isolate  # noqa: F401
+except ImportError:
+    import isolate  # noqa: F401
+
 import json
 import tempfile
 import unittest
@@ -218,6 +223,89 @@ class TestTeams(unittest.TestCase):
             self.assertEqual(len(f), 1)
             self.assertNotIn(":", f[0].name)
             self.assertEqual(pull.pull_teams(Path(d) / "inbox", Path(d) / "out", bridge=B()), 0)
+
+
+class TestTeamsRepeatsAndUpgrade(unittest.TestCase):
+    ONE = "19:aaa_bbb@unq.gbl.spaces"
+
+    def poll(self, sec, preview, time):
+        return pull.teams_events([chat(self.ONE, "oneOnOne", preview, time)], sec)
+
+    def test_the_same_text_arriving_again_is_a_new_event_with_its_own_id(self):
+        sec = {}
+        self.poll(sec, "おはようございます", "8:00")                          # baseline
+        a1 = self.poll(sec, "承認お願いします", "10:42")
+        b = self.poll(sec, "あと、資料も確認ください", "10:50")
+        a2 = self.poll(sec, "承認お願いします", "11:05")                       # A, B, A
+        self.assertEqual((len(a1), len(b), len(a2)), (1, 1, 1))
+        self.assertEqual(len({a1[0]["id"], b[0]["id"], a2[0]["id"]}), 3)      # the third is not taken for the first
+        self.assertEqual(a1[0]["text"], a2[0]["text"])
+
+    def test_the_same_text_on_another_day_is_a_new_event(self):
+        sec = {}
+        self.poll(sec, "おはようございます", "8:00")
+        first = self.poll(sec, "承認お願いします", "月曜日")
+        self.assertEqual(len(first), 1)
+        self.assertEqual(self.poll(sec, "承認お願いします", "月曜日"), [])       # unchanged
+        again = self.poll(sec, "承認お願いします", "10:15")                     # the label went back to a clock time
+        self.assertEqual(len(again), 1)
+
+    def test_only_the_time_label_aging_is_not_a_new_event(self):
+        sec = {}
+        self.poll(sec, "おはようございます", "8:00")
+        self.assertEqual(len(self.poll(sec, "確認をお願いします", "10:42")), 1)
+        for label in ("昨日", "水曜日", "9/24"):                   # clock -> yesterday -> weekday -> date
+            self.assertEqual(self.poll(sec, "確認をお願いします", label), [], label)
+
+    def test_a_label_that_cannot_be_the_old_one_aged_counts_as_new(self):
+        sec = {}
+        self.poll(sec, "おはようございます", "8:00")
+        self.poll(sec, "確認をお願いします", "10:42")
+        self.assertEqual(len(self.poll(sec, "確認をお願いします", "10:58")), 1)     # another clock time
+        self.assertEqual(len(self.poll(sec, "確認をお願いします", "??")), 1)       # unknown label: cannot tell -> new
+        self.assertEqual(len(self.poll(sec, "確認をお願いします", "")), 1)         # label gone: cannot tell -> new
+
+    def test_saved_signatures_of_the_old_format_are_a_baseline_and_emit_nothing(self):
+        sec = {"sigs": {self.ONE: "0123456789abcdef"}}                        # what the earlier versions saved (a string)
+        self.assertEqual(self.poll(sec, "確認をお願いします", "10:42"), [])      # not judged again after an update
+        self.assertEqual(self.poll(sec, "確認をお願いします", "10:42"), [])
+        self.assertEqual(len(self.poll(sec, "次の件です", "10:50")), 1)          # the next new text is an event
+        self.assertIsInstance(sec["sigs"][self.ONE], dict)
+
+    def test_unchanged_chats_after_an_update_emit_nothing(self):
+        chats = [chat(f"19:c{i}@unq.gbl.spaces", "oneOnOne", f"文{i}", "9:00") for i in range(5)]
+        sec = {"sigs": {c["id"]: "deadbeefdeadbeef" for c in chats}}
+        self.assertEqual(pull.teams_events(chats, sec), [])
+
+
+class TestJudgeSees(unittest.TestCase):
+    """The names of the fields the judge is sent, per kind. A field added (or dropped) fails here: with a graph's notes, an extra
+    field lowers Kev's confidence, so it is a decision, not an accident."""
+
+    TEAMS = {"kind", "source", "id", "chat_id", "chat_kind", "author", "ts", "mentions_me", "unread", "text"}
+
+    def test_teams_from_the_screen(self):
+        ev = pull.teams_events([chat("19:a_b@unq.gbl.spaces", "oneOnOne", "確認をお願いします")], {"sigs": {"x": {"p": "", "t": "", "n": 0}}})[0]
+        self.assertEqual(ev["chat_title"], "Sato")                            # kept on the event ...
+        self.assertEqual(set(events.state_of(ev)), self.TEAMS)                # ... but not sent to the judge
+
+    def test_teams_from_graph(self):
+        ev = events.normalize({"id": "m1", "chatId": "19:c", "createdDateTime": "2026-09-28T08:00:00Z",
+                               "from": {"user": {"displayName": "X"}}, "body": {"contentType": "text", "content": "これは何ですか"}})[0]
+        self.assertEqual(set(events.state_of(ev)), {"kind", "source", "id", "ts", "chat_id", "author", "mentions_me", "text"})
+
+    def test_alert(self):
+        ev = events.normalize(pull.alert_payload(ALERT))[0]
+        self.assertEqual(set(events.state_of(ev)), {"kind", "source", "id", "ts", "rule", "severity", "condition", "resources", "description", "context"})
+
+    def test_work_item(self):
+        ev = events.normalize({"eventType": "workitem.created", "resource": WI})[0]
+        self.assertEqual(set(events.state_of(ev)), {"kind", "source", "id", "ts", "type", "title", "area", "created_by", "priority",
+                                                    "description", "acceptance_criteria"})
+
+    def test_meeting_item(self):
+        ev = events.normalize({"title": "定例", "date": "2026-09-28", "text": "- 決定: 来週リリース"})[0]
+        self.assertEqual(set(events.state_of(ev)), {"kind", "source", "id", "ts", "meeting", "index", "item"})
 
 
 class TestAlerts(unittest.TestCase):

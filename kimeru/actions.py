@@ -1,4 +1,5 @@
-"""Action executors. MVP is dry-run only: actions are recorded, never sent."""
+"""Action executors. Here every action is a dry run: it is recorded, never sent. The only kind carried out for real is an
+approved ADO comment (execute.py), and only on the daily and approvals paths."""
 
 KNOWN = {
     "teams.reply": "Reply in the originating Teams chat",

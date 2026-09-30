@@ -30,6 +30,7 @@ param(
   [string]$Text = '',
   [string]$ChatId = '',      # readchat: the chat to open (its id from `chats`)
   [int]$Count = 5,           # readchat: how many of the last messages to read
+  [string]$Preview = '',     # readchat: the start of the chat's list preview (a screen that reports no selection is checked against it)
   [switch]$Send,
   [string]$SelfMarker = $env:KIMERU_SELF_MARKER   # e.g. "自分" if your Teams shows another word
 )
@@ -50,17 +51,38 @@ Add-Type -Namespace K -Name W -MemberDefinition @'
 [DllImport("user32.dll")] public static extern void mouse_event(int f, int x, int y, int d, int e);
 '@
 
+$script:PrevFg = [IntPtr]::Zero
 function Assert-Foreground($w) {
-  # SendKeys goes to whatever window is in front; refuse unless it is Teams
+  # SendKeys and clicks go to whatever window is in front; refuse unless it is Teams
   $h = [IntPtr]$w.Current.NativeWindowHandle
-  if ([K.W]::GetForegroundWindow() -ne $h) {
+  $cur = [K.W]::GetForegroundWindow()
+  if ($cur -ne $h) {
+    if ($script:PrevFg -eq [IntPtr]::Zero) { $script:PrevFg = $cur }   # the window the person was in: put back afterwards (Restore-Foreground)
     [void][K.W]::ShowWindow($h, 9); [void][K.W]::SetForegroundWindow($h); Start-Sleep -Milliseconds 400
   }
   if ([K.W]::GetForegroundWindow() -ne $h) { Fail 'Teams is not the foreground window; no keys sent' }
 }
+function Save-Foreground($w) {
+  # a fixed link may bring Teams to the front by itself: remember the window the person was in, so Restore-Foreground can go back
+  if ($script:PrevFg -ne [IntPtr]::Zero) { return }
+  try { $cur = [K.W]::GetForegroundWindow(); if ($w -and $cur -ne [IntPtr]$w.Current.NativeWindowHandle) { $script:PrevFg = $cur } } catch {}
+}
+function Restore-Foreground {
+  # Teams was brought to the front: go back to the window the person was in, unless they have moved on by themselves
+  if ($script:PrevFg -eq [IntPtr]::Zero) { return }
+  try {
+    $w = Get-TeamsWindow
+    if ($w -and [K.W]::GetForegroundWindow() -eq [IntPtr]$w.Current.NativeWindowHandle) { [void][K.W]::SetForegroundWindow($script:PrevFg) }
+  } catch {}
+  $script:PrevFg = [IntPtr]::Zero
+}
 
 function Out-Json($o) { $o | ConvertTo-Json -Compress -Depth 5 }
-function Fail($msg) { Out-Json @{ ok = $false; error = $msg }; exit 2 }
+$script:InRead = $false   # readchat: a failure must not end the script before the chat is put back
+function Fail($msg) {
+  if ($script:InRead) { throw [System.Exception]::new('KFAIL:' + $msg) }
+  Out-Json @{ ok = $false; error = $msg }; exit 2
+}
 
 # ---- one Teams operation at a time, and never while the person is typing / moving the mouse ----
 Add-Type -Namespace KI -Name L -MemberDefinition @'
@@ -76,6 +98,38 @@ function Get-IdleSeconds {
   if ($d -lt 0) { $d += 4294967296 }
   $d / 1000
 }
+function Get-LastInputTick {
+  $i = New-Object 'KI.L+LASTINPUTINFO'
+  $i.cbSize = [Runtime.InteropServices.Marshal]::SizeOf($i)
+  if (-not [KI.L]::GetLastInputInfo([ref]$i)) { return [uint32]0 }
+  [uint32]$i.dwTime
+}
+$script:OwnTick = $null
+function Mark-OwnInput { $script:OwnTick = Get-LastInputTick }   # our own click counts as input: do not mistake it for the person
+function Get-IdleNeed([int]$fallback) {
+  # seconds without keyboard / mouse use that the person must have had. Reading another chat is the heaviest operation: 30 s unless
+  # KIMERU_READ_IDLE_SEC (read_idle_sec) says otherwise; KIMERU_IDLE_SEC (idle_sec) applies to every operation when it is set
+  if ($Action -eq 'readchat' -and "$env:KIMERU_READ_IDLE_SEC" -ne '') { return [int]$env:KIMERU_READ_IDLE_SEC }
+  if ("$env:KIMERU_IDLE_SEC" -ne '') { return [int]$env:KIMERU_IDLE_SEC }
+  if ($Action -eq 'readchat') { return 30 }
+  $fallback
+}
+function Test-UserIdle([int]$need = 3) {
+  # a check made right before each screen operation (no waiting): $false = the person is using the keyboard / mouse
+  $need = Get-IdleNeed $need
+  if ($need -le 0) { return $true }
+  if ($null -ne $script:OwnTick -and (Get-LastInputTick) -eq $script:OwnTick) { return $true }   # nothing since our own input
+  (Get-IdleSeconds) -ge $need
+}
+function Assert-Idle { if (-not (Test-UserIdle)) { Fail 'the keyboard / mouse has been in use; stopped (set KIMERU_IDLE_SEC=0 to switch this off)' } }
+function Wait-IdleSoft([int]$need = 3, [int]$max = 20) {
+  $t0 = Get-Date
+  while (-not (Test-UserIdle $need)) {
+    if (((Get-Date) - $t0).TotalSeconds -gt $max) { return $false }
+    Start-Sleep -Milliseconds 500
+  }
+  $true
+}
 function Wait-UserIdle([int]$need = 4, [int]$max = 90) {
   if ($env:KIMERU_IDLE_SEC -ne $null -and $env:KIMERU_IDLE_SEC -ne '') { $need = [int]$env:KIMERU_IDLE_SEC }
   if ($need -le 0) { return }
@@ -85,10 +139,10 @@ function Wait-UserIdle([int]$need = 4, [int]$max = 90) {
     Start-Sleep -Milliseconds 500
   }
 }
-function Enter-UiLock {
+function Enter-UiLock([int]$ms = 180000) {
   $script:UiMutex = New-Object Threading.Mutex($false, 'Local\kimeru-ui')
   $got = $false
-  try { $got = $script:UiMutex.WaitOne(180000) } catch [Threading.AbandonedMutexException] { $got = $true }
+  try { $got = $script:UiMutex.WaitOne($ms) } catch [Threading.AbandonedMutexException] { $got = $true }
   if (-not $got) { Fail 'another kimeru Teams operation is running; Teams was not touched' }
 }
 
@@ -99,6 +153,19 @@ function Get-TeamsWindow {
   $A::RootElement.FindAll('Children', [System.Windows.Automation.Condition]::TrueCondition) |
     Where-Object { $pids -contains $_.Current.ProcessId -and $_.Current.Name } | Select-Object -First 1
 }
+
+function Test-TeamsInUse($w) {
+  # read only: Teams is the window in front, or the keyboard focus is in one of its input boxes (the person may be writing).
+  # Nothing is opened then; a failure to tell counts as in use.
+  try {
+    if ([K.W]::GetForegroundWindow() -eq [IntPtr]$w.Current.NativeWindowHandle) { return $true }
+    $pids = @(Get-Process -Name ms-teams -ErrorAction SilentlyContinue | ForEach-Object Id)
+    $f = $A::FocusedElement
+    if ($f -and ($pids -contains $f.Current.ProcessId) -and ($f.Current.ControlType -in @($CT::Edit, $CT::Document))) { return $true }
+  } catch { return $true }
+  $false
+}
+function Test-ReadClickAllowed { "$env:KIMERU_READ_CLICK" -eq '1' }   # read_click=1: readchat may bring Teams to the front and click (off by default)
 
 function Test-SelfTitle($w) { $w -and ($w.Current.Name -match "\| [^|]+ $SELF \|") }
 function Test-Selected($item) {
@@ -221,21 +288,33 @@ function Get-SelectedChatId($w) {
   foreach ($it in (Get-ChatItems $w)) { if (Test-Selected $it) { return (Get-ChatId $it) } }
   $null
 }
-function Test-ChatOpen($w, $id, $title) {
-  # opened = the window title names the chat AND the list agrees (a layout that reports no selection at all: the title alone).
-  # Either one alone has been wrong before (a title that lags, a selection that does not move the pane).
-  if (-not $w -or -not $title) { return $false }
-  if (-not ([string]$w.Current.Name).Contains("| $title |")) { return $false }
-  $sel = @(Get-ChatItems $w | Where-Object { Test-Selected $_ })
-  if ($sel.Count) { return [bool](@($sel | Where-Object { (Get-ChatId $_) -eq $id }).Count) }
-  $true
+function Get-WinChatTitle($w) {
+  # the chat's name as the window title shows it: "<page> | <name> | Microsoft Teams" ('' when it does not have that shape)
+  if ($w -and ([string]$w.Current.Name) -match '^[^|]+ \| (.+) \| [^|]+$') { return $Matches[1].Trim() }
+  ''
 }
+function Test-ChatOpen($w, $id, $title) {
+  # 'confirmed' = the window title names the chat AND the list selection agrees; 'title' = the list reports no selection at all,
+  # so only the title agrees (the caller must check the text that was read); '' = not open.
+  # Either one alone has been wrong before (a title that lags, a selection that does not move the pane).
+  if (-not $w -or -not $title) { return '' }
+  if (-not ([string]$w.Current.Name).Contains("| $title |")) { return '' }
+  $sel = @(Get-ChatItems $w | Where-Object { Test-Selected $_ })
+  if ($sel.Count) { if (@($sel | Where-Object { (Get-ChatId $_) -eq $id }).Count) { return 'confirmed' } else { return '' } }
+  'title'
+}
+function Test-Deadline { if ($script:Deadline -and (Get-Date) -gt $script:Deadline) { Fail 'the time for reading the chat ran out; stopped' } }
 function Select-Chat($w, $id, $title) {
-  # select the chat's list entry (pattern, then invoke, then a click) and wait until Test-ChatOpen agrees; $false = not confirmed
+  # select the chat's list entry (pattern, then invoke, then a click) and wait until Test-ChatOpen agrees: 'confirmed' / 'title' / '' (not confirmed).
+  # The person's keyboard / mouse is checked right before each operation (Assert-Idle stops everything if it is in use).
   $item = Get-ChatItems $w | Where-Object { (Get-ChatId $_) -eq $id } | Select-Object -First 1
-  if (-not $item) { return $false }
+  if (-not $item) { return '' }
+  Assert-Idle
   try { $item.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView(); Start-Sleep -Milliseconds 300 } catch {}
-  foreach ($how in 'select', 'invoke', 'click') {
+  $hows = @('select', 'invoke'); if (Test-ReadClickAllowed) { $hows += 'click' }   # the click needs Teams in front: not by default
+  foreach ($how in $hows) {
+    Assert-Idle; Test-Deadline
+    $script:Acted = $true
     try {
       switch ($how) {
         'select' { $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() }
@@ -246,15 +325,17 @@ function Select-Chat($w, $id, $title) {
           if ($r.Width -le 0 -or -not $wr.Contains([int]($r.X + 40), [int]($r.Y + $r.Height / 2))) { throw 'not clickable' }
           [void][K.W]::SetCursorPos([int]($r.X + [math]::Min(60, $r.Width / 2)), [int]($r.Y + $r.Height / 2))
           [K.W]::mouse_event(2, 0, 0, 0, 0); [K.W]::mouse_event(4, 0, 0, 0, 0)
+          Mark-OwnInput
         }
       }
     } catch { continue }
     for ($i = 0; $i -lt 20; $i++) {
       Start-Sleep -Milliseconds 300
-      if (Test-ChatOpen (Get-TeamsWindow) $id $title) { return $true }
+      $st = Test-ChatOpen (Get-TeamsWindow) $id $title
+      if ($st) { return $st }
     }
   }
-  $false
+  ''
 }
 function Get-ChatMessages($w, $count) {
   # read only: the texts of the last messages in the pane to the right of the chat list (ids first, then names by position)
@@ -297,6 +378,18 @@ function Show-ChatApp($w) {
   if (-not $btn) { return $false }
   try { $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); return $true } catch {}
   try { $btn.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select(); return $true } catch {}
+  $false
+}
+
+function Test-ListItemFocused {
+  try {
+    $f = $A::FocusedElement
+    for ($i = 0; $f -and $i -lt 4; $i++) {
+      if ([string]$f.Current.AutomationId -like 'new-message-*' -or $f.Current.ControlType -eq $CT::Edit) { return $false }
+      if ($f.Current.ControlType -in @($CT::ListItem, $CT::TreeItem)) { return $true }
+      $f = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($f)
+    }
+  } catch {}
   $false
 }
 
@@ -351,6 +444,8 @@ function Open-SelfChat($w) {
             Assert-Foreground $w
             $item.SetFocus(); Start-Sleep -Milliseconds 200
             Assert-Foreground $w
+            # Enter goes to whatever has the focus: only an item of the chat list may have it (a compose box would send its draft)
+            if (-not (Test-ListItemFocused)) { throw 'focus is not on a chat list item' }
             [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
           }
         }
@@ -369,8 +464,8 @@ function Open-SelfChat($w) {
         ", selected chats: " + $(if ($sel) { $sel } else { 'none' }) + ")")
 }
 
-if ($Action -in 'open', 'post', 'send', 'read', 'readchat') { Enter-UiLock }
-if ($Action -in 'post', 'send', 'readchat') { Wait-UserIdle 3 60 }   # writing and opening another chat move the screen: not while the person works   # writing pastes and presses keys: not while the person is typing
+if ($Action -in 'open', 'post', 'send', 'read', 'readchat') { Enter-UiLock $(if ($Action -eq 'readchat') { 60000 } else { 180000 }) }
+if ($Action -in 'post', 'send') { Wait-UserIdle 3 60 }   # writing moves the screen: not while the person works. readchat does not wait: it checks and postpones
 $w = Get-TeamsWindow
 if ($Action -eq 'diag') {
   if (-not $w) { Fail 'Teams window not found' }
@@ -387,28 +482,126 @@ if ($Action -eq 'diag') {
               itemShapes = @($items | Select-Object -First 8 | ForEach-Object { Mask $_.Current.Name }) })
   exit 0
 }
-if ($Action -eq 'readchat') {
-  # Opens one chat, reads its last messages, goes back to the chat that was open. Read only: the input box is never touched.
-  if (-not $w) { Fail 'Teams window not found' }
-  if (-not $ChatId -or $ChatId -eq '48:notes') { Fail 'readchat needs the id of another chat (not the self chat)' }
-  if (-not (Get-ChatItems $w).Count -and (Show-ChatApp $w)) { Start-Sleep -Seconds 2; $w = Get-TeamsWindow }
-  $item = Get-ChatItems $w | Where-Object { (Get-ChatId $_) -eq $ChatId } | Select-Object -First 1
-  if (-not $item) { Fail 'the chat is not in the list on screen; nothing was opened' }
-  $title = Get-ChatTitle $item
-  if (-not $title) { Fail 'the chat has no title to check the screen against; nothing was opened' }
-  $origId = Get-SelectedChatId $w
-  if (-not (Select-Chat $w $ChatId $title)) {
-    if ($origId -and $origId -ne $ChatId) { [void](Select-Chat (Get-TeamsWindow) $origId (Get-ChatTitle (Get-ChatItems (Get-TeamsWindow) | Where-Object { (Get-ChatId $_) -eq $origId } | Select-Object -First 1))) }
-    Fail 'could not confirm that the chat is open (the title and the selection did not agree); nothing was read'
+function Get-PreviewHead([string]$p) {
+  # the part of a list preview that names the chat's content: no ellipsis, at most 40 characters
+  $t = (($p -replace '\s+', ' ').Trim()).TrimEnd(' ', '.', [char]0x2026)
+  if ($t.Length -gt 40) { $t.Substring(0, 40) } else { $t }
+}
+function Test-PreviewMatch($messages, [string]$head) {
+  # the last message read holds the preview (with or without a leading "name: "); a head shorter than 12 characters matches too much
+  if ($head.Length -lt 12 -or -not $messages -or -not @($messages).Count) { return $false }
+  $last = ((@($messages)[-1].text -replace '\s+', ' ')).Trim()
+  if ($last.Contains($head)) { return $true }
+  if ($head -match '^[^:：]{1,30}[:：]\s*(.{12,})$') { return $last.Contains($Matches[1]) }
+  $false
+}
+function Test-OrigOpen($w, $origId, $origTitle) {
+  if ($origId -eq '48:notes') { return [bool](Test-SelfOpen $w) }
+  if ($origTitle -and ([string]$w.Current.Name).Contains("| $origTitle |")) {
+    $sel = @(Get-ChatItems $w | Where-Object { Test-Selected $_ })
+    if ($origId -and $sel.Count) { return [bool](@($sel | Where-Object { (Get-ChatId $_) -eq $origId }).Count) }
+    return $true
   }
-  $w = Get-TeamsWindow
-  $read = Get-ChatMessages $w $Count
-  $returned = $false
-  if ($origId -and $origId -ne $ChatId) {
-    $origItem = Get-ChatItems $w | Where-Object { (Get-ChatId $_) -eq $origId } | Select-Object -First 1
-    if ($origItem) { $returned = [bool](Select-Chat $w $origId (Get-ChatTitle $origItem)) }
-  } elseif ($origId -eq $ChatId) { $returned = $true }
-  Out-Json ([ordered]@{ ok = $true; opened = $true; how = $read.how; messages = @($read.messages); returned = $returned; hadOriginal = [bool]$origId })
+  $false
+}
+function Select-Notes($w) {
+  # the self chat, by the ways that touch no input box: the list entry (pattern, invoke), then the fixed deep link
+  if (-not $w) { return $false }
+  if (Test-SelfOpen $w) { return $true }
+  $item = Get-NotesItem $w
+  foreach ($how in 'select', 'invoke', 'link') {
+    if (-not (Test-UserIdle)) { return $false }
+    if (-not $item -and $how -ne 'link') { continue }
+    try {
+      switch ($how) {
+        'select' { $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() }
+        'invoke' { $item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
+        'link' { Save-Foreground $w; Start-Process 'msteams:/l/chat/48:notes/conversations' }
+      }
+    } catch { continue }
+    for ($i = 0; $i -lt 16; $i++) { Start-Sleep -Milliseconds 300; if (Test-SelfOpen (Get-TeamsWindow)) { return $true } }
+  }
+  $false
+}
+function Restore-Original($origId, $origTitle) {
+  # put the chat that was open back; otherwise the self chat. 'restored' | 'self' | 'failed'. Never operates while the person is
+  # using the keyboard / mouse (it waits a little, then gives up: the caller reports it). A time-out or an interruption while putting
+  # the original back does not skip the self chat.
+  $script:Deadline = (Get-Date).AddSeconds(40)
+  $hasOrig = [bool]($origId -or $origTitle)
+  try {   # read only first: when the chat that was open is still open, there is nothing to put back and nothing to wait for
+    $w0 = Get-TeamsWindow
+    if ($hasOrig -and $w0 -and (Test-OrigOpen $w0 $origId $origTitle)) { return 'restored' }
+  } catch {}
+  try {
+    if (-not (Wait-IdleSoft 3 45)) { return 'failed' }
+    if (-not (Get-TeamsWindow)) { return 'failed' }
+  } catch { return 'failed' }
+  if ($hasOrig) {
+    try {
+      $w = Get-TeamsWindow
+      if (Test-OrigOpen $w $origId $origTitle) { return 'restored' }
+      $target = $null
+      if ($origId) { $target = Get-ChatItems $w | Where-Object { (Get-ChatId $_) -eq $origId } | Select-Object -First 1 }
+      if (-not $target -and $origTitle) {
+        $m = @(Get-ChatItems $w | Where-Object { (Get-ChatTitle $_) -eq $origTitle })
+        if ($m.Count -eq 1) { $target = $m[0] }
+      }
+      if ($target) {
+        $tid = Get-ChatId $target; $ttl = Get-ChatTitle $target
+        if ($tid -and $ttl -and (Select-Chat $w $tid $ttl)) { return 'restored' }
+      }
+    } catch {}
+  }
+  try { if (Select-Notes (Get-TeamsWindow)) { return 'self' } } catch {}
+  'failed'
+}
+
+if ($Action -eq 'readchat') {
+  # Opens one chat, reads its last messages, and puts the chat that was open back. Read only: the input box is never touched.
+  # Every way out (a failure, the person using the PC, the time limit) goes through the put-back below.
+  $script:InRead = $true
+  $script:Deadline = (Get-Date).AddSeconds(90)
+  $errMsg = ''; $origId = $null; $origTitle = ''; $state = ''; $matched = $false; $read = $null; $sameTitle = $false
+  $script:Acted = $false   # set by the first screen operation (Select-Chat): nothing changed before it, so nothing needs putting back
+  try {
+    if (-not $w) { Fail 'Teams window not found' }
+    if (-not $ChatId -or $ChatId -eq '48:notes') { Fail 'readchat needs the id of another chat (not the self chat)' }
+    # read only checks before anything is opened: the person is not using the PC, Teams is not in front, and no input box has the focus
+    Assert-Idle
+    if (Test-TeamsInUse $w) { Fail 'Teams is in use (it is in front, or an input box has the focus); nothing was opened' }
+    if (-not (Get-ChatItems $w).Count) { Assert-Idle; if (Show-ChatApp $w) { Start-Sleep -Seconds 2; $w = Get-TeamsWindow } }
+    $item = Get-ChatItems $w | Where-Object { (Get-ChatId $_) -eq $ChatId } | Select-Object -First 1
+    if (-not $item) { Fail 'the chat is not in the list on screen; nothing was opened' }
+    $title = Get-ChatTitle $item
+    if (-not $title) { Fail 'the chat has no title to check the screen against; nothing was opened' }
+    $origId = Get-SelectedChatId $w
+    $origTitle = Get-WinChatTitle $w
+    $head = Get-PreviewHead $Preview
+    # the text read is checked against the preview on every screen: it needs a preview long enough to mean something
+    if ($head.Length -lt 12) { Fail 'the preview is too short to tell the chat apart on this screen; nothing was opened' }
+    # a screen whose list reports no selection cannot tell two chats of the same title apart (a recurring meeting, two people with the
+    # same name): the title is not trusted. Nothing is read; the self chat is opened instead, so no colleague's chat is left open
+    if (-not $origId -and $origTitle -and $origTitle -eq $title) { $sameTitle = $true; Fail 'the chat that is open has the same title as the chat to read, so they cannot be told apart on this screen; nothing was read' }
+    $state = Select-Chat $w $ChatId $title
+    if (-not $state) { Fail 'could not confirm that the chat is open (the title and the selection did not agree); nothing was read' }
+    $w = Get-TeamsWindow
+    $read = Get-ChatMessages $w $Count
+    $matched = Test-PreviewMatch $read.messages $head
+    if ($state -eq 'title' -and -not $matched) { Fail 'the chat that opened does not match the preview; nothing was used' }
+  } catch {
+    $m = [string]$_.Exception.Message
+    $errMsg = if ($m.StartsWith('KFAIL:')) { $m.Substring(6) } else { 'unexpected error while reading the chat (' + $_.Exception.GetType().Name + ')' }
+  }
+  $restore = 'none'
+  if ($sameTitle) { $restore = Restore-Original $null '' }
+  elseif ($script:Acted) { $restore = if ($origId -eq $ChatId) { 'unchanged' } else { Restore-Original $origId $origTitle } }
+  Restore-Foreground
+  $had = [bool]($origId -or $origTitle)
+  $returned = [bool]($restore -in 'restored', 'unchanged', 'none')
+  if ($errMsg) { Out-Json ([ordered]@{ ok = $false; error = $errMsg; restore = $restore; returned = $returned; hadOriginal = $had }); exit 2 }
+  Out-Json ([ordered]@{ ok = $true; opened = $true; how = $read.how; messages = @($read.messages); returned = $returned; restore = $restore
+                        hadOriginal = $had; verified = $state; previewMatched = $matched })
   exit 0
 }
 
@@ -594,7 +787,11 @@ if ($Action -eq 'read') {
         $entry = "P:" + $Matches[1]
         if (-not $posts.Contains($Matches[1])) { $posts.Add($Matches[1]) }
       }
-      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留|聞き返し|再実行)\s*#?(\d+)\s*[.。!！]*$') {
+      elseif ($l -match '^\[kimeru 実行 #(\d+)\]') {
+        # a result post about #N: replies to #N before it were answered (notify.fresh_replies)
+        $entry = "X:" + $Matches[1]
+      }
+      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留|聞き返し|再実行|済)\s*#?(\d+)\s*[.。!！]*$') {
         # phones often send full-width or re-cased text ("ＯＫ　６７５", "Ok 675"): canonicalize
         $c = '{0} {1}' -f $Matches[1].ToUpper(), $Matches[2]
         $entry = "R:" + $c

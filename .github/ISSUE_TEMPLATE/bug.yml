@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         **実際のメッセージの本文、社名、人名、ID、URL、トークン、パスを書かないでください。** 公開の場所です。
-        下の欄には、`kimeru digest --week --share`（数値と環境だけを出す）などの出力を貼ってください。
+        下の欄には、`kimeru config show --share`、`kimeru digest --week --share`（どちらも、数値と環境だけを出す）などの出力を貼ってください。
   - type: textarea
     id: what
     attributes:
@@ -20,11 +20,13 @@ body:
     attributes:
       label: 診断（本文を含まないもの）
       description: |
-        `python -m kimeru config show`（値は出ますが、秘密は「設定済みか」だけです）、
-        `python -m kimeru schedule status`、Teams の画面操作なら `%LOCALAPPDATA%\kimeru\copilot-diag.txt`
-        （種類・位置・文字数だけで、本文は含みません）。ID や社名が入っていないか、貼る前に見てください。
+        `python -m kimeru config show --share`（パス・組織・サブスクリプションは出ません。秘密は「設定済みか」だけです。
+        `--share` の付かない `config show` は、ユーザー名の入ったパスや組織の名前が出るので、貼らないでください）、
+        `python -m kimeru schedule status`（タスクの実行行にパスが出るので、その行は伏せてください）、
+        Teams の画面操作なら `%LOCALAPPDATA%\kimeru\copilot-diag.txt`（種類・位置・文字数だけで、本文は含みません）。
+        ID や社名が入っていないか、貼る前に見てください。
       render: text
   - type: input
     id: version
     attributes:
-      label: kimeru の版（`python -m kimeru digest --week --share` の 1 行目）
+      label: kimeru の版（`python -m kimeru config show --share` の 1 行目）

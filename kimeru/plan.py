@@ -15,6 +15,8 @@ A `plan` node makes two Jev calls:
 import json
 from pathlib import Path
 
+from . import config
+
 DUE_LEVELS = ["Today", "Within this week", "Next sprint or later"]
 DUE_LABELS = ["今日", "今週", "次スプリント以降"]
 DUE_UNSURE = "期限要確認"
@@ -86,7 +88,7 @@ def build(node, state, backend, playbooks):
     pb = playbooks[a1["choice"]]
     steps = pb["steps"]
     import os
-    lean = os.environ.get("KIMERU_PLAN_LEAN", "1") != "0"
+    lean = config.value("plan_lean") == "1"   # off by default: whether it is faster is measured with Kev first
 
     def due_q(s):
         return {"type": "score", "criteria": DUE_LEVELS, "hints": DUE_HINTS,

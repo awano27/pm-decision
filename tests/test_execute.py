@@ -1,4 +1,9 @@
 """Approved actions carried out for real (ADO comments only). Every call to ADO is mocked: nothing leaves the test."""
+try:   # isolation from the real state folder, whichever way the tests are started
+    from . import isolate  # noqa: F401
+except ImportError:
+    import isolate  # noqa: F401
+
 import json
 import os
 import tempfile
@@ -18,7 +23,7 @@ TENANT = "11111111-2222-3333-4444-555555555555"
 TEXT = "受け入れ条件を追記してください。"
 WI = {"eventType": "workitem.created", "resource": {"id": 7002, "fields": {
     "System.WorkItemType": "Task", "System.Title": "レポート画面の並び順を変えたい", "System.CreatedBy": {"displayName": "Ito"},
-    "System.Description": ""}}}
+    "System.Description": ""}}, "kimeru_origin": {"org": "contoso-not-real", "project": "Proj"}}
 
 
 class NoCriteria(StubBackend):
@@ -35,17 +40,23 @@ class Bridge:
     """A fake self chat: what was posted, and the replies to hand back."""
 
     def __init__(self):
-        self.posts, self.replies = [], []
+        self.posts, self.replies, self.timeline, self.fail_posts = [], [], [], False
+        self.sent_flags = []
 
     def post(self, text, send):
+        if self.fail_posts:
+            raise RuntimeError("Teams is not reachable")
         self.posts.append(text)
-        return {"ok": True}
+        self.sent_flags.append(bool(send))
+        return {"ok": True, "typed": True, "sent": bool(send)}
 
     def read(self):
         tl = []
-        for text in self.posts:
+        for text in self.posts:   # what tools/teams-self.ps1 reads: "P:N" for an approval post, "X:N" for a result post
             if text.startswith("[kimeru #"):
                 tl.append("P:" + text[len("[kimeru #"):].split("]")[0])
+            elif text.startswith("[kimeru 実行 #"):
+                tl.append("X:" + text[len("[kimeru 実行 #"):].split("]")[0])
         return {"timeline": tl + ["R:" + r for r in self.replies], "replies": list(self.replies)}
 
 
@@ -85,15 +96,18 @@ class Base(unittest.TestCase):
     def decide_and_post(self):
         cli.process(WI, GRAPHS, NoCriteria(), self.out, PBS)
         bridge = Bridge()
-        notify.notify(self.out, bridge, send=True)
+        notify.notify(self.out, bridge, send=True, real=True)
         return bridge
+
+    def collect(self, bridge, real=True, send=True):
+        return notify.collect(self.out, bridge, real=real, send=send)
 
     def approve(self, bridge, n=1, word="OK", http=None, token=None):
         bridge.replies.append(f"{word} {n}")
         with mock.patch.object(pull, "http_json", http or self.http()), \
                 mock.patch.object(execute, "_token", lambda org: token or SECRET_TOKEN), \
                 mock.patch.object(pull, "ado_tenant", lambda org: TENANT):
-            return notify.collect(self.out, bridge)
+            return notify.collect(self.out, bridge, real=True, send=True)
 
 
 class TestDefaultWritesNothing(Base):
@@ -124,7 +138,7 @@ class TestAdoComment(Base):
         self.assertIn("/_apis/wit/workItems/7002/comments", url)
         self.assertEqual(retries, 1)                                 # no automatic second try
         self.approve(bridge)                                         # collect() again: the same reply is still in the chat
-        notify.collect(self.out, bridge)
+        self.collect(bridge)
         self.assertEqual(len(self.calls), 1)
         self.assertTrue(any("実行しました" in p and "7002" in p for p in bridge.posts))
 
@@ -133,7 +147,7 @@ class TestAdoComment(Base):
         bridge = self.decide_and_post()
         shown = bridge.posts[0]
         template = next(a for a in GRAPHS["ado.workitem.created"][0]["nodes"]["request_info"]["actions"] if a["type"] == "ado.comment")["text"]
-        self.assertIn(template, shown)                               # the approval post shows the full text
+        self.assertIn(template + execute.SIGNATURE, shown)           # the approval post shows the full text, signature line included
         self.approve(bridge)
         body = self.calls[0][3]
         self.assertEqual(set(body), {"text"})                        # no drafted_by / template_text / unverified ...
@@ -157,7 +171,7 @@ class TestAdoComment(Base):
         self.enable()
         bridge = self.decide_and_post()
         self.assertIn("作業項目 7002", bridge.posts[0])
-        self.assertIn("コメントを書きます", bridge.posts[0])
+        self.assertIn("そのまま書きます", bridge.posts[0])
 
 
 class TestNoDoubleWrite(Base):
@@ -174,11 +188,9 @@ class TestNoDoubleWrite(Base):
         ch = self.approve(bridge, word="OK")                         # the next cycle: same reply still visible
         self.assertEqual(self.calls, [])                             # not written again on its own
         self.assertEqual(ch, [])
-        # a second collect that reaches run_approved (e.g. a later approval of the same item) says the result is unknown
+        self.assertTrue(any("書けたかどうか分かりません" in p for p in bridge.posts))   # the PM was told (once)
         ap = notify.Approvals(self.out)
-        posts = []
-        execute.run_approved(self.out, ap, 1, ap.data["items"]["1"], posts.append)
-        self.assertTrue(any("結果が分かりません" in p for p in posts))
+        execute.run_approved(self.out, ap, 1, ap.data["items"]["1"], lambda t: None)   # a later run: still not written
         self.assertEqual(self.calls, [])
 
     def test_the_pm_is_told_once_that_a_stopped_execution_has_an_unknown_result(self):
@@ -187,9 +199,9 @@ class TestNoDoubleWrite(Base):
         with self.assertRaises(KeyboardInterrupt):
             self.approve(bridge, http=self.http(crash=True))
         bridge.replies.clear()
-        notify.collect(self.out, bridge)
-        notify.collect(self.out, bridge)
-        told = [p for p in bridge.posts if "結果が分かりません" in p]
+        self.collect(bridge)
+        self.collect(bridge)
+        told = [p for p in bridge.posts if "書けたかどうか分かりません" in p]
         self.assertEqual(len(told), 1)                               # once
         self.assertEqual(len(self.calls), 1)                         # the crashed call only: never repeated
         self.assertNotIn("[kimeru #", told[0])                       # not mistaken for a new approval post
@@ -204,10 +216,10 @@ class TestNoDoubleWrite(Base):
         self.assertTrue(any("実行できませんでした" in p for p in bridge.posts))
         before = len(self.calls)
         bridge.replies.clear()
-        notify.collect(self.out, bridge)
+        self.collect(bridge)
         self.assertEqual(len(self.calls), before)                    # not run again by itself
         ch = self.approve(bridge, word="再実行")
-        self.assertEqual(len(self.calls), before + 1)
+        self.assertEqual([c[0] for c in self.calls[before:]], ["GET", "POST"])   # ADO is asked first whether the text is there
         data = json.loads((self.out / "approvals.json").read_text(encoding="utf-8"))["items"]["1"]
         self.assertEqual(data["exec"]["0"]["state"], "done")
         self.assertEqual(ch[-1]["status"], "redo")
@@ -220,6 +232,9 @@ class TestNoDoubleWrite(Base):
         n = ap.add("g:1:n", rec)
         ap.data["items"][str(n)]["posted"] = True
         ap.data["items"][str(n)]["status"] = "approved"
+        for a in rec["actions"]:
+            a["exec_text"] = a["text"]
+        rec["event"] = {"origin": {"org": "contoso-not-real", "project": "Proj"}}
         ap.save()
         seen = []
 

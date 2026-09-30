@@ -29,6 +29,8 @@ import json
 import re
 from pathlib import Path
 
+from . import config
+
 TERMINALS = ("decide", "advise")
 MAX_STEPS = 32
 
@@ -219,7 +221,7 @@ def one_line(s, limit=None):
     """Collapse line breaks and runs of blanks; cut at `title_max` characters (setting) with an ellipsis."""
     import os
     try:
-        limit = limit or max(20, int(os.environ.get("KIMERU_TITLE_MAX", "100")))
+        limit = limit or max(20, config.int_value("title_max"))
     except ValueError:
         limit = 100
     s = " ".join(str(s).split())
@@ -264,7 +266,7 @@ def run(g, event, backend, state=None, playbooks=None, batch=None):
     from .events import state_of
     from . import plan as planner
     if batch is None:
-        batch = os.environ.get("KIMERU_BATCH", "0") == "1"
+        batch = config.value("batch_questions") == "1"
     state = state if state is not None else state_of(event)
     nodes, nid, trace, answers, plan = g["nodes"], g["start"], [], {}, None
     pre = {}
@@ -307,7 +309,7 @@ def run(g, event, backend, state=None, playbooks=None, batch=None):
             nid = n["routes"][edge]
             continue
         if batch and not pre:
-            pre = backend.ask(state, {k: v["question"] for k, v in nodes.items() if v["kind"] == "judge"})
+            pre = backend.ask(state, {k: nodes[k]["question"] for k in reachable_judges(nodes, nid, event)})
         ans = pre[nid] if nid in pre else backend.ask(state, {nid: n["question"]})[nid]
         edge, nxt = route(n, ans, getattr(backend, "profile", None))
         guard = guard_hit(n, event, ans, edge)
@@ -318,6 +320,24 @@ def run(g, event, backend, state=None, playbooks=None, batch=None):
         trace.append({"node": nid, "answer": {k: v for k, v in ans.items() if k != "type"}, "edge": edge})
         nid = nxt
     raise GraphError("max steps exceeded")
+
+
+def reachable_judges(nodes, start, event):
+    """The judge nodes a walk from `start` can still reach, in the graph's order. A match node has one outcome for this
+    event (no model), so only the branch it takes counts; after a model question or a plan every route stays open.
+    Used by batch mode: a question on a branch the rules have closed is not asked."""
+    seen, stack = set(), [start]
+    while stack:
+        nid = stack.pop()
+        if nid in seen:
+            continue
+        seen.add(nid)
+        n = nodes[nid]
+        if n["kind"] == "match":
+            stack.append(n["routes"][match_eval(n, event)[0]])
+        elif n["kind"] not in TERMINALS:
+            stack += _targets(n)
+    return [k for k, v in nodes.items() if k in seen and v["kind"] == "judge"]
 
 
 def _plan_answers(ans):

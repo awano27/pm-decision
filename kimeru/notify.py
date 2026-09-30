@@ -3,8 +3,12 @@
 Queue items (advise nodes with queue=true) are posted to the self chat as
 "[kimeru #N] ..." and the PM replies from any device (e.g. iPhone) with
 "OK N" / "NG N" / "保留 N". Actions attached to an advise node are only
-*proposed*; they run (dry-run in v0.1) when approved. A reply drafted by the
+*proposed*: an approval records the plan (dry-run). Only the kinds the PM switched on with
+`config set execute` are carried out for real (execute.py), and only by the daily and approvals paths
+(collect(real=True)); the demo, the eval scripts, `run` and `watch` never execute. A reply drafted by the
 writer (writer.py) is shown in full; "修正 N <指示>" redrafts it and posts it again.
+Posts made while collecting replies (results, texts ready to copy) are sent only with send=True and wait in an outbox
+(approvals.json) until they were really posted.
 """
 import copy
 import json
@@ -13,11 +17,11 @@ import subprocess
 import unicodedata
 from pathlib import Path
 
-from . import actions, fsutil
+from . import actions, config, fsutil
 from . import writer as writer_mod
 
 HERE = Path(__file__).resolve().parent.parent
-REPLY = re.compile(r"^(OK|NG|保留|聞き返し|再実行)\s*#?(\d+)\s*[.。!！]*$", re.IGNORECASE)
+REPLY = re.compile(r"^(OK|NG|保留|聞き返し|再実行|済)\s*#?(\d+)\s*[.。!！]*$", re.IGNORECASE)
 REDRAFT = re.compile(r"^修正\s*#?(\d+)\s*[:：]?\s*(\S.*)$")
 PASTE = re.compile(r"^下書き\s*#?(\d+)\s*[:：]?\s*(\S.*)$")   # the PM brings back what Microsoft 365 Copilot wrote
 MAX_PASTE = 1200
@@ -39,7 +43,15 @@ def parse_paste(line):
     return (m.group(1), m.group(2).strip()) if m else None
 
 
-STATUS = {"OK": "approved", "NG": "rejected", "保留": "held", "聞き返し": "ask_back", "再実行": "redo"}   # 聞き返し / 再実行: not decisions
+STATUS = {"OK": "approved", "NG": "rejected", "保留": "held", "聞き返し": "ask_back", "再実行": "redo", "済": "closed"}   # 聞き返し / 再実行 / 済: not decisions
+
+
+class BridgeError(RuntimeError):
+    """The script reported a failure. `data` is its JSON (never chat text): what it says about putting the chat back is in it."""
+
+    def __init__(self, message, data=None):
+        super().__init__(message)
+        self.data = data or {}
 
 
 class PowerShellBridge:
@@ -49,11 +61,23 @@ class PowerShellBridge:
         self.script = str(script)
 
     def _run(self, *args):
-        r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", self.script, *args],
-                           capture_output=True, text=True, encoding="utf-8", timeout=120)
-        out = json.loads(r.stdout.strip().lstrip("﻿") or "{}")
+        # readchat moves the screen, waits for a quiet keyboard and puts the chat back: it needs more than the others (its own limit is 90 s)
+        timeout = 300 if "readchat" in args else 120
+        try:
+            r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", self.script, *args],
+                               capture_output=True, text=True, encoding="utf-8", timeout=timeout)
+        except subprocess.TimeoutExpired as e:   # killed: the script could not put the chat back itself
+            if "readchat" not in args:
+                raise
+            raise BridgeError("the script did not finish in time", {"restore": "failed"}) from e
+        try:
+            out = json.loads(r.stdout.strip().lstrip("﻿") or "{}")
+        except ValueError as e:
+            if "readchat" not in args:
+                raise
+            raise BridgeError("the script's output could not be read", {"restore": "failed"}) from e
         if not out.get("ok"):
-            raise RuntimeError(out.get("error") or r.stderr.strip()[:300])
+            raise BridgeError(out.get("error") or r.stderr.strip()[:300], out)
         return out
 
     def post(self, text, send):
@@ -66,9 +90,10 @@ class PowerShellBridge:
     def chats(self):
         return self._run("-Action", "chats").get("chats", [])
 
-    def readchat(self, chat_id, count=5):
-        """Open one chat, read its last messages (read only) and go back to the chat that was open. Slow (a few seconds)."""
-        return self._run("-Action", "readchat", "-ChatId", chat_id, "-Count", str(count))
+    def readchat(self, chat_id, count=5, preview=None):
+        """Open one chat, read its last messages (read only) and go back to the chat that was open. Slow (a few seconds).
+        `preview`: the start of the chat's list preview; a layout that reports no selection is checked against it."""
+        return self._run("-Action", "readchat", "-ChatId", chat_id, "-Count", str(count), *(["-Preview", preview] if preview else []))
 
 
 def format_post(n, rec, full=None):
@@ -78,7 +103,7 @@ def format_post(n, rec, full=None):
     rf = rec.get("read_full") or {}
     if rf.get("state") == "preview_only":
         lines.append("⚠ プレビューだけで判断しました（" + str(rf.get("why", ""))[:100] + "）。元のメッセージを Teams で確認してください")
-    elif rf.get("state") == "full" and rf.get("note"):
+    if rf.get("note"):   # the chat that was open could not be put back (also when nothing could be read)
         lines.append("⚠ " + rf["note"])
     if rec.get("advice"):
         lines.append(f"内容: {rec['advice']}")
@@ -146,13 +171,14 @@ def format_post(n, rec, full=None):
         for a in hidden:
             lines.append("・" + str(a.get("title") or "")[:50] +
                          ("　⚠ 元の材料に無い日付・数値: " + ", ".join(a["unverified"]) if a.get("unverified") else ""))
-    from . import execute
     for a in rec.get("actions", []):
-        if execute.is_gated(a):   # a switched-on kind: the PM sees the exact text that will be written
-            if not a.get("drafted_by"):
-                lines.append(f"{writer_mod.LABEL.get(a['type'], a['type'])}（定型文）:\n{a.get(writer_mod.FIELD.get(a['type'], 'text'), '')}")
-            lines.append(f"→ OK {n} で、作業項目 {a.get('id')} に、上の文面のとおり" + ("（末尾に kimeru の 1 行を付けて）" if execute.signature_on() else "")
-                         + "コメントを書きます")
+        if a.get("exec_skip"):   # no origin recorded: OK records the plan only
+            lines.append(f"→ OK {n} では、作業項目 {a.get('id')} に書きません（{a['exec_skip']}）。承認は記録だけです")
+        elif a.get("exec_text"):   # fixed when this post was made (execute.freeze): exactly what OK will write, and where
+            tg = a.get("exec_origin") or a.get("exec_target") or {}   # the origin of the work item: the place it will be written to
+            lines.append(f"→ OK {n} で、作業項目 {a.get('id')}（取り込み元の組織 {tg.get('org')} / プロジェクト {tg.get('project')}）に、"
+                         "次のコメントをそのまま書きます（末尾の 1 行も含みます）:")
+            lines.append(a["exec_text"])
     ask = any(a.get("ask_back") for a in drafts)
     lines.append(f"返信: OK {n} / NG {n} / 保留 {n}" + (f" / 修正 {n} <直してほしい点>" if drafts else "")
                  + (f" / 下書き {n} <Copilot の文面>" if rec.get("copilot_request") else "")
@@ -192,8 +218,18 @@ def untoasted(out):
     return sorted(nums), [k for k in ap.data.get("notices", []) if k not in seen]
 
 
-def mark_toasted(out, nums, notice_keys):
+def unposted_announced(out):
+    """The number of unposted items the PC notification last named (0 when none, or after they were posted)."""
+    return int(Approvals(out).data.get("unposted_announced", 0))
+
+
+def mark_toasted(out, nums, notice_keys, unposted=None):
     ap = Approvals(out)
+    if unposted is not None:
+        if unposted:
+            ap.data["unposted_announced"] = unposted
+        else:
+            ap.data.pop("unposted_announced", None)
     for n in nums:
         if str(n) in ap.data["items"]:
             ap.data["items"][str(n)]["toasted"] = True
@@ -210,7 +246,7 @@ def unposted_count(out):
 
 def toast_enabled():
     import os
-    return os.environ.get("KIMERU_TOAST", "1") != "0"
+    return config.value("toast") != "0"
 
 
 def toast_text(out, posted, notices, unposted=0):
@@ -225,14 +261,15 @@ def toast_text(out, posted, notices, unposted=0):
     if unposted:
         parts.append(f"投稿できていない確認待ち {unposted} 件")
     body = ("#" + ", #".join(str(n) for n in posted[:5]) if posted else "") or "Teams の自分とのチャットを確認してください"
-    if os.environ.get("KIMERU_TOAST") == "detail" and posted:
+    if config.value("toast") == "detail" and posted:
         rec = (Approvals(out).data["items"].get(str(posted[0])) or {}).get("record", {})
         body += " " + str(rec.get("summary") or rec.get("advice") or rec.get("graph") or "")[:60]
     return "kimeru: " + " / ".join(parts), body
 
 
 ACK = {"approved": "承認", "rejected": "却下", "held": "保留", "ask_back": "聞き返し",
-       "redrafted": "書き直し", "redraft_failed": "書き直せず"}
+       "redrafted": "書き直し", "redraft_failed": "書き直せず", "redo": "再実行", "closed": "済（閉じました）",
+       "reposted": "文面を確認して OK し直してください"}
 
 
 def ack_text(changes):
@@ -244,7 +281,7 @@ def ack_text(changes):
 def show_toast(title, body):
     """Windows notification on this PC (tools/toast.ps1). Opt out with KIMERU_TOAST=0."""
     import os
-    if os.environ.get("KIMERU_TOAST", "1") == "0":
+    if config.value("toast") == "0":
         return "off"
     r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                         str(HERE / "tools" / "toast.ps1"), "-Title", title, "-Body", body],
@@ -290,8 +327,9 @@ def notify_notices(out, bridge, send=False):
     return posted
 
 
-def notify(out, bridge, send=False):
-    """Post every not-yet-posted queue item to the self chat."""
+def notify(out, bridge, send=False, real=False):
+    """Post every not-yet-posted queue item to the self chat. real=True (the daily and approvals paths): the exact text a
+    switched-on kind will write, and where, is fixed and shown in the post (execute.freeze)."""
     out = Path(out)
     ap = Approvals(out)
     q = out / "queue.jsonl"
@@ -301,12 +339,17 @@ def notify(out, bridge, send=False):
             ap.add(_key(rec), rec)
     ap.save()   # an item that cannot be posted now must still exist (and be counted as waiting) after a failed post
     posted = []
+    from . import fulltext
+    fulltext.purge(out)   # a full text kept too long is deleted; the item is then treated as decided from the preview
+    ap = Approvals(out)
     for n, it in ap.data["items"].items():
         req = it["record"].get("copilot_request")
         if it["posted"] and (not req or it.get("request_posted")):
             continue
         if not it["posted"]:
-            from . import fulltext
+            from . import execute, fulltext
+            execute.freeze(it["record"], real)
+            ap.save()
             r = bridge.post(format_post(n, it["record"], fulltext.load(out, it["key"])), send) or {}
             if send and (r.get("typed") is False or r.get("sent") is False):
                 raise RuntimeError(f"#{n} was not posted as planned: {r}")   # stays unposted; retried next cycle
@@ -315,6 +358,7 @@ def notify(out, bridge, send=False):
                 ap.save()  # a failure on a later item must not forget what was already sent
             posted.append(int(n))
         if req and not it.get("request_posted"):   # its own message: one long-press copies just this
+            req = (fulltext.load(out, it["key"]) or {}).get("request") or req   # the request with the whole text is kept apart from the records
             r2 = bridge.post(f"[kimeru #{n} Copilot 用]" + chr(10) + req, send) or {}
             if send and (r2.get("typed") is False or r2.get("sent") is False):
                 raise RuntimeError(f"#{n} Copilot request was not posted as planned: {r2}")
@@ -325,21 +369,27 @@ def notify(out, bridge, send=False):
     return posted
 
 
-def fresh_replies(read):
+def fresh_replies(read, x_boundary=True):
     """Replies that come after the most recent visible post with the same number.
 
     Old "OK 1" lines from an earlier run stay in the chat; without this, a new
     item #1 would be approved by them. With a timeline, a reply counts only if
-    it appears after the last "[kimeru #1]" post; if that post is not visible,
+    it appears after the last "[kimeru #1]" post (or, unless x_boundary is False, after the last result post
+    "[kimeru 実行 #1]", so that an answered `再実行 1` does not act again); if that post is not visible,
     freshness cannot be proven and the reply is ignored.
     """
     tl = read.get("timeline")
     if tl is None:  # older bridge without ordering
         return list(read.get("replies", []))
-    last_post = {}
+    last_post, last_result = {}, {}
     for i, e in enumerate(tl):
-        if e.startswith("P:"):
+        if e.startswith("P:") or (x_boundary and e.startswith("X:")):   # "X:N" is a result post ("[kimeru 実行 #N]"): a reply before it is answered
             last_post[e[2:]] = i
+        if e.startswith("X:"):
+            last_result[e[2:]] = i
+    if not x_boundary:   # the approval post may be off the screen: a result post is a boundary too (after it, a reply is new)
+        for num, i in last_result.items():
+            last_post.setdefault(num, i)
     out = []
     for i, e in enumerate(tl):
         if e.startswith("R:"):
@@ -372,7 +422,9 @@ def _redraft(it, instruction, writer, out=None):
     from . import fulltext
     full = fulltext.load(out, it["key"]) if out is not None else None
     if full:   # the writer works from the whole text while the item waits
-        material["text"] = full["text"]
+        material.update(full.get("material") or {})
+        if full.get("text"):
+            material["text"] = full["text"]
         if full.get("thread"):
             material["thread"] = full["thread"]
     drafted = writer_mod.apply(rec, material, writer, instruction)
@@ -383,6 +435,8 @@ def _redraft(it, instruction, writer, out=None):
         rec.update(before)
         rec["redraft_note"] = f"修正できませんでした（{str(why)[:60]}）。前の下書きのままです"
         return {"status": "redraft_failed", "instruction": instruction}
+    if full and rec.get("copilot_request"):   # the record keeps the request built from the excerpt; the whole text stays in full_text.json
+        fulltext.set_request(out, it["key"], fulltext.redact_request(rec, material, instruction))
     return {"status": "redrafted", "instruction": instruction}
 
 
@@ -419,33 +473,107 @@ def _apply_paste(it, text):
     return {"status": "pasted"}
 
 
-def _after_approval(out, ap, num, it, bridge):
-    """What an approval sets in motion beyond the plan record: the switched-on kinds are carried out (execute.py), and the
-    text of an approved reply comes back alone, ready to copy (it is never sent to the other person)."""
+def _delivered(r, send):
+    """A post counts as delivered only when it was really sent."""
+    return bool(send) and not ((r or {}).get("typed") is False or (r or {}).get("sent") is False)
+
+
+def flush_outbox(ap, bridge, send):
+    """Post what waits in the outbox (results, texts ready to copy), once, all together. Only with send=True. What was not
+    delivered stays for the next cycle, in order; after the first one that cannot be posted the rest is not tried (Teams is not
+    reachable: the attempts grow with the cycles, not with the square of the items). A delivered result post ("[kimeru 実行 #N]")
+    is the boundary for the replies before it (see fresh_replies). Returns True when nothing is left."""
+    box = list(ap.data.get("outbox") or [])
+    if not box or not send:
+        return not box
+    for k, text in enumerate(box):
+        try:
+            ok = _delivered(bridge.post(text, True), True)
+        except Exception:
+            ok = False
+        if not ok:
+            ap.data["outbox"] = box[k:]
+            ap.save()
+            return False
+    ap.data["outbox"] = []
+    ap.save()
+    return True
+
+
+def make_post(ap, bridge, send):
+    """`post(text)` for execute.py: the text is put in the outbox first; it is posted by one flush_outbox at the end of the step
+    (not once per text). Without send it is only pasted (never sent) and stays in the outbox. It never raises."""
+    def post(text):
+        ap.data.setdefault("outbox", []).append(text)
+        ap.save()
+        if not send:
+            try:
+                bridge.post(text, False)
+            except Exception:
+                pass
+    return post
+
+
+def _after_approval(out, ap, num, it, bridge, real=False, send=False):
+    """What an approval sets in motion beyond the plan record: with real=True the switched-on kinds are carried out
+    (execute.py), and the text of an approved reply comes back alone, ready to copy (it is never sent to the other person)."""
     import os
     from . import execute
-    post = lambda t: bridge.post(t, True)
-    ap.save()   # the approval itself is saved before anything is attempted
-    real = execute.run_approved(out, ap, num, it, post)
-    if os.environ.get("KIMERU_SEND_READY", "1") != "0":
-        execute.send_ready_posts(num, it, post, link=os.environ.get("KIMERU_OPEN_CHAT_LINK", "0") == "1")
-    return real
+    post = make_post(ap, bridge, send)
+    ap.save()   # the approval itself is saved before anything is attempted (what is posted is flushed once, at the end of collect)
+    result = execute.run_approved(out, ap, num, it, post) if real else []
+    if config.value("send_ready_post") != "0":
+        execute.send_ready_posts(num, it, post, link=config.value("open_chat_link") == "1")
+    return result
 
 
-def collect(out, bridge, writer=None):
-    """Read replies from the self chat and apply them. Returns applied changes."""
+class Changes(list):
+    """The applied changes. `busy` is True when another approvals run holds the lock: nothing was read or applied."""
+    busy = False
+
+
+def collect(out, bridge, writer=None, real=False, send=False):
+    """Read replies from the self chat and apply them. Returns applied changes. Only one collect runs at a time (a lock file in
+    the state folder): the daily cycle and a hand-typed `approvals` could otherwise approve the same "OK N" twice and write twice.
+    When the lock is held, nothing is done and the result has `busy` set."""
+    with fsutil.exclusive(Path(out) / "approvals.lock") as got:
+        if not got:
+            res = Changes()
+            res.busy = True
+            return res
+        return Changes(_collect(out, bridge, writer, real, send))
+
+
+def _collect(out, bridge, writer=None, real=False, send=False):
+    """The body of collect (the lock is held).
+    real=True (the daily and approvals paths only): an approval carries out the switched-on kinds, and `再実行 N` / `済 N` work.
+    send=True: what is posted while collecting (results, texts ready to copy) is sent; otherwise it is only pasted."""
     ap = Approvals(out)
-    # nothing is waiting for an answer: do not touch Teams at all (reading switches it to the self chat)
-    def waiting(it):   # waiting for an answer, or approved but with an execution that failed / was left unsure (`再実行`)
+    from . import execute
+
+    def waiting(it):   # waiting for an answer, or approved but with an execution that failed / was left unsure (`再実行` / `済`)
         return it["posted"] and (it["status"] in ("pending", "held") or (
-            it["status"] == "approved" and any(v.get("state") in ("failed", "running") for v in (it.get("exec") or {}).values())))
+            real and it["status"] == "approved" and any(execute.unresolved(v) for v in (it.get("exec") or {}).values())))
+    flushed = True
+    if send and ap.data.get("outbox"):
+        flushed = flush_outbox(ap, bridge, True)   # results that could not be posted last time
+    # nothing is waiting for an answer: do not touch Teams at all (reading switches it to the self chat)
     if not any(waiting(it) for it in ap.data["items"].values()):
         return []
-    from . import execute
-    execute.report_unknown(ap, lambda text: bridge.post(text, True))
+    post = make_post(ap, bridge, send)
+    if real:
+        execute.report_unknown(ap, post)
     writer = writer if writer is not None else writer_mod.get_writer()
     changes = []
-    for line in fresh_replies(bridge.read()):
+    read = bridge.read()
+    replies = fresh_replies(read)
+    redo_count = {}
+    for line in fresh_replies(read, x_boundary=False):   # how many `再実行 N` replies stand after the last "[kimeru #N]" post
+        r0 = parse_reply(line)
+        if r0 and r0[0] == "再実行":
+            redo_count[r0[1]] = redo_count.get(r0[1], 0) + 1
+    redo_done = set()
+    for line in replies:
         ps = parse_paste(line)
         if ps:
             it = ap.data["items"].get(ps[0])
@@ -463,20 +591,32 @@ def collect(out, bridge, writer=None):
             continue
         word, num = r
         it = ap.data["items"].get(num)
-        if word == "再実行":   # runs again what failed or was left unsure, on an item that is already approved
-            from . import execute
-            if it and it["status"] == "approved" and it.get("exec") and any(v.get("state") in ("failed", "running") for v in it["exec"].values()):
-                changes.append({"id": int(num), "status": "redo",
-                                "real": execute.redo(out, ap, int(num), it, lambda t: bridge.post(t, True))})
+        if word == "再実行":   # runs again what failed or was left unsure, on an item that is already approved; once per reply
+            if not real or num in redo_done or not it or it["status"] != "approved" \
+                    or not any(execute.unresolved(v) for v in (it.get("exec") or {}).values()):
+                continue
+            redo_done.add(num)
+            seen = int(it.get("redo_seen", 0))
+            cnt = redo_count.get(num, 0)
+            if cnt <= seen:   # this reply already acted, whether or not its result post is visible: it is not run again
+                it["redo_seen"] = min(seen, cnt)
+                continue
+            it["redo_seen"] = cnt
+            ap.save()   # saved before the run: a stop in the middle must not run the same reply again
+            changes.append({"id": int(num), "status": "redo", "real": execute.redo(out, ap, int(num), it, post)})
+            continue
+        if word == "済":   # the PM saw the comment in ADO: what was not known is closed
+            if real and it and it["status"] == "approved" and execute.close_unknown(out, ap, int(num), it):
+                changes.append({"id": int(num), "status": "closed"})
             continue
         if not it or not it["posted"] or it["status"] not in ("pending", "held"):
             continue
         if word == "聞き返し":
             # the ask-back draft becomes the reply and is posted again under the same #N; OK N records it
-            replies = [a for a in it["record"].get("actions", []) if a.get("type") == "teams.reply" and a.get("ask_back")]
-            if not replies:
+            replies_a = [a for a in it["record"].get("actions", []) if a.get("type") == "teams.reply" and a.get("ask_back")]
+            if not replies_a:
                 continue          # nothing to ask back: the item stays as it is
-            for a in replies:
+            for a in replies_a:
                 a["answer_text"], a["text"] = a["text"], a.pop("ask_back")
                 a["unverified"] = a.pop("ask_back_unverified", [])
                 a["variant"] = "ask_back"
@@ -486,6 +626,14 @@ def collect(out, bridge, writer=None):
         new = STATUS[word]
         if new == it["status"]:
             continue
+        if new == "approved" and real and any(execute.is_gated(a) and not a.get("exec_text") and not a.get("exec_skip") for a in it["record"].get("actions", [])):
+            # posted before execution was switched on: it never showed the text that would be written. Nothing is written;
+            # the post is made again with the text and the target, and the PM answers again.
+            it["posted"], it["request_posted"] = False, False
+            it["record"]["redraft_note"] = ("実行を有効にする前に投稿された確認待ちのため、書きませんでした。"
+                                            "下に書く文面と宛先を示します。確かめて、もう一度 OK と返信してください")
+            changes.append({"id": int(num), "status": "reposted"})
+            continue
         it["status"] = new
         if new in ("approved", "rejected"):   # the full text is kept only while the item waits
             from . import fulltext
@@ -493,9 +641,11 @@ def collect(out, bridge, writer=None):
         ch = {"id": int(num), "status": new}
         if new == "approved":
             ch["executed"] = [actions.execute(a, dry_run=True) for a in it["record"].get("actions", [])]
-            ch["real"] = _after_approval(out, ap, int(num), it, bridge)
+            ch["real"] = _after_approval(out, ap, int(num), it, bridge, real=real, send=send)
         changes.append(ch)
     ap.save()
+    if send and flushed and ap.data.get("outbox"):
+        flush_outbox(ap, bridge, True)   # the results of this step, all together (once per cycle)
     if changes:
         from datetime import datetime, timezone
         at = datetime.now(timezone.utc).isoformat(timespec="seconds")

@@ -10,6 +10,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from . import config
+
 
 API_KEYS = ("type", "instructions", "criteria")
 
@@ -82,15 +84,37 @@ def _urlopen(req, timeout):
     return urllib.request.urlopen(req, timeout=timeout)
 
 
+def judge_name(backend):
+    """Which judge is behind a backend, seen through the wrappers that time or record it (Meter, Timed, Recording)."""
+    seen = 0
+    while hasattr(backend, "inner") and seen < 5:
+        backend, seen = backend.inner, seen + 1
+    return getattr(backend, "NAME", type(backend).__name__)
+
+
+def is_jev(backend):
+    """Jev's speed and accuracy numbers must not be published (TypeSafe's terms): nothing that shows them is printed."""
+    return judge_name(backend) == JevBackend.NAME
+
+
 class BackendUnavailable(RuntimeError):
     """The judge could not be reached or is overloaded (429/5xx/timeout after retries).
     Inbox files stay in place and are retried on the next cycle."""
 
 
+def _local_url(key, remote_ok_key):
+    """The address of a judge that runs on this PC. An empty setting means the default (never the cloud address); an
+    address that is not this PC is refused unless it was allowed on purpose, because the event text would leave the PC."""
+    problem = config.url_problem(key, remote_ok_key)
+    if problem:
+        raise SystemExit("kimeru: " + problem)
+    return config.value(key)
+
+
 class KevBackend(JevBackend):
     """Kev (jaredpalmer/kev): a Jev-compatible model served on this PC by `kev.serve`.
-    Same API as Jev; nothing leaves the machine. URL from KIMERU_KEV_URL (default
-    http://127.0.0.1:8009/v1); key only if the server sets KEV_API_KEY."""
+    Same API as Jev; nothing leaves the machine. URL from KIMERU_KEV_URL (empty = the default
+    http://127.0.0.1:8009/v1; an address that is not this PC needs KIMERU_KEV_URL_REMOTE_OK=1); key only if the server sets KEV_API_KEY."""
 
     NAME = "Kev"
     PROFILE = "kev"
@@ -98,7 +122,7 @@ class KevBackend(JevBackend):
 
     def __init__(self, model="kev", retries=2):
         super().__init__(model=model, key_env="KEV_API_KEY", retries=retries,
-                         api=os.environ.get("KIMERU_KEV_URL", "http://127.0.0.1:8009/v1"), key_required=False)
+                         api=_local_url("kev_url", "kev_url_remote_ok"), key_required=False)
 
 
 class ClmBackend(JevBackend):
@@ -112,7 +136,7 @@ class ClmBackend(JevBackend):
 
     def __init__(self, model="clm-latest", retries=2):
         super().__init__(model=model, key_env="CLM_API_KEY", retries=retries,
-                         api=os.environ.get("KIMERU_CLM_URL", "http://127.0.0.1:8700/v1"), key_required=False)
+                         api=_local_url("clm_url", "clm_url_remote_ok"), key_required=False)
 
 
 class StubBackend:

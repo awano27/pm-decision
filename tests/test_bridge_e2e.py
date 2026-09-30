@@ -3,6 +3,11 @@
 Covers what the managed PC exercises except the Teams UI: PowerShell argument
 passing of long Japanese multi-line posts, JSON round-trips, notify -> reply -> approvals.
 """
+try:   # isolation from the real state folder, whichever way the tests are started
+    from . import isolate  # noqa: F401
+except ImportError:
+    import isolate  # noqa: F401
+
 import json
 import os
 import shutil

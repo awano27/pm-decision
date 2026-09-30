@@ -4,6 +4,8 @@ Teams is simulated in memory (nothing is posted anywhere); judgments come from t
 backend (Kev by default). Each step prints what arrived, how each judgment point was
 decided (rule / model / playbook), and what was executed automatically or sent to a
 person. Decisions are written to --out so `kimeru report` can render them afterwards.
+The demo only records: whatever `execute` says in the settings, nothing is written to ADO or anywhere else
+(notify/collect run without real=True).
 """
 import json
 import sys
@@ -11,6 +13,7 @@ import time
 from pathlib import Path
 
 from . import brief as brief_mod, events, notify, pull
+from .backends import is_jev
 
 KIND_LABEL = {"match": "規則", "judge": "判断", "plan": "進め方"}
 ACTION_LABEL = {
@@ -28,7 +31,7 @@ class DemoTeams:
     def chats(self):
         return self.chat_list
 
-    def readchat(self, chat_id, count=5):
+    def readchat(self, chat_id, count=5, preview=None):
         """Opening a chat to read it in full: the messages set in `chat_messages` (nothing is opened when it is unknown)."""
         self.opened = getattr(self, "opened", []) + [chat_id]
         msgs = getattr(self, "chat_messages", {}).get(chat_id)
@@ -162,7 +165,7 @@ def run(scenario, graphs, backend, playbooks, process, out, pace=1.5, step=False
     for f in ("decisions.jsonl", "queue.jsonl", "approvals.json"):
         (out / f).unlink(missing_ok=True)
     teams, be = DemoTeams(), Timed(backend)
-    sec = {"sigs": {"_": "_"}}   # skip the "first poll is a baseline" rule
+    sec = {"sigs": {"_": {"p": "_", "t": "", "n": 0}}}   # skip the "first poll is a baseline" rule
     results, posted = [], []
     _w(f"=== {sc['title']}  （判断: {getattr(backend, 'NAME', type(backend).__name__)}、Teams はデモ用の模擬）", pace)
     for st in sc["steps"]:
@@ -195,7 +198,7 @@ def run(scenario, graphs, backend, playbooks, process, out, pace=1.5, step=False
                 teams.timeline.append(f"R:{word} {n}")
                 _w(f"    iPhone から「{word} {n}」と返信", pace / 2)
             names = {"approved": "承認", "rejected": "却下", "held": "保留"}
-            for ch in notify.collect(out, teams):
+            for ch in notify.collect(out, teams, real=False, send=True):   # the demo never executes, whatever the settings say
                 _w(f"    #{ch['id']} → {names.get(ch['status'], ch['status'])}", pace / 2)
                 for e in ch.get("executed", []):
                     _w(f"      → 実行（試し）: {_action(e['action'])}", pace / 3)
@@ -215,7 +218,8 @@ def run(scenario, graphs, backend, playbooks, process, out, pace=1.5, step=False
                 show_result(r, graphs, pace)
                 results.append(r)
             if be.calls > c0:
-                _w(f"    （モデルの判断 {be.calls - c0} 回、{be.seconds - t0:.1f} 秒）", pace / 3)
+                secs = "" if is_jev(backend) else f"、{be.seconds - t0:.1f} 秒"   # Jev's speed is not shown (TypeSafe's terms)
+                _w(f"    （モデルの判断 {be.calls - c0} 回{secs}）", pace / 3)
 
     kinds = {nid: n["kind"] for lst in graphs.values() for g in lst for nid, n in g["nodes"].items()}
     by_rule = lambda r: any(kinds.get(s["node"]) == "match" and s["edge"] == "yes" for s in r["path"])
@@ -228,6 +232,7 @@ def run(scenario, graphs, backend, playbooks, process, out, pace=1.5, step=False
     _wait()
     _w("=== まとめ")
     _w(f"    判断 {len(results)} 件: 自動で決定 {auto} / 確信が低く安全側で決定 {safe} / 人の確認 {human}")
-    _w(f"    うち規則（安全網）で即決定 {rule} 件、モデルの判断 {be.calls} 回・合計 {be.seconds:.1f} 秒")
+    total = "" if is_jev(backend) else f"・合計 {be.seconds:.1f} 秒"
+    _w(f"    うち規則（安全網）で即決定 {rule} 件、モデルの判断 {be.calls} 回{total}")
     _w(f"    記録: {out / 'decisions.jsonl'}")
     return results

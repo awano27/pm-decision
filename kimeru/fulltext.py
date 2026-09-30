@@ -5,35 +5,36 @@ seen at all. When enabled, kimeru opens a chat and reads its last messages (read
 only when the preview is cut off, or when the decision made from the preview would end at the PM (a person's confirmation or
 a notice). Opening a chat marks it as read in Teams, so what was opened and needed no action is listed in the morning brief.
 
-Limits: at most `read_max_open` chats and `read_budget_sec` seconds per cycle. When a chat cannot be opened or read, or the
-text read does not fit the preview (another chat may have been read), nothing is used: the decision stays the one made from
-the preview, and the approval post and the record say so.
+Limits: at most `read_max_open` chats and `read_budget_sec` seconds per cycle (0 = do not read: the preview decides). A chat
+whose preview is shorter than `read_min_preview` characters is not opened: the text read could not be matched to it. When a chat
+cannot be opened or read, or the text read does not fit the preview (another chat may have been read), nothing is used: the
+decision stays the one made from the preview, and the approval post and the record say so. Whether the chat that was open
+before could be put back is recorded either way (`returned`, `restore`); when it could not, the self chat is opened instead and
+the PC is notified.
 
-The full text is kept only while the item waits for the PM (out/full_text.json); after an approval or a rejection it is deleted,
-and what stays in the records is a summary of the same length as before.
+The full text is kept only while the item waits for the PM (out/full_text.json, at most `full_text_keep_days` days); after an
+approval or a rejection it is deleted, and what stays in the records is a summary of the same length as before. It is never
+written to a .jsonl file: the paste-in request for Microsoft 365 Copilot is kept in the record with the excerpt, and the
+version with the whole text waits in full_text.json beside it.
 """
 import json
+import os
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import config, fsutil
+from . import config
 
 ELLIPSIS = ("…", "...", "‥")
-PERSIST_TEXT = 200          # what the permanent records keep of a full text (the length of a summary)
+PERSIST_TEXT = 120          # what the permanent records keep of a full text (the length of a summary)
 THREAD_ITEM = 300           # characters kept per earlier message
+BUSY = "the keyboard / mouse has been in use"     # the script's message when the person was using the PC: nothing was touched
+IN_USE = "Teams is in use"                        # ... or when Teams is in front / an input box has the focus: nothing was opened
+MIN_MATCH = 12                                    # the shortest preview (characters) that may identify a chat, on every route
 
 
 def enabled():
     return config.value("read_full") == "1"
-
-
-def truncated(text):
-    """The preview ends with an ellipsis: the message goes on."""
-    return str(text or "").rstrip().endswith(ELLIPSIS)
-
-
-def _norm(s):
-    return " ".join(str(s or "").split())
 
 
 def _int(key, default):
@@ -43,92 +44,228 @@ def _int(key, default):
         return default
 
 
+def max_defer():
+    """How many times an event may be put off before the preview decides (0 = it is never put off: the preview decides)."""
+    return _int("read_max_defer", 12)
+
+
+def gave_up(n):
+    """The read_full record of an event that was put off too often: decided from the preview."""
+    return {"state": "preview_only", "why": f"延期が上限（{n} 回）に達したため、プレビューで判断しました"}
+
+
+def truncated(text):
+    """The preview ends with an ellipsis (the message goes on), or is at least `preview_cut_len` characters long
+    (a length measured with the T23 check, for Teams layouts that cut without a mark; 0 = off)."""
+    t = str(text or "").rstrip()
+    if t.endswith(ELLIPSIS):
+        return True
+    n = _int("preview_cut_len", 0)
+    return n > 0 and len(t) >= n
+
+
+def _norm(s):
+    return " ".join(str(s or "").split())
+
+
+def _core(preview):
+    return _norm(str(preview or "").rstrip(" …."))
+
+
+def _body(preview):
+    """The part of a preview that says something about the chat: no ellipsis and no leading "name: "."""
+    core = _core(preview)
+    return core.split(": ", 1)[1] if ": " in core[:40] else core
+
+
 class BudgetExhausted(Exception):
     """The cycle's opening budget is used up: the event waits for the next cycle (it is not decided from the preview)."""
 
 
+class Deferred(BudgetExhausted):
+    """The person was using the keyboard / mouse: nothing was touched, and the event waits for the next cycle."""
+
+
+def _accepts(fn, name):
+    import inspect
+    try:
+        ps = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in ps or any(p.kind is p.VAR_KEYWORD for p in ps.values())
+
+
+RESTORED = ("restored", "unchanged", "none")   # the chat that was open before is open again (or was never left)
+
+
 class Reader:
     """Opens chats through the bridge, within a per-cycle budget. Call it with an event; it returns a dict:
-    {"ok": True, "messages": [...], "returned": bool} or {"ok": False, "why": "..."} (a reason that holds no message text)."""
+    {"ok": True, "messages": [...], "returned": bool, "restore": str} or {"ok": False, "why": "..."} (a reason that holds no
+    message text). `restore` (when a chat was opened): restored | unchanged | self | failed. `alerts` collects what the person
+    must be told on this PC (a chat that could not be put back)."""
 
-    def __init__(self, bridge, max_open=None, seconds=None, count=None, clock=time.monotonic):
+    def __init__(self, bridge, max_open=None, seconds=None, count=None, clock=time.monotonic, min_preview=None):
         self.bridge = bridge
         self.max_open = _int("read_max_open", 3) if max_open is None else max_open
         self.seconds = _int("read_budget_sec", 60) if seconds is None else seconds
         self.count = _int("read_messages", 5) if count is None else count
+        self.min_preview = max(MIN_MATCH, _int("read_min_preview", MIN_MATCH) if min_preview is None else min_preview)
         self.clock = clock
         self.opened = 0
         self.spent = 0.0
+        self.alerts = []
 
     def __call__(self, ev):
         if not ev.get("chat_id"):
             return {"ok": False, "why": "チャットの識別子がありません"}
+        if self.max_open <= 0 or self.seconds <= 0:   # switched off by the setting: the preview decides, and nothing waits
+            return {"ok": False, "why": "全文を読む件数か時間の設定が 0 のため、読みません"}
+        body = _body(ev.get("text"))
+        if len(body) < max(1, self.min_preview):
+            return {"ok": False, "why": f"プレビューが短く（{len(body)} 字）、開いたチャットが正しいか確かめられないため、読みません"}
         if self.opened >= self.max_open:
             raise BudgetExhausted(f"1 サイクルで開く件数の上限（{self.max_open} 件）に達しました")
         if self.spent >= self.seconds:
             raise BudgetExhausted(f"1 サイクルで読む時間の上限（{self.seconds} 秒）に達しました")
         t = self.clock()
         self.opened += 1
+        extra = {"preview": body[:40]} if _accepts(self.bridge.readchat, "preview") else {}
+        data, err = {}, None
         try:
-            res = self.bridge.readchat(ev["chat_id"], self.count)
+            data = self.bridge.readchat(ev["chat_id"], self.count, **extra) or {}
         except Exception as e:   # a fixed message from the script, or the type of the failure: never chat text
-            return {"ok": False, "why": _safe(str(e)) or f"読み取りに失敗しました（{type(e).__name__}）"}
+            err, data = e, getattr(e, "data", None) or {}
         finally:
             self.spent += self.clock() - t
-        msgs = [m for m in (res.get("messages") or []) if _norm(m.get("text"))]
+        restore = self._restore_of(data)
+        if restore == "failed" or (restore == "self" and data.get("hadOriginal") is not False):
+            self.alerts.append(restore)     # there was a chat to go back to, and it could not be
+        if err is not None:
+            msg = str(err)
+            if msg.startswith(BUSY):
+                raise Deferred("キーボード・マウスを使っている間は、Teams を操作しません。次のサイクルに回します")
+            if msg.startswith(IN_USE):
+                raise Deferred("Teams が前面にあるか、入力欄にフォーカスがあるため、開きません。次のサイクルに回します")
+            return self._with_restore({"ok": False, "why": _safe(msg) or f"読み取りに失敗しました（{type(err).__name__}）"}, data, restore)
+        msgs = [m for m in (data.get("messages") or []) if _norm(m.get("text"))]
         if not msgs:
-            return {"ok": False, "why": "メッセージを読み取れませんでした"}
-        if not _fits(ev.get("text"), msgs[-1]["text"]):
-            return {"ok": False, "why": "読んだ内容がプレビューと合いません（別のチャットを読んだ可能性があるので、使いません）"}
-        return {"ok": True, "messages": msgs, "returned": bool(res.get("returned", False))}
+            return self._with_restore({"ok": False, "why": "メッセージを読み取れませんでした"}, data, restore)
+        if not _fits(ev.get("text"), msgs[-1]["text"], self.min_preview):
+            return self._with_restore({"ok": False, "why": "読んだ内容がプレビューと合いません（別のチャットを読んだ可能性があるので、使いません）"}, data, restore)
+        return self._with_restore({"ok": True, "messages": msgs}, data, restore)
+
+    @staticmethod
+    def _restore_of(data):
+        r = str(data.get("restore") or "")
+        if r in ("restored", "unchanged", "none", "self", "failed"):
+            return r
+        if "returned" in data:   # a bridge that reports only whether it went back
+            return "restored" if data.get("returned") else "failed"
+        return ""
+
+    @staticmethod
+    def _with_restore(out, data, restore):
+        if restore:
+            out["restore"] = restore
+            out["returned"] = restore in RESTORED
+            if data.get("hadOriginal") is False:
+                out["had_original"] = False
+        elif "returned" in data:
+            out["returned"] = bool(data["returned"])
+        return out
 
 
 SAFE_MESSAGES = (
     "the chat is not in the list on screen; nothing was opened",
     "the chat has no title to check the screen against; nothing was opened",
+    "the preview is too short to tell the chat apart on this screen; nothing was opened",
+    "the chat that is open has the same title as the chat to read, so they cannot be told apart on this screen; nothing was read",
     "could not confirm that the chat is open (the title and the selection did not agree); nothing was read",
+    "the chat that opened does not match the preview; nothing was used",
     "Teams window not found",
     "readchat needs the id of another chat (not the self chat)",
     "another kimeru Teams operation is running; Teams was not touched",
+    "the time for reading the chat ran out; stopped",
+    "unexpected error while reading the chat",
 )
 
 
 def _safe(msg):
     """The script's own fixed messages are shown as they are (and only that part of the text); anything else is not shown."""
-    return next((m for m in SAFE_MESSAGES if msg.startswith(m)), "") or (
-        "キーボード・マウスを使っている間は、Teams を操作しません" if msg.startswith("the keyboard / mouse has been in use") else "")
+    return next((m for m in SAFE_MESSAGES if msg.startswith(m)), "")
 
 
-def _fits(preview, full):
-    """The preview (minus its ellipsis and a leading "name:") is the start of the text that was read."""
-    core = _norm(str(preview or "").rstrip(" …."))
-    core = core.split(": ", 1)[1] if ": " in core[:40] and not _norm(full).startswith(core[:20]) else core
-    head = core[:40]
-    return bool(head) and head in _norm(full)
+def _fits(preview, full, min_len=MIN_MATCH):
+    """The body of the preview (no ellipsis, no leading "name: ") is at the start of what was read, for at least `min_len`
+    characters (a shorter preview matches almost any text; never fewer than MIN_MATCH)."""
+    min_len = max(MIN_MATCH, min_len)
+    text = _norm(full)
+    for c in (_core(preview), _body(preview)):
+        head = c[:40]
+        if len(head) >= max(1, min_len) and head in text:
+            return True
+    return False
+
+
+def _restore_note(info):
+    if info.get("restore") == "self" and info.get("had_original") is False:
+        return "開いていたチャットが分からなかったため、自分とのチャットを開いた状態にしました"
+    if info.get("restore") == "self":
+        return "元のチャットへ戻せなかったため、自分とのチャットへ移しました"
+    if info.get("restore") == "failed" or info.get("returned") is False:
+        return "元のチャットへ戻せませんでした。Teams で開いているチャットを確認してください"
+    return ""
 
 
 def deepen(reader, ev):
-    """(event to judge, info). info is None when nothing was attempted."""
+    """(event to judge, info). Raises BudgetExhausted / Deferred: the event waits for the next cycle."""
     r = reader(ev)
+    info = {"state": "full" if r.get("ok") else "preview_only"}
     if not r.get("ok"):
-        return ev, {"state": "preview_only", "why": r.get("why", "")}
+        info["why"] = r.get("why", "")
+    for k in ("returned", "restore", "had_original"):   # whether the chat that was open is open again: recorded whatever the decision was
+        if k in r:
+            info[k] = r[k]
+    note = _restore_note(info)
+    if note:
+        info["note"] = note
+    if not r.get("ok"):
+        return ev, info
     msgs = r["messages"]
     thread = [_norm(m["text"])[:THREAD_ITEM] for m in msgs[:-1]]
     ev2 = {**ev, "text": _norm(msgs[-1]["text"]), "full": True}
     if thread:
         ev2["thread"] = thread
-    info = {"state": "full", "returned": r.get("returned", False)}
-    if not info["returned"]:
-        info["note"] = "元のチャットへ戻せませんでした"
     return ev2, info
 
 
+def _scrub_str(text, full, excerpt):
+    """Every stretch of `text` that copies more than the excerpt from the start of the full text (a whole copy, or one cut
+    at some length: a description, a title) becomes the excerpt."""
+    head, out, pos = full[:40], [], 0
+    if len(head) < 40:
+        return text.replace(full, excerpt)
+    while True:
+        i = text.find(head, pos)
+        if i < 0:
+            break
+        n, m = 0, min(len(full), len(text) - i)
+        while n < m and text[i + n] == full[n]:
+            n += 1
+        out.append(text[pos:i])
+        out.append(excerpt if n > len(excerpt) - 1 else text[i:i + n])
+        pos = i + n
+    out.append(text[pos:])
+    return "".join(out)
+
+
 def scrub(obj, full, excerpt):
-    """A copy of `obj` in which the full text is replaced by its excerpt (for the records that stay after the decision)."""
+    """A copy of `obj` in which the full text (and any long copy of its start) is replaced by its excerpt (for the records that
+    stay after the decision)."""
     if not full or full == excerpt:
         return obj
     if isinstance(obj, str):
-        return obj.replace(full, excerpt)
+        return _scrub_str(obj, full, excerpt)
     if isinstance(obj, list):
         return [scrub(x, full, excerpt) for x in obj]
     if isinstance(obj, dict):
@@ -136,14 +273,31 @@ def scrub(obj, full, excerpt):
     return obj
 
 
+def excerpt_event(ev):
+    """The event with a summary-length text and no earlier messages."""
+    out = {k: v for k, v in ev.items() if k not in ("thread", "full")}
+    for k in ("text", "description", "item", "title", "meeting", "condition", "context"):   # the free-text fields
+        if isinstance(out.get(k), str):
+            t = _norm(out[k]) if k == "text" else out[k]
+            out[k] = t if len(t) <= PERSIST_TEXT else t[:PERSIST_TEXT - 1] + "…"
+    out["text"] = out.get("text") or ""
+    return out
+
+
 def persistable(ev):
     """A full-text event as the permanent records may keep it: the text is a summary-length excerpt, the thread is dropped."""
-    if not ev.get("full"):
-        return ev
-    out = {k: v for k, v in ev.items() if k not in ("thread", "full")}
-    t = _norm(out.get("text"))
-    out["text"] = t if len(t) <= PERSIST_TEXT else t[:PERSIST_TEXT - 1] + "…"
-    return out
+    return excerpt_event(ev) if ev.get("full") else ev
+
+
+def redact_request(res, ev, instruction=None):
+    """The paste-in request for Microsoft 365 Copilot holds the text it asks about. The record keeps a request built from the
+    excerpt (`res` is changed); the request with the whole text is returned, for full_text.json. None when there is none."""
+    req = res.get("copilot_request")
+    if not req:
+        return None
+    from . import writer
+    res["copilot_request"] = writer.human_request(res, excerpt_event(ev), instruction)
+    return req
 
 
 # ---- the full text of items that wait for the PM ----
@@ -152,20 +306,98 @@ def _path(out):
     return Path(out) / "full_text.json"
 
 
-def save(out, key, ev):
-    data = fsutil.read_json(_path(out), {})
-    data[key] = {"text": ev.get("text", ""), "thread": ev.get("thread", []), "title": ev.get("author", "")}
-    fsutil.write_atomic(_path(out), json.dumps(data, ensure_ascii=False))
+def _read(out):
+    try:
+        data = json.loads(_path(out).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
-def load(out, key):
-    return fsutil.read_json(_path(out), {}).get(key)
+def _write(out, data):
+    """Write the file, and only the file: fsutil.write_atomic keeps the previous version as .bak, which would keep a deleted
+    full text on the disk. An empty file is not kept at all."""
+    p = _path(out)
+    bak = p.with_name(p.name + ".bak")
+    if not data:
+        for f in (p, bak):
+            f.unlink(missing_ok=True)
+        return
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, p)
+    bak.unlink(missing_ok=True)
+
+
+def keep_days():
+    return _int("full_text_keep_days", 7) or 7
+
+
+def _expired(entry, now=None):
+    try:
+        at = datetime.fromisoformat(entry.get("at", ""))
+    except (TypeError, ValueError, AttributeError):
+        return True     # an entry that cannot be dated cannot be aged either: it goes
+    return (now or datetime.now(timezone.utc)) - at > timedelta(days=keep_days())
+
+
+def save(out, key, ev, request=None, now=None, material=None):
+    data = _read(out)
+    entry = {"text": ev.get("text", ""), "thread": ev.get("thread", []), "title": ev.get("author", ""),
+             "at": (now or datetime.now(timezone.utc)).isoformat(timespec="seconds")}
+    if request:
+        entry["request"] = request
+    if material:   # other free-text fields of the event (a description, an item), kept whole like the text
+        entry["material"] = material
+    data[key] = entry
+    _write(out, data)
+
+
+def set_request(out, key, request):
+    """Replace the request kept with a full text (after a redraft)."""
+    data = _read(out)
+    if key in data:
+        if request:
+            data[key]["request"] = request
+        else:
+            data[key].pop("request", None)
+        _write(out, data)
+
+
+def load(out, key, now=None):
+    e = _read(out).get(key)
+    return None if e is None or _expired(e, now) else e
 
 
 def drop(out, key):
-    data = fsutil.read_json(_path(out), {})
+    data = _read(out)
     if key in data:
         del data[key]
-        fsutil.write_atomic(_path(out), json.dumps(data, ensure_ascii=False))
+        _write(out, data)
         return True
     return False
+
+
+def purge(out, now=None):
+    """Delete the full texts kept longer than `full_text_keep_days`. The items they belonged to are then treated as decided from
+    the preview (their record says so). Returns the keys removed."""
+    data = _read(out)
+    gone = [k for k, e in data.items() if _expired(e, now)]
+    if not gone:
+        if not data:
+            _write(out, data)       # nothing kept: no file, and no .bak left by an older version
+        return []
+    for k in gone:
+        del data[k]
+    _write(out, data)
+    from . import notify
+    ap = notify.Approvals(out)
+    changed = False
+    for it in ap.data["items"].values():
+        if it.get("key") in gone:
+            it["record"]["read_full"] = {"state": "preview_only", "why": f"全文の保存期限（{keep_days()} 日）を過ぎたため、全文を消しました"}
+            changed = True
+    if changed:
+        ap.save()
+    return gone

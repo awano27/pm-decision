@@ -2,8 +2,10 @@
 
 A half-written approvals.json used to make every step fail with JSONDecodeError, every cycle, forever.
 """
+import contextlib
 import json
 import os
+import time
 from pathlib import Path
 
 
@@ -32,3 +34,35 @@ def read_json(path, default):
         except (json.JSONDecodeError, UnicodeDecodeError, OSError):
             continue
     return default
+
+
+@contextlib.contextmanager
+def exclusive(path, stale_sec=1800):
+    """Hold a lock file for the duration of the block. Yields True when the lock was taken and False when another process holds it
+    (then nothing is touched). A lock file older than `stale_sec` was left by a process that died: it is taken over."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = None
+    for _ in range(2):
+        try:
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            try:
+                if time.time() - path.stat().st_mtime <= stale_sec:
+                    break
+                path.unlink()
+            except OSError:
+                break
+    if fd is None:
+        yield False
+        return
+    try:
+        os.write(fd, str(os.getpid()).encode("ascii"))
+        os.close(fd)
+        yield True
+    finally:
+        try:
+            path.unlink()
+        except OSError:
+            pass

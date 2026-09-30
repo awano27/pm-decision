@@ -60,9 +60,42 @@ function Show-Status {
 }
 
 $prevFile = Join-Path $data 'setup-previous.json'
+$cfgFile = Join-Path $data 'config.json'
+$cfgKeys = @('backend', 'ado_org', 'ado_project')   # the settings `schedule install` writes into config.json
+function Get-ConfigValues {
+  # the values of $cfgKeys in config.json (a missing key or file gives $null for that key); an unreadable file gives all $null
+  $r = [ordered]@{}
+  foreach ($k in $cfgKeys) { $r[$k] = $null }
+  try {
+    if (Test-Path $cfgFile) {
+      $c = Get-Content -Raw -Encoding UTF8 $cfgFile | ConvertFrom-Json
+      foreach ($k in $cfgKeys) { if ($c.PSObject.Properties[$k]) { $r[$k] = [string]$c.$k } }
+    }
+  } catch {}
+  $r
+}
+function Restore-ConfigValues($prevValues) {
+  # puts backend, ado_org and ado_project in config.json back as they were before the first install; other settings stay
+  if (-not (Test-Path $cfgFile)) { return }
+  try {
+    $c = Get-Content -Raw -Encoding UTF8 $cfgFile | ConvertFrom-Json
+    foreach ($k in $cfgKeys) {
+      $v = if ($prevValues -and $prevValues.PSObject.Properties[$k]) { $prevValues.$k } else { $null }
+      if ($null -ne $v) { $c | Add-Member -NotePropertyName $k -NotePropertyValue $v -Force }
+      else { $c.PSObject.Properties.Remove($k) }
+    }
+    ($c | ConvertTo-Json -Depth 5) | Set-Content -Path $cfgFile -Encoding UTF8
+  } catch { Write-Host "config.json の backend / ado_org / ado_project を戻せませんでした（手で kimeru config unset <設定> を実行してください）: $_" -ForegroundColor Yellow }
+}
 function Restore-Previous {
-  # puts back KIMERU_BACKEND and the logon shortcut as they were before the first install
+  # puts back KIMERU_BACKEND, the settings in config.json (backend, ado_org, ado_project) and the logon shortcut as they were before the first install
   $prev = if (Test-Path $prevFile) { Get-Content -Raw -Encoding UTF8 $prevFile | ConvertFrom-Json } else { $null }
+  if ($prev) {
+    $pv = if ($prev.PSObject.Properties['configValues']) { $prev.configValues }
+          elseif ($prev.PSObject.Properties['configBackend']) { [pscustomobject]@{ backend = $prev.configBackend } }   # written by an older install
+          else { $null }
+    Restore-ConfigValues $pv
+  }
   cmd /c "schtasks /Delete /TN $task /F >nul 2>nul"
   if ((Test-Path $lnk) -and -not ($prev -and $prev.shortcut)) { Remove-Item $lnk -Force }
   [Environment]::SetEnvironmentVariable('KIMERU_BACKEND', $(if ($prev) { $prev.backend } else { $null }), 'User')
@@ -81,7 +114,7 @@ switch ($Action) {
     # remember what was there before the first install, so remove (or a failed install) can put it back
     New-Item -ItemType Directory -Force $data | Out-Null
     if (-not (Test-Path $prevFile)) {
-      @{ backend = [Environment]::GetEnvironmentVariable('KIMERU_BACKEND', 'User'); shortcut = [bool](Test-Path $lnk) } |
+      @{ backend = [Environment]::GetEnvironmentVariable('KIMERU_BACKEND', 'User'); shortcut = [bool](Test-Path $lnk); configValues = (Get-ConfigValues) } |
         ConvertTo-Json | Set-Content -Path $prevFile -Encoding UTF8
     }
     try {
@@ -125,6 +158,6 @@ switch ($Action) {
   'remove' {
     cmd /c "schtasks /Delete /TN $task /F >nul 2>nul"
     Restore-Previous
-    Write-Host "削除しました（自動運転・Kev 自動起動）。KIMERU_BACKEND は導入前の値に戻しました。データは残しています: $data"
+    Write-Host "削除しました（自動運転・Kev 自動起動）。KIMERU_BACKEND と設定ファイルの backend・ado_org・ado_project は導入前の値に戻しました。データは残しています: $data"
   }
 }

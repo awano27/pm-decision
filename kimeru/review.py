@@ -68,9 +68,13 @@ def label_of(node, ans, edge):
     if t == "noul":
         return True if edge == "yes" else False if edge == "no" else None
     if "score" in ans:
-        s = int(round(ans["score"]))
-        return [s, s]
+        return score_range(int(round(ans["score"])))
     return None
+
+
+def score_range(level):
+    """The right answer of a score question, held as a range (a model's answer is a decimal: 2.4 is level 2)."""
+    return [level - 0.5, level + 0.5]
 
 
 def options_of(node, playbooks):
@@ -83,12 +87,21 @@ def options_of(node, playbooks):
         return [(k, str(v)[:70]) for k, v in q["criteria"].items()]
     if q["type"] == "noul":
         return [(True, "はい"), (False, "いいえ")]
-    return [([i, i], str(v)[:70]) for i, v in enumerate(q["criteria"])]
+    return [(score_range(i), str(v)[:70]) for i, v in enumerate(q["criteria"])]
 
 
 def fixture_row(rec, expect):
     key = decision_key(rec)
     return {"id": "user-" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:8], "event": rec["event"], "expect": expect}
+
+
+def judge_of(rec):
+    return (rec.get("judge") or {}).get("name", "unknown")
+
+
+def review_row(rec, verdict, now, **extra):
+    """A line of reviews.jsonl. It names the judge that made the decision: the agreement rate leaves Jev's out."""
+    return {"key": decision_key(rec), "verdict": verdict, "at": now, "judge": judge_of(rec), **extra}
 
 
 def pending(out, reviewed=None):
@@ -109,8 +122,10 @@ def run(out, graphs, playbooks, input_fn=input, print_fn=print, limit=20):
         print_fn("確かめる判断はありません。")
         return {"yes": 0, "no": 0, "unknown": 0}
     tally = {"yes": 0, "no": 0, "unknown": 0}
+    with_jev = False
     for i, rec in enumerate(todo[:limit], 1):
         steps = judged(rec, by_name)
+        with_jev = with_jev or judge_of(rec) == "Jev"
         print_fn(f"\n[{i}/{min(len(todo), limit)}] {rec.get('event_kind')} #{rec.get('event_id')}  {rec.get('at', '')}")
         print_fn(f"  元: {rec.get('summary', '')}")
         print_fn("  経路: " + " → ".join(f"{s['node']}[{s['edge']}]" for s in rec["path"]) + f" → {rec['node']}")
@@ -120,17 +135,16 @@ def run(out, graphs, playbooks, input_fn=input, print_fn=print, limit=20):
         if ans in ("q", "quit"):
             break
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        key = decision_key(rec)
         if ans in ("y", "yes"):
             expect = {nid: lab for nid, node, a, edge in steps if (lab := label_of(node, a, edge)) is not None}
-            _append(reviews_path(), {"key": key, "verdict": "yes", "at": now})
+            _append(reviews_path(), review_row(rec, "yes", now))
             if expect:
                 _append(fixtures_path(), fixture_row(rec, expect))
             tally["yes"] += 1
         elif ans in ("n", "no"):
             if not steps:
                 print_fn("  規則で決まった判断は、質問の単位では直せません。読み飛ばします。")
-                _append(reviews_path(), {"key": key, "verdict": "unknown", "at": now})
+                _append(reviews_path(), review_row(rec, "unknown", now))
                 tally["unknown"] += 1
                 continue
             for j, (nid, node, a, edge) in enumerate(steps, 1):
@@ -139,7 +153,7 @@ def run(out, graphs, playbooks, input_fn=input, print_fn=print, limit=20):
             k = (input_fn("  どの質問の答えが違いましたか？ 番号 > ") or "").strip()
             if not k.isdigit() or not 1 <= int(k) <= len(steps):
                 print_fn("  番号が分からないので、分からないとして記録します。")
-                _append(reviews_path(), {"key": key, "verdict": "unknown", "at": now})
+                _append(reviews_path(), review_row(rec, "unknown", now))
                 tally["unknown"] += 1
                 continue
             nid, node, a, edge = steps[int(k) - 1]
@@ -149,16 +163,19 @@ def run(out, graphs, playbooks, input_fn=input, print_fn=print, limit=20):
             c = (input_fn("  正しい答えは？ 番号 > ") or "").strip()
             if not c.isdigit() or not 1 <= int(c) <= len(opts):
                 print_fn("  番号が分からないので、分からないとして記録します。")
-                _append(reviews_path(), {"key": key, "verdict": "unknown", "at": now})
+                _append(reviews_path(), review_row(rec, "unknown", now))
                 tally["unknown"] += 1
                 continue
             label = opts[int(c) - 1][0]
-            _append(reviews_path(), {"key": key, "verdict": "no", "at": now, "node": nid})
+            _append(reviews_path(), review_row(rec, "no", now, node=nid))
             _append(fixtures_path(), fixture_row(rec, {nid: label}))
             tally["no"] += 1
         else:
-            _append(reviews_path(), {"key": key, "verdict": "unknown", "at": now})
+            _append(reviews_path(), review_row(rec, "unknown", now))
             tally["unknown"] += 1
-    print_fn(f"\n記録しました: 合っている {tally['yes']} / 違う {tally['no']} / 分からない {tally['unknown']}"
-             f"（{fixtures_path()}）")
+    if with_jev:   # what the answers say about Jev's accuracy is not shown (TypeSafe's terms); the records are kept
+        print_fn(f"\n記録しました: {sum(tally.values())} 件（判断モデルが Jev の判断を含むため、内訳は出しません）（{fixtures_path()}）")
+    else:
+        print_fn(f"\n記録しました: 合っている {tally['yes']} / 違う {tally['no']} / 分からない {tally['unknown']}"
+                 f"（{fixtures_path()}）")
     return tally

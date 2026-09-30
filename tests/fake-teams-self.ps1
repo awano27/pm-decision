@@ -6,6 +6,7 @@ param(
   [Parameter(Mandatory = $true)][string]$Action,
   [string]$Text = '',
   [string]$ChatId = '',
+  [string]$Preview = '',
   [int]$Count = 5,
   [switch]$Send
 )
@@ -43,7 +44,11 @@ switch ($Action) {
     if (-not $c) { Out-Json @{ ok = $false; error = 'the chat is not in the list on screen; nothing was opened' }; exit 2 }
     $log = $env:KIMERU_FAKE_OPENLOG
     if ($log) { Add-Content -Path $log -Value $ChatId -Encoding UTF8 }
-    Out-Json @{ ok = $true; opened = $true; how = 'fake'; messages = @(@($c.messages) | Select-Object -Last $Count | ForEach-Object { @{ text = $_; sender = ''; time = '' } }); returned = $true; hadOriginal = $true }
+    # a chat entry may say how putting the original chat back went ("restore": restored | self | failed) or that reading fails ("error")
+    $rs = if ($c.restore) { [string]$c.restore } else { 'restored' }
+    $ret = [bool]($rs -eq 'restored')
+    if ($c.error) { Out-Json @{ ok = $false; error = [string]$c.error; restore = $rs; returned = $ret; hadOriginal = $true }; exit 2 }
+    Out-Json @{ ok = $true; opened = $true; how = 'fake'; messages = @(@($c.messages) | Select-Object -Last $Count | ForEach-Object { @{ text = $_; sender = ''; time = '' } }); returned = $ret; restore = $rs; hadOriginal = $true; preview = $Preview }
   }
   default { Out-Json @{ ok = $false; error = "unsupported $Action" }; exit 2 }
 }

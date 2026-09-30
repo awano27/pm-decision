@@ -274,7 +274,9 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
             meter = Meter(backend)
             pend = _PreviewJudgments(out) if can_read else None
             # put off too often (the person was at the PC, Teams in use, the cycle's limit): the preview decides
-            tired = bool(pend) and pend.deferrals(key) >= fulltext.max_defer()
+            max_defer = fulltext.max_defer()
+            # read_max_defer=0: never put off. The chat is tried once; when it cannot be read now, the preview decides (no waiting)
+            tired = bool(pend) and max_defer > 0 and pend.deferrals(key) >= max_defer
             if can_read and fulltext.truncated(ev.get("text")):        # the preview is cut off: read before judging
                 if tired:
                     read_info = fulltext.gave_up(fulltext.max_defer())
@@ -282,8 +284,10 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
                     try:
                         ev_run, read_info = fulltext.deepen(reader, ev)   # (over the limit: nothing has been judged yet)
                     except fulltext.BudgetExhausted:
-                        pend.put(key)                                  # counted: the next cycle tries again, up to read_max_defer times
-                        raise
+                        if max_defer > 0:
+                            pend.put(key)                              # counted: the next cycle tries again, up to read_max_defer times
+                            raise
+                        read_info = fulltext.gave_up(0)
                 res = _judge(g, ev_run, meter, playbooks)
             else:
                 res = pend.get(key) if pend else None                 # a preview judged in an earlier cycle: continue from the reading
@@ -296,8 +300,10 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
                         try:
                             ev_run, read_info = fulltext.deepen(reader, ev)
                         except fulltext.BudgetExhausted:
-                            pend.put(key, res)                         # the next cycle reads; it does not judge again
-                            raise
+                            if max_defer > 0:
+                                pend.put(key, res)                     # the next cycle reads; it does not judge again
+                                raise
+                            read_info = fulltext.gave_up(0)
                     if read_info["state"] == "full":
                         res = _judge(g, ev_run, meter, playbooks)      # the whole text may change the judgment
             if pend:

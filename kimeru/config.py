@@ -57,9 +57,9 @@ SETTINGS = {
     "read_budget_sec": ("KIMERU_READ_BUDGET", "60"),           # seconds spent reading per cycle
     "read_messages": ("KIMERU_READ_MESSAGES", "5"),            # last messages read from an opened chat
     "read_min_preview": ("KIMERU_READ_MIN_PREVIEW", "12"),     # a preview shorter than this (characters; 12 at least) cannot confirm which chat was opened: the chat is not read
-    "read_idle_sec": ("KIMERU_READ_IDLE_SEC", "30"),           # seconds without keyboard / mouse use before a chat is opened to read it (0 = do not check)
+    "read_idle_sec": ("KIMERU_READ_IDLE_SEC", "30"),           # seconds without keyboard / mouse use before a chat is opened to read it, and before each operation of the read (0 = do not check; idle_sec has no say)
     "read_click": ("KIMERU_READ_CLICK", "0"),                  # 1 = reading may also bring Teams to the front and click the chat (off: only the ways that touch no window)
-    "read_max_defer": ("KIMERU_READ_MAX_DEFER", "12"),         # how many times a chat may be put off (the person is at the PC, Teams in use, the cycle's limit) before the preview decides
+    "read_max_defer": ("KIMERU_READ_MAX_DEFER", "12"),         # how many times a chat may be put off (the person is at the PC, Teams in use, the cycle's limit) before the preview decides (0 = never put off: tried once, then the preview decides)
     "preview_cut_len": ("KIMERU_PREVIEW_CUT_LEN", "0"),        # a preview at least this long counts as cut off even without an ellipsis (0 = the ellipsis only; set it from the T23 result)
     "full_text_keep_days": ("KIMERU_FULL_TEXT_KEEP_DAYS", "7"),   # days a full text is kept for an item that still waits for the PM
     "record_event_full": ("KIMERU_RECORD_EVENT_FULL", "0"),   # 1 = decisions.jsonl keeps the whole event (2,000 characters of text), not a summary-length excerpt

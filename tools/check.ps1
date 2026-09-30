@@ -46,7 +46,9 @@ function Safe-Diag($raw) {
     if ($j.error) { return 'error=' + (Short $j.error) }
     $marks = @($j.parenMarkers.PSObject.Properties).Count
     $shape = ([string]$j.titleShape) -replace '\((?!(あなた|自分|You|Me)\))[^)]*\)', '(x)'
-    return "selfItemFound=$($j.selfItemFound) learnedName=$($j.learnedName) treeItems=$($j.treeItems) listItems=$($j.listItems) 括弧表記の種類=$marks title=$shape"
+    # the focus line holds numbers and a control type name only (Test-TeamsInUse decides from it): what T24 needs on a real PC
+    $focus = ([string]$j.focus) -replace '[^A-Za-z0-9=/. _]', ''
+    return "focus=[$focus] teamsInUse=$($j.teamsInUse) selfItemFound=$($j.selfItemFound) learnedName=$($j.learnedName) treeItems=$($j.treeItems) listItems=$($j.listItems) 括弧表記の種類=$marks title=$shape"
   } catch { return "診断出力を解析できず（$(([string]$raw).Length) 文字、内容は記録しない）" }
 }
 function Rec($k, $v) { $Results[$k] = $v; Write-Host ("   {0}: {1}" -f $k, $v) -ForegroundColor Yellow }
@@ -308,6 +310,12 @@ if ($uia -and $selfOk -and (Want 'T24')) {
       $fits = if ($head.Length -lt 12) { '（プレビューが短く、確かめられない）' } else { [string]$r.previewMatched }
       Rec 'T24' ("{0} 読めた件数={1} 文字数=[{2}] {3} 選択の報告={4} 読んだ文がプレビューと合った={5} 取り方={6}" -f $(if ($lens.Count -gt 0 -and $r.returned -and $fits -eq 'True') { 'OK' } else { 'NG' }), $lens.Count, ($lens -join ','), $back, $r.verified, $fits, $r.how)
     }
+    # after the read (Teams is not in front again if the window that was in front came back): where the focus is, as numbers and a type
+    # name only. focus= gives the ProcessId of the focused element, the handle of the window that holds it (hwnd / top) and that
+    # window's process (topPid); fgPid is the process of the window in front now, teamsPids are those of Teams. To decide the
+    # input-box check on this PC: put the cursor in a compose box, run `teams-self.ps1 -Action diag` by hand, and compare topPid with teamsPids
+    $dg = Self 'diag'
+    Rec 'T24-diag' $(if ($dg.ok) { "focus=[{0}] teamsInUse={1}" -f (([string]$dg.focus) -replace '[^A-Za-z0-9=/. _]', ''), $dg.teamsInUse } else { 'NG ' + (Short $dg.error) })
   }
 }
 

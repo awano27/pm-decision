@@ -19,6 +19,7 @@ version with the whole text waits in full_text.json beside it.
 """
 import json
 import os
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -45,12 +46,15 @@ def _int(key, default):
 
 
 def max_defer():
-    """How many times an event may be put off before the preview decides (0 = it is never put off: the preview decides)."""
+    """How many times an event may be put off before the preview decides. 0 = it is never put off: the chat is tried once, and when
+    it cannot be read now (the person is at the PC, Teams is in use, the cycle's limit) the preview decides."""
     return _int("read_max_defer", 12)
 
 
 def gave_up(n):
     """The read_full record of an event that was put off too often: decided from the preview."""
+    if n <= 0:
+        return {"state": "preview_only", "why": "延期しない設定（read_max_defer=0）で、今は読めなかったため、プレビューで判断しました"}
     return {"state": "preview_only", "why": f"延期が上限（{n} 回）に達したため、プレビューで判断しました"}
 
 
@@ -72,10 +76,15 @@ def _core(preview):
     return _norm(str(preview or "").rstrip(" …."))
 
 
+_NAME_RE = re.compile(r"^[^:：]{1,30}[:：]\s*(.*)$", re.S)
+
+
 def _body(preview):
-    """The part of a preview that says something about the chat: no ellipsis and no leading "name: "."""
+    """The part of a preview that says something about the chat: no ellipsis and no leading "name: " (the same rule as the script's
+    Test-PreviewMatch: a name of 1 to 30 characters, a half- or full-width colon, spaces or none)."""
     core = _core(preview)
-    return core.split(": ", 1)[1] if ": " in core[:40] else core
+    m = _NAME_RE.match(core)
+    return m.group(1) if m else core
 
 
 class BudgetExhausted(Exception):
@@ -179,7 +188,7 @@ SAFE_MESSAGES = (
     "the chat is not in the list on screen; nothing was opened",
     "the chat has no title to check the screen against; nothing was opened",
     "the preview is too short to tell the chat apart on this screen; nothing was opened",
-    "the chat that is open has the same title as the chat to read, so they cannot be told apart on this screen; nothing was read",
+    "the chat that is open has the title of the chat to read, so they cannot be told apart on this screen; nothing was opened, nothing was read",
     "could not confirm that the chat is open (the title and the selection did not agree); nothing was read",
     "the chat that opened does not match the preview; nothing was used",
     "Teams window not found",

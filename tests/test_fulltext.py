@@ -315,6 +315,38 @@ def _ps_functions(text):
     return out
 
 
+def _ps_source(names):
+    """The full text (signature and body, comments kept) of the named functions of tools/teams-self.ps1, to be run in a PowerShell that
+    has no Teams: only functions that touch no window are loaded this way, with stubs for what they would call."""
+    text = (ROOT / "tools" / "teams-self.ps1").read_text(encoding="utf-8-sig")
+    parts = []
+    for name in names:
+        m = re.search(r"(?m)^function " + re.escape(name) + r"\b", text)
+        assert m, name
+        i = text.index("{", m.end())
+        depth, j = 0, i
+        while j < len(text):
+            depth += {"{": 1, "}": -1}.get(text[j], 0)
+            j += 1
+            if depth == 0:
+                break
+        parts.append(text[m.start():j])
+    return "\n".join(parts)
+
+
+def _run_ps(code, src, env=None):
+    """Run `src` (function definitions) and then `code` in PowerShell; every output line "K=V" comes back as {K: V}."""
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "t.ps1"
+        f.write_text("$ErrorActionPreference = 'Stop'\n[Console]::OutputEncoding = [Text.Encoding]::UTF8\n" + src + "\n" + code, encoding="utf-8-sig")
+        clean = {k: v for k, v in os.environ.items() if not k.startswith("KIMERU_")}
+        clean.update(env or {})
+        r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(f)], capture_output=True, text=True,
+                           encoding="utf-8", timeout=120, env=clean)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return dict(line.split("=", 1) for line in r.stdout.splitlines() if "=" in line)
+
+
 class TestScriptGuards(unittest.TestCase):
     """The script cannot run here; the rules it must keep are checked in its text."""
 
@@ -929,29 +961,50 @@ class TestNotWhenThePersonIsWorking(Base):
 
 
 class TestSameTitleAndShortMatch(Base):
-    def test_a_chat_with_the_same_title_is_not_read_and_the_self_chat_is_opened(self):
+    def test_a_chat_with_the_same_title_is_not_read_the_screen_is_not_moved_and_the_preview_decides(self):
         self.enable()
 
         class SameTitle(FakeTeams):
             def readchat(self, chat_id, count=5, preview=None):
                 self.opened = getattr(self, "opened", []) + [chat_id]
-                raise notify.BridgeError("the chat that is open has the same title as the chat to read, so they cannot be told apart on this screen; nothing was read",
-                                         {"restore": "self", "returned": False, "hadOriginal": True})
+                # the script did not touch the screen: nothing was operated, so nothing was put back
+                raise notify.BridgeError("the chat that is open has the title of the chat to read, so they cannot be told apart on this screen; nothing was opened, nothing was read",
+                                         {"restore": "none", "returned": True, "hadOriginal": True})
 
         teams, toasts = SameTitle(), []
         (self.inbox / "a.json").write_text(json.dumps(self.ev(1, Q), ensure_ascii=False), encoding="utf-8")
-        daily.cycle(self.out, self.inbox, GRAPHS, StubBackend(), PBS, cli.process, bridge=teams, send=True, toaster=lambda a, b: toasts.append((a, b)))
+        r = daily.cycle(self.out, self.inbox, GRAPHS, StubBackend(), PBS, cli.process, bridge=teams, send=True, toaster=lambda a, b: toasts.append((a, b)))
         rf = self.decisions()[0]["read_full"]
-        self.assertEqual((rf["state"], rf["restore"]), ("preview_only", "self"))
-        self.assertIn("same title", rf["why"])                        # the script's own fixed sentence, no chat text
-        self.assertIn("自分とのチャットへ移しました", rf["note"])
-        self.assertEqual(len([t for t in toasts if "チャットの表示" in t[0]]), 1)
+        self.assertEqual((rf["state"], rf["restore"], rf["returned"]), ("preview_only", "none", True))
+        self.assertIn("nothing was opened", rf["why"])                                 # the script's own fixed sentence, no chat text
+        self.assertNotIn("note", rf)                                                  # nothing was moved: no notice
+        self.assertEqual([t for t in toasts if "チャットの表示" in t[0]], [])
+        self.assertEqual(r.get("left_for_next_cycle", 0), 0)                           # not put off: the preview decided at once
+        self.assertFalse((self.out / "read_pending.json").exists() and json.loads((self.out / "read_pending.json").read_text(encoding="utf-8")))
+        self.assertEqual(len(teams.opened), 1)                                         # asked once
 
-    def test_the_script_does_not_trust_the_title_when_the_list_reports_no_selection(self):
+    def test_the_script_leaves_the_screen_alone_when_the_open_chat_is_the_one_to_read(self):
         blk = TestScriptGuards.block_text()
-        self.assertIn("$origTitle -eq $title", blk)
-        self.assertLess(blk.index("$origTitle -eq $title"), blk.index("Select-Chat"))
-        self.assertIn("Restore-Original $null ''", blk)                                # straight to the self chat
+        cond = "if (-not $origId -and (Test-ChatOpen $w $ChatId $title))"       # the same predicate as the check that a chat opened
+        self.assertIn(cond, blk)
+        self.assertLess(blk.index(cond), blk.index("Select-Chat"))
+        self.assertNotIn("Restore-Original $null ''", blk)                           # no move to the self chat for it
+        self.assertNotIn("$sameTitle", blk)
+        self.assertNotIn("$origTitle -eq $title", blk)                               # not the exact-match test that a longer title slips through
+        self.assertLess(blk.index("$script:Acted = $false"), blk.index(cond))
+
+    def test_the_same_title_test_is_the_open_test_and_a_window_title_with_one_more_separator_is_caught(self):
+        src = _ps_source(("Test-ChatOpen",))
+        out = _run_ps("""
+function Get-ChatItems($w) { @() }
+function Test-Selected($i) { $false }
+function Get-ChatId($i) { $null }
+function W($n) { [pscustomobject]@{ Current = [pscustomobject]@{ Name = $n } } }
+"A=" + (Test-ChatOpen (W 'チャット | 週次会議 | Microsoft Teams') 'x' '週次会議')
+"B=" + (Test-ChatOpen (W 'チャット | 週次会議 | 定例 | Microsoft Teams') 'x' '週次会議')
+"C=" + (Test-ChatOpen (W 'チャット | 別の会議 | Microsoft Teams') 'x' '週次会議')
+""", src)
+        self.assertEqual(out, {"A": "title", "B": "title", "C": ""})
 
     def test_a_six_character_match_does_not_read_and_twelve_does(self):
         self.enable(KIMERU_READ_MIN_PREVIEW="6")                                      # the setting cannot go below 12
@@ -965,6 +1018,22 @@ class TestSameTitleAndShortMatch(Base):
         self.assertFalse(fulltext._fits("田中: 来週の会議の件…", "来週の会議の件について確認です"))          # 7 characters remain
         self.assertTrue(fulltext._fits("田中: 来週の会議の件について確認…", "来週の会議の件について確認です"))
         self.assertIn("(.{12,})", TestScriptGuards.funcs_text()["Test-PreviewMatch"])
+
+    def test_a_name_and_a_colon_of_either_width_are_taken_off_before_the_gate(self):
+        for pv, body in (("田中太郎：はい了解しました", "はい了解しました"), ("田中太郎: はい了解しました", "はい了解しました"),
+                         ("田中太郎:はい了解しました…", "はい了解しました"), ("田中太郎：　はい了解しました", "はい了解しました"),
+                         ("来週の会議の件について確認です", "来週の会議の件について確認です")):
+            self.assertEqual(fulltext._body(pv), body, pv)
+
+    def test_a_full_width_name_prefix_leaves_fewer_than_12_characters_so_nothing_is_opened(self):
+        self.enable()
+        self.teams.chat_messages = {"19:c1@thread.v2": ["田中太郎：はい了解しました、確認して連絡します"]}
+        r = fulltext.Reader(self.teams)(self.ev(1, "田中太郎：はい了解しました…"))              # 13 characters with the name, 8 without it
+        self.assertFalse(r["ok"])
+        self.assertEqual(getattr(self.teams, "opened", []), [])
+        r = fulltext.Reader(self.teams)(self.ev(1, "田中太郎：はい了解しました、確認して連絡します…"))   # 20 characters without the name
+        self.assertTrue(r["ok"])
+        self.assertEqual(self.teams.opened, ["19:c1@thread.v2"])
 
 
 class TestEveryWayOutGoesThroughTheSelfChat(unittest.TestCase):
@@ -1112,11 +1181,38 @@ class TestScriptStaysReadOnlyEvenBeforeTheClick(unittest.TestCase):
         self.assertIn("'select', 'invoke'", sc)
         self.assertIn("KIMERU_READ_CLICK", parts["Test-ReadClickAllowed"])
 
-    def test_the_idle_threshold_of_a_read_is_30_seconds_and_can_be_set(self):
-        f = TestScriptGuards.funcs_text()["Get-IdleNeed"]
-        self.assertIn("return 30", f)
-        self.assertIn("KIMERU_READ_IDLE_SEC", f)
+    def test_the_idle_threshold_of_a_read_is_read_idle_sec_and_idle_sec_has_no_say(self):
         self.assertIn("Get-IdleNeed", TestScriptGuards.funcs_text()["Test-UserIdle"])
+        src = "$script:Restoring = $false\n" + _ps_source(("Get-ReadIdleNeed", "Get-IdleNeed"))
+
+        def need(action, fallback=3, restoring=False, **env):
+            code = f"$Action = '{action}'; $script:Restoring = ${str(restoring).lower()}; 'N=' + (Get-IdleNeed {fallback})"
+            return int(_run_ps(code, src, env)["N"])
+        self.assertEqual(need("readchat"), 30)                                      # nothing set: 30
+        self.assertEqual(need("readchat", KIMERU_IDLE_SEC="0"), 30)                 # idle_sec=0 does not switch the check off for a read
+        self.assertEqual(need("readchat", KIMERU_IDLE_SEC="4"), 30)
+        self.assertEqual(need("readchat", KIMERU_IDLE_SEC="0", KIMERU_READ_IDLE_SEC="45"), 45)
+        self.assertEqual(need("readchat", KIMERU_READ_IDLE_SEC="0"), 0)             # only read_idle_sec=0 does
+        self.assertEqual(need("readchat", KIMERU_READ_IDLE_SEC="x"), 30)            # not a number: the default, not a crash
+        self.assertEqual(need("post", fallback=4), 4)                               # the other operations keep idle_sec
+        self.assertEqual(need("post", fallback=4, KIMERU_IDLE_SEC="0"), 0)
+
+    def test_putting_the_chat_back_has_a_short_threshold_of_its_own(self):
+        src = "$script:Restoring = $false\n" + _ps_source(("Get-ReadIdleNeed", "Get-IdleNeed"))
+
+        def need(restoring, **env):
+            code = f"$Action = 'readchat'; $script:Restoring = ${str(restoring).lower()}; 'N=' + (Get-IdleNeed 3)"
+            return int(_run_ps(code, src, env)["N"])
+        self.assertEqual((need(False), need(True)), (30, 3))                         # before reading 30 s; putting back 3 s
+        self.assertEqual(need(True, KIMERU_IDLE_SEC="0"), 3)
+        self.assertEqual(need(True, KIMERU_READ_IDLE_SEC="60"), 3)                   # independent of the read threshold
+        self.assertEqual(need(True, KIMERU_READ_IDLE_SEC="0"), 0)                    # ... but never above it
+        body = TestScriptGuards.funcs_text()["Restore-Original"]
+        self.assertIn("$script:Restoring = $true", body)
+        self.assertIn("Wait-IdleSoft 3 20", body)                                    # 3 s of quiet, 20 s of waiting
+        self.assertLess(body.index("$script:Restoring = $true"), body.index("Wait-IdleSoft"))
+        self.assertIn("KIMERU_READ_IDLE_SEC=0", TestScriptGuards.funcs_text()["Assert-Idle"])   # the message names the setting that applies
+        self.assertIn(fulltext.BUSY, TestScriptGuards.funcs_text()["Assert-Idle"])
 
     def test_t24_uses_the_scripts_own_verdict(self):
         t = (ROOT / "tools" / "check.ps1").read_text(encoding="utf-8-sig")
@@ -1124,6 +1220,140 @@ class TestScriptStaysReadOnlyEvenBeforeTheClick(unittest.TestCase):
         blk = t[i:t.index("# ---- T22", i)]
         self.assertIn("previewMatched", blk)
         self.assertNotIn(".Contains($head)", blk)
+
+
+class TestUseOfTeamsAndPageSwitch(unittest.TestCase):
+    """Test-TeamsInUse and Show-ChatApp, run in a PowerShell with stubs (no Teams, no window)."""
+
+    STUBS = """
+function Get-TeamsPids { @(100, 101) }
+function Get-ForegroundPid { [int]$script:Fg }
+function Get-FocusInfo { if ($script:Boom) { throw 'x' }; $script:Focus }
+function Info($type, $top) { [pscustomobject]@{ Type = $type; ElemPid = 555; Hwnd = 7; Top = 9; TopPid = $top } }
+function Case($name, $fg, $focus) { $script:Fg = $fg; $script:Focus = $focus; $name + '=' + (Test-TeamsInUse $null) }
+"""
+
+    def in_use(self, cases):
+        return _run_ps("\n".join(cases), self.STUBS + "\n" + _ps_source(("Test-TeamsInUse",)))
+
+    def test_in_use_when_the_focus_cannot_be_read_or_a_teams_window_is_in_front_or_an_input_box_of_one_has_the_focus(self):
+        r = self.in_use([
+            "Case 'nofocus' 999 $null",                                    # FocusedElement is null: in use
+            "Case 'popout' 100 (Info 'ControlType.Button' 999)",           # a window of Teams is in front (the pop-out chat too): in use
+            "Case 'popout2' 101 $null",
+            "Case 'edit' 999 (Info 'ControlType.Edit' 101)",               # the input box of a Teams window (decided by its window, not by the element's ProcessId)
+            "Case 'doc' 999 (Info 'ControlType.Document' 100)",
+            "Case 'notype' 999 (Info 'ControlType.Button' 100)",           # a Teams window but not an input box, and Teams not in front
+            "Case 'other' 999 (Info 'ControlType.Edit' 4242)",             # an input box of some other program
+            "Case 'nowindow' 999 (Info 'ControlType.Edit' 0)",             # the window that holds the focus is unknown: cannot tell
+            "$script:Boom = $true; Case 'boom' 999 (Info 'ControlType.Button' 100)",   # a failure: in use
+        ])
+        self.assertEqual(r, {"nofocus": "True", "popout": "True", "popout2": "True", "edit": "True", "doc": "True",
+                             "notype": "False", "other": "False", "nowindow": "True", "boom": "True"})
+
+    def test_the_element_process_id_is_not_what_decides_and_diag_prints_the_numbers(self):
+        src = TestScriptGuards.funcs_text()
+        self.assertNotIn("$f.Current.ProcessId", src["Test-TeamsInUse"])
+        self.assertIn("TopPid", src["Test-TeamsInUse"])
+        self.assertIn("GetAncestor", src["Get-FocusInfo"])
+        self.assertIn("ProcessId", src["Get-FocusInfo"])
+        text = (ROOT / "tools" / "teams-self.ps1").read_text(encoding="utf-8-sig")
+        diag = text[text.index("if ($Action -eq 'diag') {"):text.index("function Get-PreviewHead")]
+        self.assertIn("Get-FocusInfo", diag)                                         # printed for T24: the values to decide on a real PC
+        self.assertIn("teamsInUse", diag)
+        t24 = (ROOT / "tools" / "check.ps1").read_text(encoding="utf-8-sig")
+        self.assertIn("T24-diag", t24)
+
+    SHOW = """
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+$CT = @{ Button = 'B'; TabItem = 'T'; ListItem = 'L' }
+function Find-All($root, $type) { if ($type -eq 'B') { @($script:Btn) } else { @() } }
+function MakeBtn($invokeFails, $selectFails) {
+  $b = [pscustomobject]@{ Current = [pscustomobject]@{ Name = 'チャット' }; InvokeFails = $invokeFails; SelectFails = $selectFails }
+  $b | Add-Member -MemberType ScriptMethod -Name GetCurrentPattern -Value {
+    param($p)
+    $o = [pscustomobject]@{}
+    if ($p -eq [System.Windows.Automation.InvokePattern]::Pattern) { if ($this.InvokeFails) { throw 'no invoke' }; $o | Add-Member ScriptMethod Invoke { } }
+    else { if ($this.SelectFails) { throw 'no select' }; $o | Add-Member ScriptMethod Select { } }
+    $o
+  }
+  $b
+}
+function Run($name, $btn) { $script:Acted = $false; $script:PageSwitched = $false; $script:Btn = $btn; $r = Show-ChatApp $null; "$name=$r/$script:Acted/$script:PageSwitched" }
+"""
+
+    def test_switching_the_page_counts_as_an_operation_and_a_failed_switch_does_not(self):
+        r = _run_ps("""
+Run 'invoke' (MakeBtn $false $false)
+Run 'select' (MakeBtn $true $false)
+Run 'none' (MakeBtn $true $true)
+Run 'nobutton' $null
+""", self.SHOW + "\n" + _ps_source(("Show-ChatApp",)))
+        self.assertEqual(r, {"invoke": "True/True/True", "select": "True/True/True", "none": "False/False/False", "nobutton": "False/False/False"})
+
+    def test_a_failure_after_the_page_switch_goes_through_the_put_back_and_says_the_original_was_not_restored(self):
+        blk = TestScriptGuards.block_text()
+        self.assertLess(blk.index("Show-ChatApp"), blk.index("Fail 'the chat is not in the list"))   # the switch comes before later failures
+        put_back = blk[blk.index("$restore = 'none'"):]
+        self.assertIn("if ($script:Acted)", put_back)                                                     # Acted (set by Show-ChatApp) -> put back
+        self.assertIn("Restore-Original $origId $origTitle", put_back)
+        self.assertIn("$script:PageSwitched -and $restore -in 'restored', 'unchanged'", put_back)        # the page itself cannot be gone back to
+        self.assertIn("$restore = 'failed'", put_back)
+        self.assertLess(put_back.index("$had ="), put_back.index("$script:PageSwitched", put_back.index("$had =")))   # ... and there was an original
+        sc = TestScriptGuards.funcs_text()["Select-Chat"]
+        self.assertLess(sc.index("switch ($how)"), sc.index("$script:Acted = $true"))                   # only after an operation went through
+        self.assertLess(sc.index("$script:Acted = $true"), sc.index("} catch { continue }"))
+
+
+class TestNeverPutOff(Base):
+    """read_max_defer=0: no putting off. The chat is tried once; when it cannot be read now, the preview decides."""
+
+    def failing(self, message):
+        class Failing(FakeTeams):
+            def readchat(self, chat_id, count=5, preview=None):
+                self.opened = getattr(self, "opened", []) + [chat_id]
+                raise notify.BridgeError(message, {"restore": "none", "returned": True, "hadOriginal": False})
+        return Failing()
+
+    def attempt(self, teams, ev):
+        return cli.process(ev, GRAPHS, StubBackend(), self.out, PBS, dedup=True, reader=fulltext.Reader(teams))
+
+    def test_the_first_try_reads_and_a_readable_chat_is_used(self):
+        self.enable(KIMERU_READ_MAX_DEFER="0")
+        self.teams.chat_messages = {"19:c1@thread.v2": ["前の話", BODY + Q]}
+        res = self.attempt(self.teams, self.ev(1, Q + "…"))
+        self.assertEqual(self.teams.opened, ["19:c1@thread.v2"])                  # 0 does not mean "do not read"
+        self.assertEqual(res[0]["read_full"]["state"], "full")
+
+    def test_when_it_cannot_be_read_now_the_preview_decides_on_the_spot(self):
+        self.enable(KIMERU_READ_MAX_DEFER="0")
+        n = 0
+        for text in (Q + "…", Q):                                                  # a cut-off preview, and one that ends at the PM
+            for message in ("the keyboard / mouse has been in use; stopped",
+                            "Teams is in use (it is in front, or an input box has the focus); nothing was opened"):
+                teams, n = self.failing(message), n + 1
+                res = self.attempt(teams, self.ev(n, text))                        # (no BudgetExhausted: nothing is put off)
+                self.assertEqual(len(teams.opened), 1)                             # it tried once
+                self.assertEqual(res[0]["read_full"]["state"], "preview_only")
+                self.assertIn("read_max_defer=0", res[0]["read_full"]["why"])
+        pending = self.out / "read_pending.json"
+        self.assertFalse(pending.exists() and json.loads(pending.read_text(encoding="utf-8")))
+
+    def test_the_count_limit_does_not_put_it_off_either(self):
+        self.enable(KIMERU_READ_MAX_DEFER="0", KIMERU_READ_MAX_OPEN="1")
+        reader = fulltext.Reader(self.teams)
+        self.teams.chat_messages = {"19:c1@thread.v2": [BODY + Q], "19:c2@thread.v2": [BODY + Q]}
+        r1 = cli.process(self.ev(1, Q + "…"), GRAPHS, StubBackend(), self.out, PBS, dedup=True, reader=reader)
+        r2 = cli.process(self.ev(2, Q + "…"), GRAPHS, StubBackend(), self.out, PBS, dedup=True, reader=reader)   # over the limit of 1
+        self.assertEqual(r1[0]["read_full"]["state"], "full")
+        self.assertEqual(r2[0]["read_full"]["state"], "preview_only")
+        self.assertEqual(self.teams.opened, ["19:c1@thread.v2"])
+
+    def test_the_default_still_puts_it_off(self):
+        self.enable()
+        teams = self.failing("Teams is in use (it is in front, or an input box has the focus); nothing was opened")
+        with self.assertRaises(fulltext.BudgetExhausted):
+            self.attempt(teams, self.ev(1, Q + "…"))
 
 
 if __name__ == "__main__":

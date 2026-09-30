@@ -47,6 +47,8 @@ Add-Type -Namespace K -Name W -MemberDefinition @'
 [DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
 [DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h);
 [DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr h, int n);
+[DllImport("user32.dll")] public static extern System.IntPtr GetAncestor(System.IntPtr h, uint f);
+[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr h, out uint pid);
 [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
 [DllImport("user32.dll")] public static extern void mouse_event(int f, int x, int y, int d, int e);
 '@
@@ -106,13 +108,24 @@ function Get-LastInputTick {
 }
 $script:OwnTick = $null
 function Mark-OwnInput { $script:OwnTick = Get-LastInputTick }   # our own click counts as input: do not mistake it for the person
+$script:Restoring = $false   # readchat: putting the chat back (a shorter threshold than the one before reading)
+function Get-ReadIdleNeed {
+  # reading another chat is the heaviest operation: KIMERU_READ_IDLE_SEC (read_idle_sec), 30 s when it is not set (or not a number).
+  # KIMERU_IDLE_SEC (idle_sec) has no say here: 0 there must not switch off the check before a colleague's chat is opened
+  $n = 0
+  if ("$env:KIMERU_READ_IDLE_SEC" -ne '' -and [int]::TryParse("$env:KIMERU_READ_IDLE_SEC", [ref]$n) -and $n -ge 0) { return $n }
+  30
+}
 function Get-IdleNeed([int]$fallback) {
-  # seconds without keyboard / mouse use that the person must have had. Reading another chat is the heaviest operation: 30 s unless
-  # KIMERU_READ_IDLE_SEC (read_idle_sec) says otherwise; KIMERU_IDLE_SEC (idle_sec) applies to every operation when it is set
-  if ($Action -eq 'readchat' -and "$env:KIMERU_READ_IDLE_SEC" -ne '') { return [int]$env:KIMERU_READ_IDLE_SEC }
-  if ("$env:KIMERU_IDLE_SEC" -ne '') { return [int]$env:KIMERU_IDLE_SEC }
-  if ($Action -eq 'readchat') { return 30 }
-  $fallback
+  # seconds without keyboard / mouse use that the person must have had
+  if ($Action -ne 'readchat') {
+    if ("$env:KIMERU_IDLE_SEC" -ne '') { return [int]$env:KIMERU_IDLE_SEC }
+    return $fallback
+  }
+  $read = Get-ReadIdleNeed
+  # putting the chat back is safer than leaving a colleague's chat open: the short threshold of the caller (3 s), never above the read one
+  if ($script:Restoring) { return [math]::Min($fallback, $read) }
+  $read
 }
 function Test-UserIdle([int]$need = 3) {
   # a check made right before each screen operation (no waiting): $false = the person is using the keyboard / mouse
@@ -121,7 +134,12 @@ function Test-UserIdle([int]$need = 3) {
   if ($null -ne $script:OwnTick -and (Get-LastInputTick) -eq $script:OwnTick) { return $true }   # nothing since our own input
   (Get-IdleSeconds) -ge $need
 }
-function Assert-Idle { if (-not (Test-UserIdle)) { Fail 'the keyboard / mouse has been in use; stopped (set KIMERU_IDLE_SEC=0 to switch this off)' } }
+function Assert-Idle {
+  if (-not (Test-UserIdle)) {
+    $off = if ($Action -eq 'readchat') { 'KIMERU_READ_IDLE_SEC=0' } else { 'KIMERU_IDLE_SEC=0' }
+    Fail "the keyboard / mouse has been in use; stopped (set $off to switch this off)"
+  }
+}
 function Wait-IdleSoft([int]$need = 3, [int]$max = 20) {
   $t0 = Get-Date
   while (-not (Test-UserIdle $need)) {
@@ -154,14 +172,42 @@ function Get-TeamsWindow {
     Where-Object { $pids -contains $_.Current.ProcessId -and $_.Current.Name } | Select-Object -First 1
 }
 
+function Get-TeamsPids { @(Get-Process -Name ms-teams -ErrorAction SilentlyContinue | ForEach-Object Id) }
+function Get-WindowPid($h) {
+  # the process that owns a top-level window (0 = none / unknown)
+  if (-not $h -or [IntPtr]$h -eq [IntPtr]::Zero) { return 0 }
+  [uint32]$p = 0
+  [void][K.W]::GetWindowThreadProcessId([IntPtr]$h, [ref]$p)
+  [int]$p
+}
+function Get-ForegroundPid { Get-WindowPid ([K.W]::GetForegroundWindow()) }
+function Get-FocusInfo {
+  # read only: where the keyboard focus is. $null when there is none / it cannot be read. The page of Teams is a WebView2, so the
+  # ProcessId of the focused element may name msedgewebview2: the window that holds it (its top-level ancestor) says whose it is.
+  $f = $A::FocusedElement
+  if (-not $f) { return $null }
+  $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+  $e = $f; $h = 0
+  for ($i = 0; $e -and $i -lt 60; $i++) {
+    $n = [int]$e.Current.NativeWindowHandle
+    if ($n -ne 0) { $h = $n; break }
+    $e = $walker.GetParent($e)
+  }
+  $top = [IntPtr]::Zero
+  if ($h -ne 0) { $top = [K.W]::GetAncestor([IntPtr]$h, 2) }   # GA_ROOT
+  [pscustomobject]@{ Type = [string]$f.Current.ControlType.ProgrammaticName; ElemPid = [int]$f.Current.ProcessId
+                     Hwnd = $h; Top = [int64]$top; TopPid = (Get-WindowPid $top) }
+}
 function Test-TeamsInUse($w) {
-  # read only: Teams is the window in front, or the keyboard focus is in one of its input boxes (the person may be writing).
-  # Nothing is opened then; a failure to tell counts as in use.
+  # read only: a window of Teams (the main one or a popped-out chat) is in front, or the keyboard focus is in an input box of one
+  # (the person may be writing). Nothing is opened then. A failure to tell counts as in use.
   try {
-    if ([K.W]::GetForegroundWindow() -eq [IntPtr]$w.Current.NativeWindowHandle) { return $true }
-    $pids = @(Get-Process -Name ms-teams -ErrorAction SilentlyContinue | ForEach-Object Id)
-    $f = $A::FocusedElement
-    if ($f -and ($pids -contains $f.Current.ProcessId) -and ($f.Current.ControlType -in @($CT::Edit, $CT::Document))) { return $true }
+    $pids = @(Get-TeamsPids)
+    if ($pids -contains (Get-ForegroundPid)) { return $true }
+    $fi = Get-FocusInfo
+    if (-not $fi) { return $true }                # no focused element / not readable: cannot tell
+    if ([int]$fi.TopPid -eq 0) { return $true }   # the window that holds it is unknown: cannot tell
+    if (($pids -contains [int]$fi.TopPid) -and ($fi.Type -in @('ControlType.Edit', 'ControlType.Document'))) { return $true }
   } catch { return $true }
   $false
 }
@@ -314,7 +360,6 @@ function Select-Chat($w, $id, $title) {
   $hows = @('select', 'invoke'); if (Test-ReadClickAllowed) { $hows += 'click' }   # the click needs Teams in front: not by default
   foreach ($how in $hows) {
     Assert-Idle; Test-Deadline
-    $script:Acted = $true
     try {
       switch ($how) {
         'select' { $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() }
@@ -328,6 +373,7 @@ function Select-Chat($w, $id, $title) {
           Mark-OwnInput
         }
       }
+      $script:Acted = $true   # the screen was operated (when select and invoke both throw, nothing changed: nothing to put back)
     } catch { continue }
     for ($i = 0; $i -lt 20; $i++) {
       Start-Sleep -Milliseconds 300
@@ -376,8 +422,9 @@ function Show-ChatApp($w) {
   $btn = @(Find-All $w $CT::Button) + @(Find-All $w $CT::TabItem) + @(Find-All $w $CT::ListItem) |
     Where-Object { $_.Current.Name -match '^(チャット|Chat)(\s|$|\(|（|,)' } | Select-Object -First 1
   if (-not $btn) { return $false }
-  try { $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); return $true } catch {}
-  try { $btn.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select(); return $true } catch {}
+  # the page was switched (Activity / Calendar -> Chat): that is an operation, so readchat puts things back afterwards
+  try { $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); $script:Acted = $true; $script:PageSwitched = $true; return $true } catch {}
+  try { $btn.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select(); $script:Acted = $true; $script:PageSwitched = $true; return $true } catch {}
   $false
 }
 
@@ -476,8 +523,11 @@ if ($Action -eq 'diag') {
   $found = @{}
   foreach ($i in $items) { foreach ($m in [regex]::Matches($i.Current.Name, '\(([^)]{1,8})\)')) { $found[$m.Groups[1].Value] = 1 + [int]$found[$m.Groups[1].Value] } }
   $tabs = @(Find-All $w $CT::TabItem | Where-Object { try { $_.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected } catch { $false } } | ForEach-Object { $_.Current.Name } | Where-Object { $_.Length -le 12 })
+  # where the keyboard focus is, as numbers and type names only (never text): what Test-TeamsInUse decides from. T24 puts it on the sheet
+  $focus = try { $fi = Get-FocusInfo; if ($fi) { "{0} pid={1} hwnd={2} top={3} topPid={4} fgPid={5} teamsPids={6}" -f $fi.Type, $fi.ElemPid, $fi.Hwnd, $fi.Top, $fi.TopPid, (Get-ForegroundPid), (@(Get-TeamsPids) -join '/') } else { 'none' } } catch { 'error' }
+  $inUse = try { [bool](Test-TeamsInUse $w) } catch { 'error' }
   # most useful fields first: the result sheet truncates long lines
-  Out-Json ([ordered]@{ ok = $true; selfItemFound = [bool](Find-SelfItem $w); learnedName = [bool](Get-SelfName)
+  Out-Json ([ordered]@{ ok = $true; focus = $focus; teamsInUse = $inUse; selfItemFound = [bool](Find-SelfItem $w); learnedName = [bool](Get-SelfName)
               parenMarkers = $found; titleShape = $shape; treeItems = $tree.Count; listItems = $list.Count; selectedTabs = $tabs
               itemShapes = @($items | Select-Object -First 8 | ForEach-Object { Mask $_.Current.Name }) })
   exit 0
@@ -528,13 +578,14 @@ function Restore-Original($origId, $origTitle) {
   # using the keyboard / mouse (it waits a little, then gives up: the caller reports it). A time-out or an interruption while putting
   # the original back does not skip the self chat.
   $script:Deadline = (Get-Date).AddSeconds(40)
+  $script:Restoring = $true   # Get-IdleNeed: the short threshold (3 s), not the 30 s that guards opening a colleague's chat
   $hasOrig = [bool]($origId -or $origTitle)
   try {   # read only first: when the chat that was open is still open, there is nothing to put back and nothing to wait for
     $w0 = Get-TeamsWindow
     if ($hasOrig -and $w0 -and (Test-OrigOpen $w0 $origId $origTitle)) { return 'restored' }
   } catch {}
   try {
-    if (-not (Wait-IdleSoft 3 45)) { return 'failed' }
+    if (-not (Wait-IdleSoft 3 20)) { return 'failed' }
     if (-not (Get-TeamsWindow)) { return 'failed' }
   } catch { return 'failed' }
   if ($hasOrig) {
@@ -562,8 +613,9 @@ if ($Action -eq 'readchat') {
   # Every way out (a failure, the person using the PC, the time limit) goes through the put-back below.
   $script:InRead = $true
   $script:Deadline = (Get-Date).AddSeconds(90)
-  $errMsg = ''; $origId = $null; $origTitle = ''; $state = ''; $matched = $false; $read = $null; $sameTitle = $false
-  $script:Acted = $false   # set by the first screen operation (Select-Chat): nothing changed before it, so nothing needs putting back
+  $errMsg = ''; $origId = $null; $origTitle = ''; $state = ''; $matched = $false; $read = $null
+  $script:Acted = $false   # set by the first screen operation (Show-ChatApp, Select-Chat): nothing changed before it, so nothing needs putting back
+  $script:PageSwitched = $false
   try {
     if (-not $w) { Fail 'Teams window not found' }
     if (-not $ChatId -or $ChatId -eq '48:notes') { Fail 'readchat needs the id of another chat (not the self chat)' }
@@ -581,8 +633,9 @@ if ($Action -eq 'readchat') {
     # the text read is checked against the preview on every screen: it needs a preview long enough to mean something
     if ($head.Length -lt 12) { Fail 'the preview is too short to tell the chat apart on this screen; nothing was opened' }
     # a screen whose list reports no selection cannot tell two chats of the same title apart (a recurring meeting, two people with the
-    # same name): the title is not trusted. Nothing is read; the self chat is opened instead, so no colleague's chat is left open
-    if (-not $origId -and $origTitle -and $origTitle -eq $title) { $sameTitle = $true; Fail 'the chat that is open has the same title as the chat to read, so they cannot be told apart on this screen; nothing was read' }
+    # same name), and when the chat that is open is the one to read there is nothing to open: the screen is not touched (nothing is
+    # operated, so nothing needs putting back), nothing is read, and the preview decides. The same test as Test-ChatOpen
+    if (-not $origId -and (Test-ChatOpen $w $ChatId $title)) { Fail 'the chat that is open has the title of the chat to read, so they cannot be told apart on this screen; nothing was opened, nothing was read' }
     $state = Select-Chat $w $ChatId $title
     if (-not $state) { Fail 'could not confirm that the chat is open (the title and the selection did not agree); nothing was read' }
     $w = Get-TeamsWindow
@@ -594,10 +647,11 @@ if ($Action -eq 'readchat') {
     $errMsg = if ($m.StartsWith('KFAIL:')) { $m.Substring(6) } else { 'unexpected error while reading the chat (' + $_.Exception.GetType().Name + ')' }
   }
   $restore = 'none'
-  if ($sameTitle) { $restore = Restore-Original $null '' }
-  elseif ($script:Acted) { $restore = if ($origId -eq $ChatId) { 'unchanged' } else { Restore-Original $origId $origTitle } }
+  if ($script:Acted) { $restore = if ($origId -and $origId -eq $ChatId -and -not $script:PageSwitched) { 'unchanged' } else { Restore-Original $origId $origTitle } }
+  # the page (Activity / Calendar) that Show-ChatApp left cannot be gone back to: the person is told the original was not put back
+  if ($script:PageSwitched -and $restore -in 'restored', 'unchanged') { $restore = 'failed' }
   Restore-Foreground
-  $had = [bool]($origId -or $origTitle)
+  $had = [bool]($origId -or $origTitle -or $script:PageSwitched)
   $returned = [bool]($restore -in 'restored', 'unchanged', 'none')
   if ($errMsg) { Out-Json ([ordered]@{ ok = $false; error = $errMsg; restore = $restore; returned = $returned; hadOriginal = $had }); exit 2 }
   Out-Json ([ordered]@{ ok = $true; opened = $true; how = $read.how; messages = @($read.messages); returned = $returned; restore = $restore

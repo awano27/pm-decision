@@ -380,8 +380,17 @@ def drop(out, key):
 
 
 def purge(out, now=None):
-    """Delete the full texts kept longer than `full_text_keep_days`. The items they belonged to are then treated as decided from
-    the preview (their record says so). Returns the keys removed."""
+    """Delete the full texts kept longer than `full_text_keep_days` (under the lock every write of approvals.json takes: the items
+    are changed too). Returns the keys removed; when the lock is held nothing is done and the result has `busy` set."""
+    from . import fsutil, notify
+    with fsutil.exclusive(notify.lock_path(out)) as got:
+        if not got:
+            return fsutil.BusyList.busy_result()
+        return fsutil.BusyList(purge_locked(out, now))
+
+
+def purge_locked(out, now=None):
+    """The body of purge (the caller holds the lock)."""
     data = _read(out)
     gone = [k for k, e in data.items() if _expired(e, now)]
     if not gone:

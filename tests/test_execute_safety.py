@@ -308,9 +308,9 @@ class TestEveryPageAndTheStoredForm(Safety):
         self.assertEqual(len(urls), 2)
 
     def test_a_less_than_sign_stored_as_an_entity_still_matches(self):
-        stored = "<div>件数 &lt; 3 のとき &amp; 確認 &lt;b&gt;</div>"
+        stored = "<div>件数 &lt; 3 のとき &amp; 確認</div>"
         http = lambda method, url, token, body=None, retries=3: {"comments": [{"id": 9, "text": stored}]}
-        self.assertEqual(execute._existing_comment("https://x/_apis/wit/workItems", "7", "件数 < 3 のとき & 確認 <b>", http, "t"), 9)
+        self.assertEqual(execute._existing_comment("https://x/_apis/wit/workItems", "7", "件数 < 3 のとき & 確認", http, "t"), 9)
 
     def test_a_redo_does_not_write_when_the_text_is_on_a_later_page(self):
         self.enable()

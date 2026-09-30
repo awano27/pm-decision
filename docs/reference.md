@@ -109,7 +109,7 @@ python -m kimeru config path
 | `KIMERU_CODEX_MODEL` / `KIMERU_CODEX_EFFORT` | `codex` のモデル名（既定 `gpt-6-luna`）と推論の強さ（既定 `low`）。空は未設定と同じで、既定値になります |
 | `KIMERU_GROK_MODEL` | `grok` のモデル名（省略可） |
 | `KIMERU_TOAST` | `0`（または `off`）で PC の Windows 通知を止める。`detail` で、PC の通知だけに、確認待ちの件名などを含める（iPhone などの経路には、常に件数と番号だけ） |
-| `KIMERU_PUSH` / `KIMERU_PUSH_MIN_MINUTES` | 通知の経路（`teams_webhook,webhook,outlook` のコンマ区切り）と、同じ経路への最小の間隔（分、既定 5）。最初の 1 回は、既存の分を記録するだけで送りません |
+| `KIMERU_PUSH` / `KIMERU_PUSH_MIN_MINUTES` | 通知の経路（`teams_webhook,webhook,outlook` のコンマ区切り）と、同じ経路への最小の間隔（分、既定 5）。経路を有効にした最初のサイクルの始めに、それまでの確認待ちと通知は「通知済み」として記録するだけで送りません（そのサイクルで新しく投稿された分からは送ります。経路を外していた間の分は、有効にし直しても送りません）。一覧の名前は、大文字小文字と前後の空白を読み替えます。経路名でないものは無視して警告し、残りの経路は使います |
 | `KIMERU_PUSH_TEAMS_URL` / `KIMERU_PUSH_WEBHOOK_URL` / `KIMERU_PUSH_WEBHOOK_KEY` | 経路の URL（https だけ）と鍵。秘密なので、環境変数だけ。表示にも記録にも出ません |
 | `KIMERU_PUSH_WEBHOOK_BODY` | 汎用の webhook の本文の形（JSON、`{text}` と `{key}`）。`config show` は中身を出しません |
 | `KIMERU_AZ` | `az.cmd` の場所（`kimeru` の隣の `az`、`C:\az` も探します） |

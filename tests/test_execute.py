@@ -36,12 +36,47 @@ class NoCriteria(StubBackend):
         return out
 
 
+class _Tracked(list):
+    """A list of posts (or replies) that tells the bridge, in order, what was added: the chat keeps them in one timeline."""
+
+    def __init__(self, owner, kind, items=()):
+        super().__init__(items)
+        self._owner, self._kind = owner, kind
+
+    def append(self, x):
+        super().append(x)
+        self._owner._chron.append((self._kind, x))
+
+    def extend(self, xs):
+        for x in xs:
+            self.append(x)
+
+
 class Bridge:
-    """A fake self chat: what was posted, and the replies to hand back."""
+    """A fake self chat: what was posted, and the replies to hand back. The timeline is chronological (a reply that comes
+    before a result post is before it on the screen), as the real chat is."""
 
     def __init__(self):
-        self.posts, self.replies, self.timeline, self.fail_posts = [], [], [], False
+        self._chron = []
+        self._posts, self._replies = _Tracked(self, "P"), _Tracked(self, "R")
+        self.timeline, self.fail_posts = [], False
         self.sent_flags = []
+
+    def _set(self, kind, items):
+        items = list(items)
+        keep, j = [], 0
+        for k, t in self._chron:   # what is still there keeps its place; what is new goes to the end
+            if k == kind and j < len(items) and items[j] == t:
+                keep.append((k, t))
+                j += 1
+            elif k != kind:
+                keep.append((k, t))
+        keep.extend((kind, t) for t in items[j:])
+        self._chron = keep
+        return _Tracked(self, kind, items)
+
+    posts = property(lambda self: self._posts, lambda self, v: setattr(self, "_posts", self._set("P", v)))
+    replies = property(lambda self: self._replies, lambda self, v: setattr(self, "_replies", self._set("R", v)))
 
     def post(self, text, send):
         if self.fail_posts:
@@ -52,12 +87,14 @@ class Bridge:
 
     def read(self):
         tl = []
-        for text in self.posts:   # what tools/teams-self.ps1 reads: "P:N" for an approval post, "X:N" for a result post
-            if text.startswith("[kimeru #"):
+        for kind, text in self._chron:   # what tools/teams-self.ps1 reads: "P:N" for an approval post, "X:N" for a result post
+            if kind == "R":
+                tl.append("R:" + text)
+            elif text.startswith("[kimeru #"):
                 tl.append("P:" + text[len("[kimeru #"):].split("]")[0])
             elif text.startswith("[kimeru 実行 #"):
                 tl.append("X:" + text[len("[kimeru 実行 #"):].split("]")[0])
-        return {"timeline": tl + ["R:" + r for r in self.replies], "replies": list(self.replies)}
+        return {"timeline": tl, "replies": list(self.replies)}
 
 
 class Base(unittest.TestCase):

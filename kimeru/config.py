@@ -115,6 +115,23 @@ def push_valid(raw):
     return all(x.strip() in PUSH_ROUTES for x in str(raw).split(",") if x.strip())
 
 
+def push_read(raw):
+    """(routes, ignored): the route names in a comma list of `push`, read forgivingly (case and surrounding spaces are ignored;
+    a route named twice counts once), and how many entries are not route names. The entries that are not names are never repeated
+    anywhere: one may be a URL."""
+    routes, ignored = [], 0
+    for x in str(raw).split(","):
+        n = x.strip().lower()
+        if not n:
+            continue
+        if n in PUSH_ROUTES:
+            if n not in routes:
+                routes.append(n)
+        else:
+            ignored += 1
+    return routes, ignored
+
+
 NEVER_SHOWN = ("push_webhook_body",)   # `config show` says only whether it is set (a body template may hold a key)
 ARGS = {}        # key -> value given on the command line (highest precedence)
 _FILLED = {}     # environment variables apply() filled from the file (undone at the next apply, so a re-read is clean)
@@ -204,9 +221,13 @@ def apply(argv=None):
             if not ok and key != "backend":   # only backend stops the command (see problems())
                 WARNINGS.append(f"{key}={str(raw).strip()!r} ({_where(key)}) is not allowed: the default {default!r} is used")
                 v = default
-        elif key == "push" and not push_valid(raw):   # never print the value: it may be a URL
-            WARNINGS.append(f"push ({_where(key)}) is not a list of route names ({', '.join(PUSH_ROUTES)}): no route is used")
-            v = default
+        elif key == "push":   # the names that are not routes are ignored, the others are used; never print a value: it may be a URL
+            routes, ignored = push_read(raw)
+            if ignored:
+                WARNINGS.append(f"push ({_where(key)}) has {ignored} entr{'y' if ignored == 1 else 'ies'} that "
+                                f"{'is' if ignored == 1 else 'are'} not a route name ({', '.join(PUSH_ROUTES)}): "
+                                f"{'it is' if ignored == 1 else 'they are'} ignored" + (", the others are used" if routes else ", no route is used"))
+            v = ",".join(routes)
         else:
             v = raw
         if SOURCES[key] == "arg":
@@ -231,8 +252,8 @@ def value(key):
             if key in CHOICES or key == "brief_hour":
                 n, ok = normalize(key, v)
                 return n if ok or key == "backend" else default
-            if key == "push" and not push_valid(v):
-                return default
+            if key == "push":
+                return ",".join(push_read(v)[0])
             return str(v)
     return default
 

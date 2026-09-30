@@ -223,7 +223,22 @@ def unposted_announced(out):
     return int(Approvals(out).data.get("unposted_announced", 0))
 
 
+def lock_path(out):
+    """The one lock every read-modify-write of approvals.json takes (collect, notify, notify_notices, mark_toasted, purge, the merge of a
+    follow-up message). Not re-entrant: what is called with it held is a `_..._locked` body."""
+    return Path(out) / "approvals.lock"
+
+
 def mark_toasted(out, nums, notice_keys, unposted=None):
+    """Record what the PC notification announced. False (nothing changed, so it is announced again next time) when the lock is held."""
+    with fsutil.exclusive(lock_path(out)) as got:
+        if not got:
+            return False
+        _mark_toasted_locked(out, nums, notice_keys, unposted)
+        return True
+
+
+def _mark_toasted_locked(out, nums, notice_keys, unposted=None):
     ap = Approvals(out)
     if unposted is not None:
         if unposted:
@@ -306,8 +321,16 @@ def format_notice(rec):
 
 
 def notify_notices(out, bridge, send=False):
-    """Post automatic decisions the PM should know about (notices.jsonl), each once."""
+    """Post automatic decisions the PM should know about (notices.jsonl), each once. When the lock is held, nothing is done
+    and the result has `busy` set."""
     out = Path(out)
+    with fsutil.exclusive(lock_path(out)) as got:
+        if not got:
+            return fsutil.BusyList.busy_result()
+        return fsutil.BusyList(_notify_notices_locked(out, bridge, send))
+
+
+def _notify_notices_locked(out, bridge, send):
     ap = Approvals(out)
     done = set(ap.data.setdefault("notices", []))
     q = out / "notices.jsonl"
@@ -317,6 +340,7 @@ def notify_notices(out, bridge, send=False):
         key = _key(rec)
         if key in done:
             continue
+        fsutil.refresh(lock_path(out))
         r = bridge.post(format_notice(rec), send) or {}
         if send and (r.get("typed") is False or r.get("sent") is False):
             raise RuntimeError(f"notice {key} was not posted as planned: {r}")
@@ -329,8 +353,17 @@ def notify_notices(out, bridge, send=False):
 
 def notify(out, bridge, send=False, real=False):
     """Post every not-yet-posted queue item to the self chat. real=True (the daily and approvals paths): the exact text a
-    switched-on kind will write, and where, is fixed and shown in the post (execute.freeze)."""
+    switched-on kind will write, and where, is fixed and shown in the post (execute.freeze).
+    Reads and writes approvals.json under the same lock as collect, and keeps it while it posts (an approval typed by hand meanwhile waits
+    for the next cycle instead of being overwritten). When the lock is held, nothing is done and the result has `busy` set."""
     out = Path(out)
+    with fsutil.exclusive(lock_path(out)) as got:
+        if not got:
+            return fsutil.BusyList.busy_result()
+        return fsutil.BusyList(_notify_locked(out, bridge, send, real))
+
+
+def _notify_locked(out, bridge, send, real):
     ap = Approvals(out)
     q = out / "queue.jsonl"
     rows = [json.loads(l) for l in q.read_text(encoding="utf-8").splitlines() if l.strip()] if q.exists() else []
@@ -340,7 +373,7 @@ def notify(out, bridge, send=False, real=False):
     ap.save()   # an item that cannot be posted now must still exist (and be counted as waiting) after a failed post
     posted = []
     from . import fulltext
-    fulltext.purge(out)   # a full text kept too long is deleted; the item is then treated as decided from the preview
+    fulltext.purge_locked(out)   # a full text kept too long is deleted; the item is then treated as decided from the preview
     ap = Approvals(out)
     for n, it in ap.data["items"].items():
         req = it["record"].get("copilot_request")
@@ -350,6 +383,7 @@ def notify(out, bridge, send=False, real=False):
             from . import execute, fulltext
             execute.freeze(it["record"], real)
             ap.save()
+            fsutil.refresh(lock_path(out))
             r = bridge.post(format_post(n, it["record"], fulltext.load(out, it["key"])), send) or {}
             if send and (r.get("typed") is False or r.get("sent") is False):
                 raise RuntimeError(f"#{n} was not posted as planned: {r}")   # stays unposted; retried next cycle
@@ -359,6 +393,7 @@ def notify(out, bridge, send=False, real=False):
             posted.append(int(n))
         if req and not it.get("request_posted"):   # its own message: one long-press copies just this
             req = (fulltext.load(out, it["key"]) or {}).get("request") or req   # the request with the whole text is kept apart from the records
+            fsutil.refresh(lock_path(out))
             r2 = bridge.post(f"[kimeru #{n} Copilot 用]" + chr(10) + req, send) or {}
             if send and (r2.get("typed") is False or r2.get("sent") is False):
                 raise RuntimeError(f"#{n} Copilot request was not posted as planned: {r2}")
@@ -487,6 +522,7 @@ def flush_outbox(ap, bridge, send):
     if not box or not send:
         return not box
     for k, text in enumerate(box):
+        fsutil.refresh(ap.path.with_name("approvals.lock"))
         try:
             ok = _delivered(bridge.post(text, True), True)
         except Exception:
@@ -495,9 +531,23 @@ def flush_outbox(ap, bridge, send):
             ap.data["outbox"] = box[k:]
             ap.save()
             return False
+        _result_delivered(ap, text)
     ap.data["outbox"] = []
     ap.save()
     return True
+
+
+RESULT_POST = re.compile(r"^\[kimeru 実行 #(\d+)\]")
+
+
+def _result_delivered(ap, text):
+    """A result post "[kimeru 実行 #N]" is in the chat now: it is the boundary for the `再実行 N` replies before it, so the count
+    of replies that already acted starts again from 0. That happens at the next read, once the post is on the screen (see _collect):
+    a post the screen does not show must not make the same reply act again."""
+    m = RESULT_POST.match(text)
+    it = m and ap.data["items"].get(m.group(1))
+    if it and it.get("redo_seen"):
+        it["redo_reset"] = True
 
 
 def make_post(ap, bridge, send):
@@ -527,16 +577,15 @@ def _after_approval(out, ap, num, it, bridge, real=False, send=False):
     return result
 
 
-class Changes(list):
+class Changes(fsutil.BusyList):
     """The applied changes. `busy` is True when another approvals run holds the lock: nothing was read or applied."""
-    busy = False
 
 
 def collect(out, bridge, writer=None, real=False, send=False):
     """Read replies from the self chat and apply them. Returns applied changes. Only one collect runs at a time (a lock file in
     the state folder): the daily cycle and a hand-typed `approvals` could otherwise approve the same "OK N" twice and write twice.
     When the lock is held, nothing is done and the result has `busy` set."""
-    with fsutil.exclusive(Path(out) / "approvals.lock") as got:
+    with fsutil.exclusive(lock_path(out)) as got:
         if not got:
             res = Changes()
             res.busy = True
@@ -568,10 +617,18 @@ def _collect(out, bridge, writer=None, real=False, send=False):
     read = bridge.read()
     replies = fresh_replies(read)
     redo_count = {}
-    for line in fresh_replies(read, x_boundary=False):   # how many `再実行 N` replies stand after the last "[kimeru #N]" post
-        r0 = parse_reply(line)
+    for line in replies:   # how many `再実行 N` replies stand after the last of "[kimeru #N]" and "[kimeru 実行 #N]" on the screen
+        r0 = parse_reply(line)                       # (the same starting point as redo_seen: a result post starts the count again)
         if r0 and r0[0] == "再実行":
             redo_count[r0[1]] = redo_count.get(r0[1], 0) + 1
+    if read.get("timeline") is not None:   # the result post of an earlier redo is on the screen now: the count starts again from 0
+        shown = {e[2:] for e in read["timeline"] if e.startswith("X:")}
+        for n0, it0 in ap.data["items"].items():
+            if it0.get("redo_reset") and n0 in shown:
+                it0["redo_seen"] = 0
+                it0.pop("redo_reset")
+            if int(it0.get("redo_seen", 0)) > redo_count.get(n0, 0):   # the replies that acted are before a boundary that is shown
+                it0["redo_seen"] = redo_count.get(n0, 0)
     redo_done = set()
     for line in replies:
         ps = parse_paste(line)

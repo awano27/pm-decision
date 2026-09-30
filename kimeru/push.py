@@ -38,9 +38,9 @@ REST_MAX = 6 * 3600
 
 
 def enabled_routes():
-    """Routes named in the `push` setting (unknown names are ignored)."""
-    raw = config.value("push")
-    return [r for r in (x.strip() for x in raw.split(",")) if r in ROUTES]
+    """Routes named in the `push` setting (case and surrounding spaces ignored; a name that is not a route is ignored, the
+    others are used: config.apply warns about it)."""
+    return [r for r in config.push_read(config.value("push"))[0] if r in ROUTES]
 
 
 def min_interval():

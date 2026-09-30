@@ -219,7 +219,9 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
     except Exception as e:
         purged = []
         _log(out, {"step": "full_text", "error": f"{type(e).__name__}"})
-    if purged:
+    if getattr(purged, "busy", False):
+        r["full_text_purge"] = "busy: approvals.json is in use by another run, nothing was purged this cycle"
+    elif purged:
         r["full_text_purged"] = len(purged)
     if send:   # a route turned on is baselined before this cycle posts anything; a route turned off forgets what came meanwhile
         try:
@@ -243,7 +245,7 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
 
     def post_ready():   # what is ready is posted now, not after the rest of the inbox has been judged
         if send:
-            early.extend(notify.notify(out, bridge, send=True, real=real))
+            early.extend(notify.notify(out, bridge, send=True, real=real))   # (busy: nothing posted now; the next call retries)
             early_notices.extend(notify.notify_notices(out, bridge, send=True))
     reader = fulltext.Reader(bridge) if fulltext.enabled() else None   # opens chats in full only when it is needed (off by default)
     _step(out, "judge", lambda: process_inbox(inbox, out, graphs, backend, playbooks, process,
@@ -256,8 +258,19 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
         if is_jev(backend):   # Jev's speed is not written anywhere (TypeSafe's terms); the counts stay
             perf = {k: v for k, v in perf.items() if k != "judge_sec"}
         r["perf"] = perf
-    _step(out, "notify", lambda: early + notify.notify(out, bridge, send=send, real=real), r)
-    _step(out, "notices", lambda: len(early_notices) + len(notify.notify_notices(out, bridge, send=send)), r)
+    def do_notify():
+        got = notify.notify(out, bridge, send=send, real=real)
+        if getattr(got, "busy", False):
+            return {"posted": early, "busy": "another approvals run holds the lock, nothing was posted this call"}
+        return early + got
+
+    def do_notices():
+        got = notify.notify_notices(out, bridge, send=send)
+        if getattr(got, "busy", False):
+            return {"posted": len(early_notices), "busy": "another approvals run holds the lock, nothing was posted this call"}
+        return len(early_notices) + len(got)
+    _step(out, "notify", do_notify, r)
+    _step(out, "notices", do_notices, r)
     # files the judge could not take (down / overloaded). Files kept back for the time limit or the reading limit are
     # not that: the judge is fine, the next cycle takes them (reported apart, and they do not fail the run or hold the brief)
     left = perf.get("left_for_next_cycle", 0)
@@ -274,14 +287,15 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
         announced = notify.unposted_announced(out)
         unposted = unposted_now if unposted_now != announced else 0
         if announced and not unposted_now:
-            notify.mark_toasted(out, [], [], unposted=0)
+            notify.mark_toasted(out, [], [], unposted=0)   # (busy: the next cycle does it)
         if nums or keys or unposted:
             def do_toast():
                 try:
                     toaster(*notify.toast_text(out, nums, len(keys), unposted))
                 except Exception as e:   # a missing notification must not turn the cycle into a failure
                     return f"failed: {type(e).__name__}: {str(e)[:120]}"
-                notify.mark_toasted(out, nums, keys, unposted=unposted_now)
+                if not notify.mark_toasted(out, nums, keys, unposted=unposted_now):
+                    return "shown (not recorded: approvals.json is in use; announced again next cycle)"
                 return "shown"
             _step(out, "toast", do_toast, r)
     if send:   # the routes that reach a phone (counts and numbers only); each has its own state

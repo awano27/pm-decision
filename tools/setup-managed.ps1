@@ -74,13 +74,23 @@ function Get-ConfigValues {
   } catch {}
   $r
 }
+function Get-PreviousConfigValues($prev) {
+  # what the install recorded for config.json: the current form (configValues: backend, ado_org, ado_project) or the form an
+  # older install wrote (configBackend only); nothing recorded gives $null
+  if (-not $prev) { return $null }
+  if ($prev.PSObject.Properties['configValues']) { return $prev.configValues }
+  if ($prev.PSObject.Properties['configBackend']) { return [pscustomobject]@{ backend = $prev.configBackend } }
+  $null
+}
 function Restore-ConfigValues($prevValues) {
-  # puts backend, ado_org and ado_project in config.json back as they were before the first install; other settings stay
-  if (-not (Test-Path $cfgFile)) { return }
+  # puts back, in config.json, the settings the install recorded, as they were before the first install; other settings stay.
+  # A setting the record does not mention was not written by the install (an older install wrote only backend): it is left alone
+  if (-not $prevValues -or -not (Test-Path $cfgFile)) { return }
   try {
     $c = Get-Content -Raw -Encoding UTF8 $cfgFile | ConvertFrom-Json
     foreach ($k in $cfgKeys) {
-      $v = if ($prevValues -and $prevValues.PSObject.Properties[$k]) { $prevValues.$k } else { $null }
+      if (-not $prevValues.PSObject.Properties[$k]) { continue }
+      $v = $prevValues.$k
       if ($null -ne $v) { $c | Add-Member -NotePropertyName $k -NotePropertyValue $v -Force }
       else { $c.PSObject.Properties.Remove($k) }
     }
@@ -90,12 +100,7 @@ function Restore-ConfigValues($prevValues) {
 function Restore-Previous {
   # puts back KIMERU_BACKEND, the settings in config.json (backend, ado_org, ado_project) and the logon shortcut as they were before the first install
   $prev = if (Test-Path $prevFile) { Get-Content -Raw -Encoding UTF8 $prevFile | ConvertFrom-Json } else { $null }
-  if ($prev) {
-    $pv = if ($prev.PSObject.Properties['configValues']) { $prev.configValues }
-          elseif ($prev.PSObject.Properties['configBackend']) { [pscustomobject]@{ backend = $prev.configBackend } }   # written by an older install
-          else { $null }
-    Restore-ConfigValues $pv
-  }
+  Restore-ConfigValues (Get-PreviousConfigValues $prev)
   cmd /c "schtasks /Delete /TN $task /F >nul 2>nul"
   if ((Test-Path $lnk) -and -not ($prev -and $prev.shortcut)) { Remove-Item $lnk -Force }
   [Environment]::SetEnvironmentVariable('KIMERU_BACKEND', $(if ($prev) { $prev.backend } else { $null }), 'User')

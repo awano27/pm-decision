@@ -153,6 +153,15 @@ def _merge_into_pending(out, ev, res):
     if ev.get("kind") != "teams.chat" or not ev.get("chat_id") or not ev.get("author") or res.get("notify"):
         return False
     from . import notify
+    with fsutil.exclusive(notify.lock_path(out)) as got:
+        if not got:   # another run holds approvals.json: nothing is changed; the message stays a matter of its own (noted in warnings.jsonl)
+            _append(out / "warnings.jsonl", {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                             "merge": "skipped: approvals.json is in use by another run", "event_id": ev.get("id")})
+            return False
+        return _merge_locked(out, ev, res, notify)
+
+
+def _merge_locked(out, ev, res, notify):
     ap = notify.Approvals(out)
     for it in ap.data["items"].values():
         rec = it["record"]
@@ -583,6 +592,8 @@ def main(argv=None):
         calibrate.run(out, gs, min_questions=a.min_questions, allow_wider=a.allow_wider, do_apply=a.apply)
         return 0
     be = _backend(a.backend, a.model)
+    if a.cmd in ("run", "watch", "demo") and not (a.cmd == "demo" and a.replay):
+        _record_warnings(out)
     if a.cmd == "demo":
         from . import demo, report
         page = out / "report.html"
@@ -639,6 +650,17 @@ def main(argv=None):
         if a.once:
             return 0
         time.sleep(a.interval)
+
+
+def _record_warnings(out):
+    """Values that were not allowed (and so replaced by their default) are also kept in warnings.jsonl: run, watch and demo
+    would otherwise show them on the screen only (daily writes them to daily.log.jsonl)."""
+    at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    try:
+        for w in config.WARNINGS:
+            _append(out / "warnings.jsonl", {"at": at, "config": w})
+    except OSError:
+        pass
 
 
 def digest(out):

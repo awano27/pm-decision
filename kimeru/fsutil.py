@@ -66,3 +66,22 @@ def exclusive(path, stale_sec=1800):
             path.unlink()
         except OSError:
             pass
+
+
+def refresh(path):
+    """Mark a lock file we hold as still in use (a long step, such as posting to Teams, must not look like a dead process)."""
+    try:
+        os.utime(str(path))
+    except OSError:
+        pass
+
+
+class BusyList(list):
+    """A result list; `busy` is True when another process held the lock: nothing was read, changed or saved."""
+    busy = False
+
+    @classmethod
+    def busy_result(cls):
+        res = cls()
+        res.busy = True
+        return res

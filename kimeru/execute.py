@@ -157,10 +157,16 @@ def ambiguous(e):
     return False
 
 
+# a tag opens with a name (`<div>`, `</p>`, `<br/>`, `<a href="…">`): a `<` followed by a space, a digit or a symbol is text, so a
+# sentence such as "a < 3 or b > 5" is never cut between its `<` and a later `>`
+_TAG = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?/?>")
+
+
 def _plain(text):
-    """The same normalization for both sides of the comparison: HTML escapes resolved (ADO keeps a `<` as `&lt;`), tags removed,
-    white space folded."""
-    return " ".join(re.sub(r"<[^>]+>", " ", html.unescape(str(text or ""))).split())
+    """The same normalization for both sides of the comparison, in this order: tags removed, HTML escapes resolved (ADO keeps a
+    `<` as `&lt;`), white space folded. Removing the tags first keeps `<div>件数 &lt; 3</div>` equal to `件数 < 3`, and a text
+    that only had an escaped `<` never loses what stands between it and a later `>`."""
+    return " ".join(html.unescape(_TAG.sub(" ", str(text or ""))).split())
 
 
 MAX_PAGES = 100
@@ -292,11 +298,10 @@ def run_approved(out, ap, num, item, post, http=None, token_fn=None, retry_only=
         _log(out, {"id": num, "key": key, "type": t, "target": str(action.get("id")), "state": "running", "retry": bool(retry_only), **where})
         try:
             res = _write_ado_comment(action, item, http, token_fn, check_existing=bool(retry_only))
-        except _CheckFailed as e:                      # nothing was sent; if the earlier try may have written, that stays unknown
+        except _Refused as e:                          # nothing was sent (the check failed, or the target changed): if the earlier try may
+            # have written, that stays unknown (`済 N` keeps working); only a run that had no earlier try is a sure failure
             _finish(out, ap, state, i, num, key, t, action, post, "unknown" if was_unknown else "failed", error=_clean(e),
                     where=where, unchecked=was_unknown)
-        except _Refused as e:                          # nothing was sent
-            _finish(out, ap, state, i, num, key, t, action, post, "failed", error=_clean(e), where=where)
         except Exception as e:                         # any other failure: a sure failure, or one whose result is not known
             _finish(out, ap, state, i, num, key, t, action, post, "unknown" if ambiguous(e) else "failed", error=_clean(e), where=where)
         else:
@@ -338,7 +343,7 @@ def _finish(out, ap, state, i, num, key, t, action, post, outcome, error=None, r
                         + (f"（コメント {result['comment_id']}）" if (result or {}).get("comment_id") else "")
                         + (f"（{result['org']}/{result['project']}）" if (result or {}).get("org") else ""))
     elif outcome == "unknown" and unchecked:
-        _tell(post, f"[kimeru 実行 #{num}] {_target(action)} に同じ文面のコメントがすでにあるか、確かめられませんでした（{error}）。"
+        _tell(post, f"[kimeru 実行 #{num}] {_target(action)} に、前の試行が書いたかどうか（同じ文面のコメントがすでにあるか）、確かめられませんでした（{error}）。"
                     f"結果は分からないままです。ADO を確かめて、あれば「済 {num}」、無ければ「再実行 {num}」と返信してください")
     elif outcome == "unknown":
         _tell(post, _unknown_text(num, action) + f"（{error}）")

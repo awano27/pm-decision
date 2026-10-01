@@ -54,7 +54,7 @@ class TestCheckPs1ProgramsHaveNoDoubleQuote(unittest.TestCase):
     def _run(self, exe):
         with tempfile.TemporaryDirectory() as d:
             f = Path(d) / "t.txt"
-            f.write_text("本文", encoding="utf-8")
+            f.write_text("kimeru 試験です。件数 < 3 のとき <b> を使い、A & B と書く", encoding="utf-8")
             env = {**os.environ, "KIMERU_STATE_DIR": d}
             extra = ["-ExecutionPolicy", "Bypass"] if "powershell" in Path(exe).name.lower() else []
             r = subprocess.run([exe, "-NoProfile"] + extra + ["-File", str(ROOT / "tests" / "check-py-quoting.ps1"), str(CHECK),
@@ -62,6 +62,9 @@ class TestCheckPs1ProgramsHaveNoDoubleQuote(unittest.TestCase):
                                capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(ROOT), env=env, timeout=120)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(r.stdout.count("OK "), 3, r.stdout)
+        self.assertIn('"found": 1', r.stdout)               # the real inspect_comment ran, against a stored comment (no network)
+        for k in ("wrapped_in_tags", "escaped", "same_text_check"):
+            self.assertIn(f'"{k}": true', r.stdout)
 
     @unittest.skipUnless(shutil.which("powershell"), "needs Windows PowerShell 5.1")
     def test_the_programs_run_in_windows_powershell_5_1(self):
@@ -94,7 +97,7 @@ def lag(bridge):
         r = real()
         tl = r["timeline"]
         last = max(i for i, e in enumerate(tl) if e == "P:1")
-        return {**r, "timeline": [e for i, e in enumerate(tl) if not (i > last and e.startswith(("X:1:", "X:1")))]}
+        return {**r, "timeline": [e for i, e in enumerate(tl) if not (i > last and e.startswith("X:1:"))]}
     bridge.read = read
 
 
@@ -107,7 +110,7 @@ def screen_tail(bridge, tail, noise=0):
         tl = []
         for e in r["timeline"]:
             tl.append(e)
-            if e.startswith(("X:1:", "X:1")):
+            if e.startswith("X:1:"):
                 tl.extend(["P:2", "X:2:1", "P:3", "R:OK 3", "X:3:1", "P:4", "X:4:1", "X:5:1"][:noise])
         tl = tl[-tail:]
         tl = [e for i, e in enumerate(tl) if i == 0 or tl[i - 1] != e]

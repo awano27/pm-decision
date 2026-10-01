@@ -19,10 +19,10 @@ LOG_MAX_BYTES = 256 * 1024   # daily.log.jsonl is trimmed to its newest half whe
 
 def _log(out, rec):
     p = Path(out) / "daily.log.jsonl"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("a", encoding="utf-8") as f:
-        f.write(json.dumps({"at": datetime.now().isoformat(timespec="seconds"), **rec}, ensure_ascii=False) + "\n")
-    try:
+    try:   # a log that cannot be written (a folder that cannot be written to) must not stop the cycle
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"at": datetime.now().isoformat(timespec="seconds"), **rec}, ensure_ascii=False) + "\n")
         if p.stat().st_size > LOG_MAX_BYTES:
             data = p.read_bytes()[-LOG_MAX_BYTES // 2:]
             data = data[data.find(b"\n") + 1:]   # drop the cut line
@@ -293,13 +293,17 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
         # self-chat posts never notify the PM's own devices: a Windows notification on this PC does. It is built
         # from what is posted and not yet announced, so a failure on item 2 never loses the announcement of item 1.
         # With KIMERU_TOAST=0 nothing is marked as announced: turning it back on announces what waited.
-        nums, keys = notify.untoasted(out)
-        unposted_now = notify.unposted_count(out)
-        # the unposted count is announced when it changes, not every cycle while Teams stays unreachable
-        announced = notify.unposted_announced(out)
+        try:
+            nums, keys = notify.untoasted(out)
+            unposted_now = notify.unposted_count(out)
+            # the unposted count is announced when it changes, not every cycle while Teams stays unreachable
+            announced = notify.unposted_announced(out)
+        except Exception as e:   # approvals.json cannot be read now: nothing is announced this cycle
+            nums, keys, unposted_now, announced = [], [], 0, 0
+            _log(out, {"step": "toast", "error": f"{type(e).__name__}: {str(e)[:120]}"})
         unposted = unposted_now if unposted_now != announced else 0
         if announced and not unposted_now:
-            notify.mark_toasted(out, [], [], unposted=0)   # (busy: the next cycle does it)
+            _step(out, "toast_clear", lambda: notify.mark_toasted(out, [], [], unposted=0), r)   # (busy or a folder that cannot be written: the next cycle does it)
         if nums or keys or unposted:
             def do_toast():
                 try:
@@ -346,6 +350,6 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
         _step(out, "brief", do_brief, r)
         if not str(r.get("brief", "")).startswith("error") and send:
             st["brief_date"] = today
-            fsutil.write_atomic(st_path, json.dumps(st))
+            _step(out, "brief_state", lambda: fsutil.write_atomic(st_path, json.dumps(st)) or "saved", r)
     _log(out, {"step": "cycle", "report": r})
     return r

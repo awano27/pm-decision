@@ -852,9 +852,15 @@ if ($Action -eq 'read') {
         $entry = "R:" + $c
         if (-not $seen.ContainsKey($c)) { $seen[$c] = 1; $replies.Add($c) }
       }
-      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^再実行\s*#?(\d+)\s*-\s*(\d+)\s*[.。!！]*$') {
-        # `再実行 N-k`: run again, under the k-th result post of #N (notify.parse_redo_k)
+      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^再実行\s*#?(\d+)\s*[-ー−‐‑‒–—―─ｰ]\s*(\d+)\s*[.。!！]*$') {
+        # `再実行 N-k`: run again, under the k-th result post of #N (notify.parse_redo_k). Every dash a phone or an IME may type is read as "-"
         $c = '再実行 {0}-{1}' -f $Matches[1], $Matches[2]
+        $entry = "R:" + $c
+        if (-not $seen.ContainsKey($c)) { $seen[$c] = 1; $replies.Add($c) }
+      }
+      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^再実行\s*#?(\d+)\s*[^\w\s.。!！]+\s*\d*\s*[.。!！]*$') {
+        # begins like `再実行 N-k` but with a mark that is not a dash: kept as "R:再実行形式 N" so that kimeru records it (notify.parse_redo_bad); no text is kept
+        $c = '再実行形式 {0}' -f $Matches[1]
         $entry = "R:" + $c
         if (-not $seen.ContainsKey($c)) { $seen[$c] = 1; $replies.Add($c) }
       }

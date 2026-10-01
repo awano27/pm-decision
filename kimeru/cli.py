@@ -153,12 +153,20 @@ def _merge_into_pending(out, ev, res):
     if ev.get("kind") != "teams.chat" or not ev.get("chat_id") or not ev.get("author") or res.get("notify"):
         return False
     from . import notify
-    with fsutil.exclusive(notify.lock_path(out)) as got:
-        if not got:   # another run holds approvals.json: nothing is changed; the message stays a matter of its own (noted in warnings.jsonl)
+    try:
+        with fsutil.exclusive(notify.lock_path(out)) as got:
+            if not got:   # another run holds approvals.json: nothing is changed; the message stays a matter of its own (noted in warnings.jsonl)
+                _append(out / "warnings.jsonl", {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                                 "merge": "skipped: approvals.json is in use by another run", "event_id": ev.get("id")})
+                return False
+            return _merge_locked(out, ev, res, notify)
+    except fsutil.LockFolderError as e:   # the lock cannot be created (the folder cannot be written): the message is a matter of its own, not a parked file
+        try:
             _append(out / "warnings.jsonl", {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                                             "merge": "skipped: approvals.json is in use by another run", "event_id": ev.get("id")})
-            return False
-        return _merge_locked(out, ev, res, notify)
+                                             "merge": f"skipped: {str(e)[:120]}", "event_id": ev.get("id")})
+        except OSError:
+            pass
+        return False
 
 
 def _merge_locked(out, ev, res, notify):

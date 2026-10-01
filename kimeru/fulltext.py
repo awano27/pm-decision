@@ -334,19 +334,27 @@ def _locked(out, wait_sec=30.0):
         time.sleep(0.05)
 
 
-def _read(out, tries=60):
+def _read(out, tries=60, strict=False):
     """The kept texts. A reader outside full_text.lock (load) can meet the moment in which a writer replaces the file; Windows
-    answers PermissionError then, which is waited out (a missing or damaged file is {})."""
+    answers PermissionError then, which is waited out (a missing or damaged file is {}). strict=True (a delete: drop, purge): a file
+    that exists but cannot be read is an error (DeleteFailed, noted in warnings.jsonl), never "nothing kept"."""
     for k in range(tries):
         try:
             data = json.loads(_path(out).read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else {}
+        except FileNotFoundError:
+            return {}
         except PermissionError:
             if k == tries - 1:
-                return {}
+                break
             time.sleep(0.005 * min(k + 1, 10))
-        except (OSError, ValueError):
+        except OSError:
+            break
+        except ValueError:
             return {}
+    if strict:
+        _record_failure(out, "full_text.json (could not be read)")
+        raise DeleteFailed(f"{_path(out)} could not be read: the full text stays until the next cycle")
     return {}
 
 
@@ -371,24 +379,26 @@ def _write(out, data, strict=False):
     still holds the deleted text under its own name and the next cycle tries again."""
     p = _path(out)
     bak = p.with_name(p.name + ".bak")
+    from . import fsutil
     if not data:
-        from . import fsutil
         for f in (bak, p):
             if not fsutil._unlink_retry(f) and strict:   # a reader that has the file open for a moment must not fail the delete
-                _record_failure(out, f.name)
+                _record_failure(out, f"{f.name} (could not be removed)")
                 raise DeleteFailed(f"{f} could not be removed: the full text stays until the next cycle")
         return
-    if strict:
-        from . import fsutil
-        if not fsutil._unlink_retry(bak):
-            _record_failure(out, bak.name)
-            raise DeleteFailed(f"{bak} could not be removed: the full text stays until the next cycle")
+    if strict and not fsutil._unlink_retry(bak):
+        _record_failure(out, f"{bak.name} (could not be removed)")
+        raise DeleteFailed(f"{bak} could not be removed: the full text stays until the next cycle")
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(f"{p.name}.tmp.{os.getpid()}.{threading.get_ident()}")   # one temporary file per process and thread
     try:
         tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        from . import fsutil
         fsutil._replace(tmp, p)
+    except OSError as e:
+        if strict:   # the replace failed (another process keeps the file open): the old text stays, and it is noted
+            _record_failure(out, f"{p.name} (could not be replaced: {type(e).__name__})")
+            raise DeleteFailed(f"{p} could not be replaced: the full text stays until the next cycle") from e
+        raise
     finally:
         tmp.unlink(missing_ok=True)
     fsutil._unlink_retry(bak)
@@ -440,14 +450,46 @@ def load(out, key, now=None):
     return None if e is None or _expired(e, now) else e
 
 
+def _guard(out, fn):
+    """Run a delete under full_text.lock; every failure leaves a note in warnings.jsonl and is raised as DeleteFailed."""
+    try:
+        with _locked(out):
+            return fn()
+    except DeleteFailed:
+        raise
+    except (OSError, RuntimeError) as e:   # the lock could not be had in time, or a file operation failed
+        _record_failure(out, f"full_text.json ({type(e).__name__})")
+        raise DeleteFailed(str(e)) from e
+
+
 def drop(out, key):
-    with _locked(out):
-        data = _read(out)
+    def body():
+        data = _read(out, strict=True)
         if key in data:
             del data[key]
             _write(out, data, strict=True)
             return True
         return False
+    return _guard(out, body)
+
+
+def drop_safe(out, key):
+    """drop that never raises: a failure is in warnings.jsonl, the full text stays, and purge_locked deletes it in a later cycle
+    (an approval or a rejection goes on whether or not the text could be deleted). False when it was not deleted now."""
+    try:
+        return drop(out, key)
+    except Exception:
+        return False
+
+
+def purge_safe(out, now=None):
+    """purge_locked that never raises (the caller holds the lock): a failure is in warnings.jsonl and is tried again next cycle."""
+    try:
+        return purge_locked(out, now)
+    except Exception as e:
+        if not isinstance(e, DeleteFailed):
+            _record_failure(out, f"full_text.json ({type(e).__name__})")
+        return []
 
 
 def purge(out, now=None):
@@ -461,10 +503,16 @@ def purge(out, now=None):
 
 
 def purge_locked(out, now=None):
-    """The body of purge (the caller holds the lock)."""
-    with _locked(out):
-        data = _read(out)
-        gone = [k for k, e in data.items() if _expired(e, now)]
+    """The body of purge (the caller holds the lock). Deletes the texts kept past their time, and the texts of items that were
+    approved or rejected (an earlier delete may have failed: this is its retry). Returns the keys of the expired ones."""
+    from . import notify
+    ap = notify.Approvals(out)
+    decided = {it.get("key") for it in ap.data["items"].values() if it.get("status") in ("approved", "rejected")}
+
+    def body():
+        data = _read(out, strict=True)
+        expired = [k for k, e in data.items() if _expired(e, now)]
+        gone = expired + [k for k in data if k in decided and k not in expired]
         if not gone:
             if not data:
                 _write(out, data)       # nothing kept: no file, and no .bak left by an older version
@@ -472,13 +520,13 @@ def purge_locked(out, now=None):
         for k in gone:
             del data[k]
         _write(out, data, strict=True)
-    from . import notify
-    ap = notify.Approvals(out)
+        return expired
+    expired = _guard(out, body)
     changed = False
     for it in ap.data["items"].values():
-        if it.get("key") in gone:
+        if it.get("key") in expired:
             it["record"]["read_full"] = {"state": "preview_only", "why": f"全文の保存期限（{keep_days()} 日）を過ぎたため、全文を消しました"}
             changed = True
     if changed:
         ap.save()
-    return gone
+    return expired

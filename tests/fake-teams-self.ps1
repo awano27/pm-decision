@@ -35,7 +35,8 @@ switch ($Action) {
       $c = $null
       if ($first -match '^\[kimeru #(\d+)\]') { $c = "P:" + $Matches[1] }
       elseif ($first -match '^\[kimeru 実行 #(\d+)(?:\s+(\d+))?\]') { $c = 'X:{0}:{1}' -f $Matches[1], $(if ($Matches[2]) { [int]$Matches[2] } else { 0 }) }
-      elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^再実行\s*#?(\d+)\s*-\s*(\d+)\s*[.。!！]*$') { $c = 'R:再実行 {0}-{1}' -f $Matches[1], $Matches[2] }
+      elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^再実行\s*#?(\d+)\s*[-ー−‐‑‒–—―─ｰ]\s*(\d+)\s*[.。!！]*$') { $c = 'R:再実行 {0}-{1}' -f $Matches[1], $Matches[2] }
+      elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^再実行\s*#?(\d+)\s*[^\w\s.。!！]+\s*\d*\s*[.。!！]*$') { $c = 'R:再実行形式 {0}' -f $Matches[1] }
       elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留|聞き返し|再実行|済)\s*#?(\d+)$') { $c = 'R:{0} {1}' -f $Matches[1].ToUpper(), $Matches[2] }
       if ($c -and ($tl.Count -eq 0 -or $tl[$tl.Count - 1] -ne $c)) { $tl.Add($c) }
     }

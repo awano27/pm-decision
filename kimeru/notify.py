@@ -24,6 +24,8 @@ HERE = Path(__file__).resolve().parent.parent
 REPLY = re.compile(r"^(OK|NG|保留|聞き返し|再実行|済)\s*#?(\d+)\s*[.。!！]*$", re.IGNORECASE)
 REDRAFT = re.compile(r"^修正\s*#?(\d+)\s*[:：]?\s*(\S.*)$")
 REDO_K = re.compile(r"^再実行\s*#?(\d+)\s*-\s*(\d+)\s*[.。!！]*$")   # `再実行 N-k`: run again, k = the result count the PM saw (stated in the result post)
+REDO_BAD = re.compile(r"^再実行\s*#?(\d+)\s*[^\w\s.。!！]+\s*\d*\s*[.。!！]*$")   # looks like `再実行 N-k` but with a mark that is not a dash (~ / and the like): recorded, not dropped
+DASHES = str.maketrans({c: "-" for c in "ー−‐‑‒–—―─ｰ－"})   # every dash a phone or an IME may type between N and k (NFKC leaves several of them)
 PASTE = re.compile(r"^下書き\s*#?(\d+)\s*[:：]?\s*(\S.*)$")   # the PM brings back what Microsoft 365 Copilot wrote
 MAX_PASTE = 1200
 
@@ -40,8 +42,15 @@ def parse_redraft(line):
     return (m.group(1), m.group(2).strip()) if m else None
 def parse_redo_k(line):
     """("1", 2) for "再実行 1-2" (the redo of #1 that the PM wrote under its 2nd result post); None otherwise."""
-    m = REDO_K.match(unicodedata.normalize("NFKC", line).strip())
+    m = REDO_K.match(unicodedata.normalize("NFKC", line).strip().translate(DASHES))
     return (m.group(1), int(m.group(2))) if m else None
+
+
+def parse_redo_bad(line):
+    """The number N for a line that begins `再実行 N` but is neither `再実行 N` nor `再実行 N-k` in a form kimeru reads; None otherwise."""
+    t = unicodedata.normalize("NFKC", line).strip().translate(DASHES)
+    m = re.match(r"^再実行形式 (\d+)$", t) or REDO_BAD.match(t)   # the reader (teams-self.ps1) hands such a line back as "再実行形式 N"
+    return m.group(1) if m and not REDO_K.match(t) else None
 
 
 def parse_paste(line):
@@ -290,7 +299,7 @@ def toast_text(out, posted, notices, unposted=0):
 
 
 ACK = {"approved": "承認", "rejected": "却下", "held": "保留", "ask_back": "聞き返し",
-       "redrafted": "書き直し", "redraft_failed": "書き直せず", "redo": "再実行", "closed": "済（閉じました）",
+       "redrafted": "書き直し", "redraft_failed": "書き直せず", "redo": "再実行", "redo_ignored": "再実行（無視: 古い回数）", "redo_malformed": "再実行（形が違います）", "closed": "済（閉じました）",
        "reposted": "文面を確認して OK し直してください"}
 
 
@@ -380,7 +389,7 @@ def _notify_locked(out, bridge, send, real):
     ap.save()   # an item that cannot be posted now must still exist (and be counted as waiting) after a failed post
     posted = []
     from . import fulltext
-    fulltext.purge_locked(out)   # a full text kept too long is deleted; the item is then treated as decided from the preview
+    fulltext.purge_safe(out)   # a full text kept too long is deleted (a failure is noted in warnings.jsonl; the posts go on); the item is then treated as decided from the preview
     ap = Approvals(out)
     for n, it in ap.data["items"].items():
         req = it["record"].get("copilot_request")
@@ -463,22 +472,35 @@ def fresh_entries(read, x_boundary=True):
     return out
 
 
+def _redo_lines(read):
+    """[(index, reply text)] of the replies that may name a `再実行 N-k`, and the index of the last approval post of each number."""
+    tl = read.get("timeline")
+    if tl is None:
+        return [(0, line) for line in read.get("replies", [])], None
+    return [(i, e[2:]) for i, e in enumerate(tl) if e.startswith("R:")], {e[2:]: i for i, e in enumerate(tl) if e.startswith("P:")}
+
+
 def redo_k_entries(read):
     """[(number, k)] for the `再実行 N-k` replies on the screen, in order, once each. Unlike a bare `再実行 N` they do not depend on which
     result posts are visible: k names the result post the PM answered. Only a reply that stands above the most recent visible
     approval post "[kimeru #N]" of the same number is left out (an item that used the number before)."""
-    tl = read.get("timeline")
-    if tl is None:
-        lines = [(0, line) for line in read.get("replies", [])]
-        last_post = {}
-    else:
-        lines = [(i, e[2:]) for i, e in enumerate(tl) if e.startswith("R:")]
-        last_post = {e[2:]: i for i, e in enumerate(tl) if e.startswith("P:")}
+    lines, last_post = _redo_lines(read)
     out = []
     for i, line in lines:
         r = parse_redo_k(line)
-        if r and (tl is None or i > last_post.get(r[0], -1)) and r not in out:
+        if r and (last_post is None or i > last_post.get(r[0], -1)) and r not in out:
             out.append(r)
+    return out
+
+
+def redo_bad_entries(read):
+    """[number] for the replies that begin `再実行 N` but are not in a form kimeru reads (same rule as redo_k_entries)."""
+    lines, last_post = _redo_lines(read)
+    out = []
+    for i, line in lines:
+        n = parse_redo_bad(line)
+        if n and (last_post is None or i > last_post.get(n, -1)) and n not in out:
+            out.append(n)
     return out
 
 
@@ -699,20 +721,37 @@ def _collect(out, bridge, writer=None, real=False, send=False):
         ap.save()   # saved before the run: a stop in the middle must not run the same reply again
         changes.append({"id": int(num), "status": "redo", "real": execute.redo(out, ap, int(num), it, post)})
 
-    for num, k in redo_k_entries(read):   # `再実行 N-k`: acts once, when k is the item's latest result count and no redo has acted since
+    def redo_candidate(num):
         it = ap.data["items"].get(num)
         if not real or num in redo_done or not it or it["status"] != "approved"                 or not any(execute.unresolved(v) for v in (it.get("exec") or {}).values()):
+            return None
+        return it
+
+    for num, k in redo_k_entries(read):   # `再実行 N-k`: acts once, when k is the item's latest result count and no redo has acted since
+        it = redo_candidate(num)
+        if it is None:
             continue
         cur = int(it.get("x_seq", 0))
-        if k != cur:   # not the latest result: ignored, and recorded (once per count)
-            if k not in (it.get("redo_ignored") or []):
-                it["redo_ignored"] = (it.get("redo_ignored") or []) + [k]
-                ap.save()
-                changes.append({"id": int(num), "status": "redo_ignored", "k": k, "latest": cur})
+        ignored = it.get("redo_ignored") or []
+        if k in ignored or k in (it.get("redo_acted") or []):   # one that acted (the reply stays on the screen) or was ignored before: nothing more, no record
             continue
-        if redo_mark(it) >= cur:   # already acted on this result
+        if k != cur:   # not the latest result (older, or one that does not exist yet): ignored for good, recorded once
+            it["redo_ignored"] = ignored + [k]
+            ap.save()
+            changes.append({"id": int(num), "status": "redo_ignored", "k": k, "latest": cur})
             continue
+        if redo_mark(it) >= cur:   # already acted on this result (a `再実行 N` did)
+            continue
+        it["redo_acted"] = (it.get("redo_acted") or []) + [k]   # kept so that the reply, still on the screen after the next result post, is not recorded as ignored
         run_redo(num, it)
+    for num in redo_bad_entries(read):   # a reply that begins like `再実行 N-k` but is in a form kimeru does not read: recorded, once per item
+        it = redo_candidate(num)
+        if it is None:
+            continue
+        if "redo_malformed" not in it:   # once per item: the same line stays on the screen, and what it says is not kept
+            it["redo_malformed"] = int(it.get("x_seq", 0))
+            ap.save()
+            changes.append({"id": int(num), "status": "redo_malformed", "latest": it["redo_malformed"]})
     for line in replies:
         ps = parse_paste(line)
         if ps:
@@ -772,7 +811,7 @@ def _collect(out, bridge, writer=None, real=False, send=False):
         it["status"] = new
         if new in ("approved", "rejected"):   # the full text is kept only while the item waits
             from . import fulltext
-            fulltext.drop(out, it["key"])
+            fulltext.drop_safe(out, it["key"])   # a failure is noted in warnings.jsonl; the approval goes on, purge deletes the text later
         ch = {"id": int(num), "status": new}
         if new == "approved":
             ch["executed"] = [actions.execute(a, dry_run=True) for a in it["record"].get("actions", [])]

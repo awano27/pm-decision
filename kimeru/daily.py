@@ -69,6 +69,9 @@ def status_lines(out):
     if last and (last.get("report") or {}).get("busy"):
         lines.append("steps skipped in the last cycle because another run held approvals.lock (they are tried again next cycle): "
                      + ", ".join(sorted(last["report"]["busy"])))
+    if last and (last.get("report") or {}).get("full_text_delete_failed"):
+        lines.append("full texts that could not be deleted in the last cycle: " + str(last["report"]["full_text_delete_failed"])
+                     + " (still on the disk; deleted in a later cycle. See warnings.jsonl and docs/reference.md)")
     data = fsutil.read_json(out / "approvals.json", {"items": {}})
     pending = sum(1 for it in data.get("items", {}).values() if it.get("posted") and it.get("status") in ("pending", "held"))
     lines.append(f"waiting for your answer: {pending}")
@@ -223,6 +226,7 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
     toaster = toaster or (notify.show_toast if bridge is None else None)
     bridge = bridge or notify.PowerShellBridge()
     r = {}
+    fulltext.new_cycle()
     _log(out, {"step": "config", **config.report()})   # which settings this cycle runs with, and where they came from
     try:   # full texts kept past their time are deleted (the items are then treated as decided from the preview)
         purged = fulltext.purge(out)
@@ -286,7 +290,7 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
     # files the judge could not take (down / overloaded). Files kept back for the time limit or the reading limit are
     # not that: the judge is fine, the next cycle takes them (reported apart, and they do not fail the run or hold the brief)
     left = perf.get("left_for_next_cycle", 0)
-    r["waiting"] = max(0, len(events.inbox_files(Path(inbox))) - left)
+    _step(out, "waiting", lambda: max(0, len(events.inbox_files(Path(inbox))) - left), r)   # (an inbox that cannot be listed: "error: ...", and the cycle goes on)
     if left:
         r["left_for_next_cycle"] = left
     if send and toaster and notify.toast_enabled():
@@ -351,5 +355,8 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
         if not str(r.get("brief", "")).startswith("error") and send:
             st["brief_date"] = today
             _step(out, "brief_state", lambda: fsutil.write_atomic(st_path, json.dumps(st)) or "saved", r)
+    stuck = fulltext.failures()
+    if stuck:   # a full text that could not be deleted is still on the disk: it is shown, not only written to warnings.jsonl
+        r["full_text_delete_failed"] = stuck
     _log(out, {"step": "cycle", "report": r})
     return r

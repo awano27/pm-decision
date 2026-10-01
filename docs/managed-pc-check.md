@@ -82,7 +82,7 @@ kimeru が管理された PC（職場アカウントの Teams・仕事用の iPh
 | 0-1 | 社内ルールで、GitHub からのスクリプト取得と PowerShell スクリプトの実行が許されているか | 許されていなければここで中止 |
 | 0-2 | Teams の画面内容を自動で読み取ることが社内ルールに反しないか | T1〜T3 は画面の構造を読む |
 | 0-3 | Jev（TypeSafe、社外クラウド）へ業務データを送ってよいか | 未確認なら T11 は**架空データのみ**で実施 |
-| 0-4 | 定期の自動運転（`daily`）を動かしているなら、試験の間は止めるか、試験の番号と重ならないようにしたか | `tools\check.ps1` の試験は 100〜899 の乱数を確認待ちの番号に使う。`daily` が同じ番号の件を持っていると、結果の見え方を問わない `再実行 N-k` は、相手の件にも当たりえる |
+| 0-4 | 定期の自動運転（`daily`）を動かしているなら、止めてあるか（止めなくても当たらないが、念のため） | `tools\check.ps1` の試験（番号は T5 が 100〜998、ほかが 100〜898 の乱数）の投稿は `[kimeru 試験 #N]` で始まり、`daily` は承認の投稿にも区切りにも使わず、その下の返信も試験のものとして読み捨てる。iPhone の返信は、試験の投稿より下に打つこと |
 | 0-5 | 状態フォルダを使う Windows アカウントは 1 つだけか | ロックの持ち主を調べる処理は、開けないプロセスを kimeru ではないと見なす。別のアカウントが同じ状態フォルダを使うと、生きたロックを奪う |
 
 ## 1. 準備
@@ -174,7 +174,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\teams-self.ps1 -Acti
 **実行中の数秒間はマウス・キーボードに触らない。**
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\teams-self.ps1 -Action post -Text '[kimeru #0] 判断が必要（管理PCテスト）\n返信: OK 0 / NG 0 / 保留 0'
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\teams-self.ps1 -Action post -Text '[kimeru 試験 #0] 判断が必要（管理PCテスト）\n返信: OK 0 / NG 0 / 保留 0'
 ```
 
 - `{"ok":true,"typed":true,"sent":false}` で、自分とのチャットの入力欄にテスト文が入っていれば OK
@@ -239,7 +239,7 @@ python -m kimeru --out out-test notify            # 貼り付けのみ。入力�
 python -m kimeru --out out-test notify --send     # 送信
 ```
 
-T8 のサンプルでは確認待ちが 2 件できるので、`[kimeru #1]` と `[kimeru #2]` の 2 通が投稿される。
+T8 のサンプルでは確認待ちが 2 件できるので、`[kimeru 試験 #N]` と `[kimeru 試験 #N+1]` の 2 通が投稿される（試験の印。N は乱数の番号）。
 iPhone から `OK 1` と `NG 2` を**別々のメッセージで**返信してから:
 
 ```powershell

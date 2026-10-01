@@ -362,12 +362,42 @@ class DeleteFailed(OSError):
     """A full text that was to be deleted is still on the disk (the file could not be removed)."""
 
 
+_noted = set()      # the failures already written in this cycle (a daily cycle, or one run of a command)
+_failures = 0       # how many deletes failed in this cycle, written or not
+WARN_MAX_LINES = 200
+WARN_TRIM_BYTES = 64 * 1024
+
+
+def new_cycle():
+    """A new daily cycle begins: a failure that goes on is written once more (one line per cycle, not one per attempt)."""
+    global _failures
+    _noted.clear()
+    _failures = 0
+
+
+def failures():
+    """How many deletes of a full text failed since new_cycle (what the report and `schedule status` show)."""
+    return _failures
+
+
 def _record_failure(out, what):
-    """Leave a note in warnings.jsonl that a full text stayed on the disk (the delete is tried again in the next cycle)."""
+    """Leave a note in warnings.jsonl that a full text stayed on the disk (the delete is tried again in the next cycle).
+    One line per cycle for the same failure; the file keeps its newest lines only."""
+    global _failures
+    _failures += 1
+    if (str(out), what) in _noted:
+        return
+    _noted.add((str(out), what))
+    p = Path(out) / "warnings.jsonl"
     try:
         line = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "full_text": f"delete failed: {what}"}
-        with (Path(out) / "warnings.jsonl").open("a", encoding="utf-8") as f:
+        with p.open("a", encoding="utf-8") as f:
             f.write(json.dumps(line, ensure_ascii=False) + "\n")
+        if p.stat().st_size > WARN_TRIM_BYTES:
+            rows = p.read_text(encoding="utf-8", errors="ignore").splitlines()[-WARN_MAX_LINES:]
+            from . import fsutil
+            fsutil.write_atomic(p, "\n".join(rows) + "\n")
+            p.with_name(p.name + ".bak").unlink(missing_ok=True)
     except OSError:
         pass
 
@@ -478,7 +508,10 @@ def drop_safe(out, key):
     (an approval or a rejection goes on whether or not the text could be deleted). False when it was not deleted now."""
     try:
         return drop(out, key)
-    except Exception:
+    except DeleteFailed:
+        return False
+    except Exception as e:   # not one we know: it is noted too, never silent
+        _record_failure(out, f"full_text.json ({type(e).__name__})")
         return False
 
 

@@ -47,6 +47,27 @@ def _append(path, rec):
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
+def _save_full(out, key, ev, **kw):
+    """fulltext.save that never parks the file: a full text that cannot be kept (the lock cannot be made in a folder that cannot be
+    written to, the file is in use) is noted in warnings.jsonl, and the item is judged and posted from the preview (the caller marks it
+    read_full = preview_only). The file is not sent to .error, and it is not left for the next cycle either: the item is decided
+    once and posted once. Returns True when the text was kept."""
+    from . import fulltext
+    try:
+        fulltext.save(out, key, ev, **kw)
+        return True
+    except (OSError, RuntimeError) as e:
+        try:
+            _append(out / "warnings.jsonl", {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                             "full_text": f"save failed: {type(e).__name__}; the item is decided from the preview"})
+        except OSError:
+            pass
+        return False
+
+
+SAVE_FAILED = {"state": "preview_only", "why": "全文を保存できなかったため（保存先に書けません）"}
+
+
 EVENT_KEEP = ("kind", "id", "author", "text", "item", "meeting", "title", "description", "work_item_type",
               "rule", "severity", "condition", "mentions_me", "context", "date", "chat_id", "chat_title", "origin")
 
@@ -96,9 +117,10 @@ def _seal_material(res, held, out, key, ev_run, merged):
     if request:
         res["copilot_request"] = writer_mod.human_request(res, keep)
     if res.get("needs_human") and not merged:
-        fulltext.save(out, key, {"text": long.get("text", ""), "thread": ev_run.get("thread", []),
-                                 "author": mat.get("author", "")}, request=request,
-                      material={k: v for k, v in long.items() if k != "text"})
+        if not _save_full(out, key, {"text": long.get("text", ""), "thread": ev_run.get("thread", []),
+                                     "author": mat.get("author", "")}, request=request,
+                          material={k: v for k, v in long.items() if k != "text"}):
+            res["read_full"] = dict(SAVE_FAILED)
     return res, held
 
 
@@ -339,9 +361,12 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
                 request = fulltext.redact_request(res, ev_run)
                 res_keep = fulltext.scrub(res, ev_run["text"], kept["text"])
                 held = fulltext.scrub(held, ev_run["text"], kept["text"])
+                saved = True
                 if res["needs_human"] and not merged:
-                    fulltext.save(out, f"{res.get('graph')}:{res.get('event_id')}:{res.get('node')}", ev_run, request=request)
+                    saved = _save_full(out, f"{res.get('graph')}:{res.get('event_id')}:{res.get('node')}", ev_run, request=request)
                 res = res_keep
+                if not saved:
+                    res["read_full"] = dict(SAVE_FAILED)
             else:
                 res, held = _seal_material(res, held, out, f"{res.get('graph')}:{res.get('event_id')}:{res.get('node')}", ev_run, merged)
             _append(out / "decisions.jsonl", res)

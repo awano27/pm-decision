@@ -841,6 +841,13 @@ if ($Action -eq 'read') {
         $entry = "P:" + $Matches[1]
         if (-not $posts.Contains($Matches[1])) { $posts.Add($Matches[1]) }
       }
+      elseif ($l -match '^\[kimeru 試験 #(\d+)\]') {
+        # a post of tools/check.ps1 (a test): it is not an approval post and not a boundary for the real reader (notify.scoped_timeline)
+        $entry = "T:" + $Matches[1]
+      }
+      elseif ($l -match '^\[kimeru 試験 実行 #(\d+)(?:\s+(\d+))?\]') {
+        $entry = 'TX:{0}:{1}' -f $Matches[1], $(if ($Matches[2]) { [int]$Matches[2] } else { 0 })
+      }
       elseif ($l -match '^\[kimeru 実行 #(\d+)(?:\s+(\d+))?\]') {
         # a result post about #N, the k-th one ("[kimeru 実行 #N k]"; 0 for a post of an earlier version that has no count):
         # replies to #N before it were answered (notify.fresh_entries). The count keeps two result posts from being folded into one line.
@@ -858,9 +865,10 @@ if ($Action -eq 'read') {
         $entry = "R:" + $c
         if (-not $seen.ContainsKey($c)) { $seen[$c] = 1; $replies.Add($c) }
       }
-      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^再実行\s*#?(\d+)\s*[^\w\s.。!！]+\s*\d*\s*[.。!！]*$') {
-        # begins like `再実行 N-k` but with a mark that is not a dash: kept as "R:再実行形式 N" so that kimeru records it (notify.parse_redo_bad); no text is kept
-        $c = '再実行形式 {0}' -f $Matches[1]
+      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^再実行\s*#?(\d+)(\s*[^\d\s.。!！]{1,6}\s*|\s+)(\d*)\s*[.。!！]*$') {
+        # begins like `再実行 N-k` but with something between N and k that is not a dash (a slash, a wave, a space, a letter...): handed back as
+        # "R:再実行形式 N <rest>" so that kimeru decides and records it (notify.redo_bad_kind); only a hash of its shape is ever kept
+        $c = '再実行形式 {0} {1}' -f $Matches[1], (($Matches[2] + $Matches[3]).Trim())
         $entry = "R:" + $c
         if (-not $seen.ContainsKey($c)) { $seen[$c] = 1; $replies.Add($c) }
       }

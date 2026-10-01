@@ -112,7 +112,7 @@ function WaitReply($id, $word) {
     $r = Self 'read'
     if ($r.ok -and $r.timeline) {
       $tl = @($r.timeline); $last = -1
-      for ($i = 0; $i -lt $tl.Count; $i++) { if ($tl[$i] -eq "P:$id") { $last = $i; $script:PostSeen = $true } }
+      for ($i = 0; $i -lt $tl.Count; $i++) { if ($tl[$i] -eq "T:$id") { $last = $i; $script:PostSeen = $true } }
       for ($i = $last + 1; $last -ge 0 -and $i -lt $tl.Count; $i++) { if ($tl[$i] -eq "R:$word $id") { return $true } }
     }
     Start-Sleep -Seconds 10
@@ -183,7 +183,7 @@ if ($uia) {
     if (YesNo "   自分とのチャットにテストメッセージを1通送信します（宛先は自分だけ）。よろしいですか") {
       $n = Get-Random -Minimum 100 -Maximum 999
       Write-Host "   数秒間マウス・キーボードに触らないでください"
-      $p1 = Self 'post' @('-Text', "[kimeru #$n] 管理PCテスト\n返信: OK $n")
+      $p1 = Self 'post' @('-Text', "[kimeru 試験 #$n] 管理PCテスト\n返信: OK $n")
       $s1 = if ($p1.ok -and $p1.typed) { Self 'send' } else { $p1 }
       if ($s1.ok) {
         Write-Host "   仕事用の iPhone の Teams で、自分とのチャットに「OK $n」と返信してください（全角でも可。最大 $WaitSec 秒待ちます）" -ForegroundColor Green
@@ -234,7 +234,8 @@ if (-not $py) {
 }
 Rec 'T6' $(if ($py) { (Short $v) + " ($($py -join ' '))" } else { 'NG Python 3.10+ なし（Level 1 以降は SKIP）' })
 # NOTE: -c programs passed through Py must not contain a double quote (Windows PowerShell 5.1 drops it from array elements); use '' for a Python single quote
-function Py([string[]]$a) { & $py[0] $py[1..9] @a 2>&1 | Out-String }
+# The kimeru commands of this check post and read TEST posts ("[kimeru 試験 #N]"), which the daily cycle never takes for an approval (KIMERU_TEST_MARK=1; notify.scoped_timeline)
+function Py([string[]]$a) { $had = $env:KIMERU_TEST_MARK; if ($a -contains 'kimeru') { $env:KIMERU_TEST_MARK = '1' }; try { & $py[0] $py[1..9] @a 2>&1 | Out-String } finally { $env:KIMERU_TEST_MARK = $had } }
 
 if ($py) {
   if (Want 'T7') {

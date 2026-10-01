@@ -11,7 +11,9 @@ Posts made while collecting replies (results, texts ready to copy) are sent only
 (approvals.json) until they were really posted.
 """
 import copy
+import hashlib
 import json
+import os
 import re
 import subprocess
 import unicodedata
@@ -46,11 +48,47 @@ def parse_redo_k(line):
     return (m.group(1), int(m.group(2))) if m else None
 
 
+REDO_BAD2 = re.compile(r"^再実行\s*#?(\d+)(\s*[^\d\s.。!！]{1,6}\s*|\s+)(\d*)\s*[.。!！]*$")   # a separator between N and k that kimeru does not read ("1/2", "1〜2", "1 2", "1一2", "1_2", "1ー")
+SEP_LETTERS = "ー一_"   # letters (to a regex) that are separators here; any other letter is part of a sentence ("再実行 1 お願い")
+
+
+def _redo_bad_parts(line):
+    """(N, rest) for a line that begins `再実行 N` followed by a separator kimeru does not read (a form that is neither `再実行 N` nor
+    `再実行 N-k`); None otherwise. `rest` is what follows N; it is only ever hashed (redo_bad_kind), never kept."""
+    t = unicodedata.normalize("NFKC", line).strip().translate(DASHES)
+    m = re.match(r"^再実行形式 (\d+)(?: (.*))?$", t)   # the reader (teams-self.ps1) hands such a line back as "再実行形式 N <rest>"
+    if m:
+        if not m.group(2):
+            return m.group(1), ""   # an older reader: no rest was handed back
+        t = f"再実行 {m.group(1)} {m.group(2)}"
+    if REDO_K.match(t):
+        return None
+    m = REDO_BAD.match(t)
+    if m:
+        return m.group(1), t[m.end(1):]
+    m = REDO_BAD2.match(t)
+    if not m:
+        return None
+    sep, k = m.group(2), m.group(3)
+    if not k and not all((not c.isalnum()) or c in SEP_LETTERS for c in sep.strip()):
+        return None   # words after the number ("再実行 1 お願い"), not a separator
+    return m.group(1), t[m.end(1):]
+
+
 def parse_redo_bad(line):
     """The number N for a line that begins `再実行 N` but is neither `再実行 N` nor `再実行 N-k` in a form kimeru reads; None otherwise."""
-    t = unicodedata.normalize("NFKC", line).strip().translate(DASHES)
-    m = re.match(r"^再実行形式 (\d+)$", t) or REDO_BAD.match(t)   # the reader (teams-self.ps1) hands such a line back as "再実行形式 N"
-    return m.group(1) if m and not REDO_K.match(t) else None
+    r = _redo_bad_parts(line)
+    return r[0] if r else None
+
+
+def redo_bad_kind(line):
+    """(N, kind) for such a line. `kind` is a short hash of the line's shape (digits are all "0", spaces left out): two replies in the same
+    form have the same kind, and the reply itself cannot be read back from it. None when it is not such a line."""
+    r = _redo_bad_parts(line)
+    if not r:
+        return None
+    shape = re.sub(r"\s+", "", re.sub(r"\d+", "0", r[1]))
+    return r[0], hashlib.sha1(shape.encode("utf-8")).hexdigest()[:6]
 
 
 def parse_paste(line):
@@ -60,6 +98,64 @@ def parse_paste(line):
 
 
 STATUS = {"OK": "approved", "NG": "rejected", "保留": "held", "聞き返し": "ask_back", "再実行": "redo", "済": "closed"}   # 聞き返し / 再実行 / 済: not decisions
+
+
+TEST_ENV = "KIMERU_TEST_MARK"   # tools/check.ps1 sets it for the kimeru commands it runs: they post and read test posts
+
+
+def test_mode():
+    return os.environ.get(TEST_ENV) == "1"
+
+
+def to_test_post(text):
+    """The first line of a post that tools/check.ps1 makes: "[kimeru 試験 #N]" and "[kimeru 試験 実行 #N k]". The real reader never takes them
+    for an approval post or a result post, so an "OK N" meant for a test is never an answer to the item #N of the daily cycle."""
+    if text.startswith("[kimeru #"):
+        return "[kimeru 試験 #" + text[len("[kimeru #"):]
+    if text.startswith("[kimeru 実行 #"):
+        return "[kimeru 試験 実行 #" + text[len("[kimeru 実行 #"):]
+    return text
+
+
+def _reply_number(line):
+    """The item number a reply line is about (any reply form); None for a line that is none."""
+    r = parse_reply(line)
+    if r:
+        return r[1] if r[0] in STATUS else r[0]
+    for f in (parse_redraft, parse_paste, parse_redo_k):
+        r = f(line)
+        if r:
+            return r[0]
+    return parse_redo_bad(line)
+
+
+def scoped_timeline(read, test=None):
+    """The timeline of a read, for one kind of reader. The real reader (daily, approvals) never uses a test post as a boundary or as an
+    approval post, and it does not take a reply that follows a test post of the same number as its own: "OK 123" typed under
+    "[kimeru 試験 #123]" is for the test. The test reader (KIMERU_TEST_MARK=1, tools/check.ps1) reads its own posts and the replies
+    after them, and nothing else. None when the bridge gives no timeline."""
+    tl = read.get("timeline")
+    if tl is None:
+        return None
+    test = test_mode() if test is None else test
+    last, out = {}, []   # last: the kind of the latest post of each number ("T" test, "M" real)
+    for e in tl:
+        head, _, rest = e.partition(":")
+        if head in ("T", "TX", "P", "X"):
+            num = rest.partition(":")[0]
+            last[num] = "T" if head in ("T", "TX") else "M"
+            if test and head in ("T", "TX"):
+                out.append(("P:" if head == "T" else "X:") + rest)
+            elif not test and head in ("P", "X"):
+                out.append(e)
+        elif head == "R":
+            num = _reply_number(rest)
+            mine = last.get(num) == "T" if test else last.get(num) != "T"
+            if mine and (num is not None or not test):
+                out.append(e)
+        else:
+            out.append(e)
+    return out
 
 
 class BridgeError(RuntimeError):
@@ -98,6 +194,8 @@ class PowerShellBridge:
 
     def post(self, text, send):
         # line breaks travel as literal \n (command-line args); the script expands them
+        if test_mode():
+            text = to_test_post(text)
         return self._run("-Action", "post", "-Text", text.replace("\n", "\\n"), *(["-Send"] if send else []))
 
     def read(self):
@@ -299,7 +397,7 @@ def toast_text(out, posted, notices, unposted=0):
 
 
 ACK = {"approved": "承認", "rejected": "却下", "held": "保留", "ask_back": "聞き返し",
-       "redrafted": "書き直し", "redraft_failed": "書き直せず", "redo": "再実行", "redo_ignored": "再実行（無視: 古い回数）", "redo_malformed": "再実行（形が違います）", "closed": "済（閉じました）",
+       "redrafted": "書き直し", "redraft_failed": "書き直せず", "redo": "再実行", "redo_ignored": "再実行（無視: 古い回数）", "redo_ahead": "再実行（回数が大きすぎます。その回数の結果が出たら 1 回だけ効きます）", "redo_malformed": "再実行（形が違います）", "closed": "済（閉じました）",
        "reposted": "文面を確認して OK し直してください"}
 
 
@@ -443,7 +541,7 @@ def fresh_entries(read, x_boundary=True):
     "[kimeru 実行 #1 k]", so that an answered `再実行 1` does not act again); if that post is not visible,
     freshness cannot be proven and the reply is ignored.
     """
-    tl = read.get("timeline")
+    tl = scoped_timeline(read)
     if tl is None:  # older bridge without ordering
         return [(line, 0) for line in read.get("replies", [])]
     last_post, last_result = {}, {}
@@ -474,7 +572,7 @@ def fresh_entries(read, x_boundary=True):
 
 def _redo_lines(read):
     """[(index, reply text)] of the replies that may name a `再実行 N-k`, and the index of the last approval post of each number."""
-    tl = read.get("timeline")
+    tl = scoped_timeline(read)
     if tl is None:
         return [(0, line) for line in read.get("replies", [])], None
     return [(i, e[2:]) for i, e in enumerate(tl) if e.startswith("R:")], {e[2:]: i for i, e in enumerate(tl) if e.startswith("P:")}
@@ -493,13 +591,22 @@ def redo_k_entries(read):
     return out
 
 
-def redo_bad_entries(read):
-    """[number] for the replies that begin `再実行 N` but are not in a form kimeru reads (same rule as redo_k_entries)."""
+def redo_bad_kinds(read):
+    """[(number, kind)] for the replies that begin `再実行 N` but are not in a form kimeru reads (same rule as redo_k_entries), once per kind."""
     lines, last_post = _redo_lines(read)
     out = []
     for i, line in lines:
-        n = parse_redo_bad(line)
-        if n and (last_post is None or i > last_post.get(n, -1)) and n not in out:
+        r = redo_bad_kind(line)
+        if r and (last_post is None or i > last_post.get(r[0], -1)) and r not in out:
+            out.append(r)
+    return out
+
+
+def redo_bad_entries(read):
+    """[number] for the same replies, once per number."""
+    out = []
+    for n, _ in redo_bad_kinds(read):
+        if n not in out:
             out.append(n)
     return out
 
@@ -733,22 +840,30 @@ def _collect(out, bridge, writer=None, real=False, send=False):
             continue
         cur = int(it.get("x_seq", 0))
         ignored = it.get("redo_ignored") or []
-        if k in ignored or k in (it.get("redo_acted") or []):   # one that acted (the reply stays on the screen) or was ignored before: nothing more, no record
+        acted = it.get("redo_acted") or []
+        if k in acted:   # one that acted (the reply stays on the screen): nothing more, no record
             continue
-        if k != cur:   # not the latest result (older, or one that does not exist yet): ignored for good, recorded once
-            it["redo_ignored"] = ignored + [k]
-            ap.save()
-            changes.append({"id": int(num), "status": "redo_ignored", "k": k, "latest": cur})
+        if k != cur:
+            # k is older than the latest result post (never acts), or the result post k does not exist yet (acts once, when it does:
+            # the result post says "再実行 N-k"). Either is recorded once, and told apart.
+            if k not in ignored:
+                it["redo_ignored"] = ignored + [k]
+                ap.save()
+                changes.append({"id": int(num), "status": "redo_ahead" if k > cur else "redo_ignored", "k": k, "latest": cur})
             continue
         if redo_mark(it) >= cur:   # already acted on this result (a `再実行 N` did)
+            it["redo_acted"] = acted + [k]
+            ap.save()
             continue
-        it["redo_acted"] = (it.get("redo_acted") or []) + [k]   # kept so that the reply, still on the screen after the next result post, is not recorded as ignored
+        it["redo_acted"] = acted + [k]   # kept so that the reply, still on the screen after the next result post, is not recorded as ignored
         run_redo(num, it)
-    for num in redo_bad_entries(read):   # a reply that begins like `再実行 N-k` but is in a form kimeru does not read: recorded, once per item
+    for num, kind in redo_bad_kinds(read):   # a reply that begins like `再実行 N-k` but is in a form kimeru does not read: recorded once per form
         it = redo_candidate(num)
         if it is None:
             continue
-        if "redo_malformed" not in it:   # once per item: the same line stays on the screen, and what it says is not kept
+        kinds = it.get("redo_malformed_kinds") or []
+        if kind not in kinds:   # the same line stays on the screen, and what it says is not kept (only a hash of its shape)
+            it["redo_malformed_kinds"] = kinds + [kind]
             it["redo_malformed"] = int(it.get("x_seq", 0))
             ap.save()
             changes.append({"id": int(num), "status": "redo_malformed", "latest": it["redo_malformed"]})

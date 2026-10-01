@@ -144,7 +144,7 @@ class TestADropThatFailsDoesNotStopTheApprovals(unittest.TestCase):
         self.assertEqual([(c["id"], c["status"]) for c in ch], [(2, "approved"), (1, "approved"), (3, "rejected")])
         self.assertEqual([(r["id"], r["status"]) for r in self.log()], [(2, "approved"), (1, "approved"), (3, "rejected")])
         self.assertEqual({it["status"] for it in notify.Approvals(self.out).data["items"].values()}, {"approved", "rejected"})
-        self.assertEqual(len([n for n in full_text_notes(self.out) if "replaced" in n]), 3)
+        self.assertEqual(len([n for n in full_text_notes(self.out) if "replaced" in n]), 1)   # fix 16: one line per cycle for the same failure
         for k in self.keys:
             self.assertIsNotNone(fulltext.load(self.out, k))                # still on the disk, and noted
         notify.notify(self.out, FakeBridge(), send=True)                     # the next cycle's purge deletes them: decided items
@@ -268,22 +268,22 @@ class TestTheRedoReplyAfterTheResultPost(Redo):
         self.assertEqual([(r["k"], r["latest"]) for r in self.ignored()], [(1, 2)])
         self.assertEqual(self.n(), 2)
 
-    def test_a_k_larger_than_the_count_stays_ignored_when_the_count_catches_up(self):
+    def test_a_k_larger_than_the_count_acts_once_when_the_count_catches_up(self):   # fix 16: reversed (it was "stays ignored")
         bridge, fail = self.start()
         self.cycle(bridge, http=fail, reply="再実行 1-3")
         self.assertEqual(self.n(), 1)
-        self.assertEqual([(r["k"], r["latest"]) for r in self.ignored()], [(3, 1)])
+        self.assertEqual([(r["k"], r["latest"]) for r in self.rows() if r["status"] == "redo_ahead"], [(3, 1)])
         self.cycle(bridge, http=fail, reply="再実行 1-1")
         self.assertEqual(self.n(), 2)
         self.cycle(bridge, http=fail, reply="再実行 1-2")
-        self.assertEqual(self.n(), 3)                                        # the count is 3 now, and the old "1-3" is still above
+        self.assertEqual(self.n(), 3)
+        self.cycle(bridge, http=fail)                                        # the count is 3 now: the "1-3" of the PM acts, once
+        self.assertEqual(self.n(), 4)
         for _ in range(4):
             self.cycle(bridge, http=fail)
-        self.assertEqual(self.n(), 3)                                        # it never acts
-        self.assertEqual(len(self.ignored()), 1)                             # and is not recorded again
-        self.cycle(bridge, http=fail, reply="再実行 1-3")                  # the same words again do not act either (decided: stays ignored)
-        self.assertEqual(self.n(), 3)
-        self.assertEqual(len(self.ignored()), 1)
+        self.assertEqual(self.n(), 4)                                        # and never again
+        self.assertEqual(len([r for r in self.rows() if r["status"] == "redo_ahead"]), 1)   # recorded once
+        self.assertEqual(self.ignored(), [])
 
     def test_every_dash_is_read_as_a_dash(self):
         for d in "-ー−‐–－":
@@ -405,13 +405,14 @@ class TestTheFakeReaderReadsEveryDash(unittest.TestCase):
     def test_the_six_dashes_are_one_reply_and_other_marks_are_a_form_that_is_not_read(self):
         msgs = ["[kimeru #1] x"] + [f"再実行 1{d}2" for d in "ー−‐–－-"]
         self.assertEqual(self.read(msgs), ["P:1", "R:再実行 1-2"])           # the same reply, folded
-        self.assertEqual(self.read(["[kimeru #1] x", "再実行 1〜2"]), ["P:1", "R:再実行形式 1"])
-        self.assertEqual(self.read(["[kimeru #1] x", "再実行 1 お願いします"]), ["P:1"])
+        self.assertEqual(self.read(["[kimeru #1] x", "再実行 1〜2"]), ["P:1", "R:再実行形式 1 〜2"])   # fix 16: handed back with what follows N, kimeru decides
+        tl = self.read(["[kimeru #1] x", "再実行 1 お願いします"])
+        self.assertEqual([notify.redo_bad_kind(e[2:]) for e in tl if e.startswith("R:")], [None])   # a sentence is not a form
 
     def test_the_real_reader_has_the_same_regexes_as_the_fake_one(self):
         real = REAL_READER.read_text(encoding="utf-8-sig")
         fake = FAKE_READER.read_text(encoding="utf-8-sig")
-        for rx in (re.compile(r"-match '(\^再実行\\s\*#\?\(\\d\+\)\\s\*\[-[^']*)'"), re.compile(r"-match '(\^再実行\\s\*#\?\(\\d\+\)\\s\*\[\^[^']*)'")):
+        for rx in (re.compile(r"-match '(\^再実行\\s\*#\?\(\\d\+\)\\s\*\[-[^']*)'"), re.compile(r"-match '(\^再実行\\s\*#\?\(\\d\+\)\(\\s\*\[\^[^']*)'")):
             a, b = rx.findall(real), rx.findall(fake)
             self.assertEqual((len(a), a), (1, b), rx.pattern)
         self.assertIn("ー−‐", real)

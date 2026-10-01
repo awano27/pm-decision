@@ -68,7 +68,9 @@ def _pid_of(pid):
 
 
 def pid_alive(pid):
-    """True when a process with this id exists (a process we may not look at counts as alive). Never signals the process.
+    """True when a process with this id exists and may be looked at. A process that Windows refuses to open (access denied) is not
+    counted: kimeru runs with the rights of the user who started it, so a process that cannot be opened is never a kimeru of this user
+    (its id was re-used). Never signals the process.
     Only the id is checked here; `lock_owner_alive` also compares the creation time, so a re-used id is not taken for the owner."""
     pid = _pid_of(pid)
     if pid is None:
@@ -80,7 +82,7 @@ def pid_alive(pid):
             k32.OpenProcess.restype = ctypes.c_void_p
             h = k32.OpenProcess(0x1000, False, pid)   # PROCESS_QUERY_LIMITED_INFORMATION
             if not h:
-                return k32.GetLastError() == 5         # access denied: it exists; invalid parameter: it does not
+                return False                           # access denied: not ours (see above); invalid parameter: it does not exist
             try:
                 code = ctypes.c_ulong()
                 if not k32.GetExitCodeProcess(ctypes.c_void_p(h), ctypes.byref(code)):
@@ -92,7 +94,7 @@ def pid_alive(pid):
     except ProcessLookupError:
         return False
     except PermissionError:
-        return True
+        return False    # a process of another user: not a kimeru of this user
     except Exception:   # OSError, OverflowError, ctypes.ArgumentError and the like: an unusable id is not a live owner
         return False
     return True
@@ -160,7 +162,7 @@ def _lock_pid(path):
 
 def lock_owner_alive(info):
     """True when the process that wrote `info` is still the one running: its id is alive and its creation time is the one written.
-    A process we may not look at counts as alive. Without a written creation time only the id is known."""
+    A process we may not look at is not the owner. Without a written creation time only the id is known."""
     pid, start = info
     if not pid_alive(pid):
         return False
@@ -171,6 +173,25 @@ def lock_owner_alive(info):
 
 
 _held = []   # the lock files this process holds now (see heartbeat)
+
+
+class LockFolderError(OSError):
+    """The lock file cannot be created because the folder cannot be written (not because another run holds the lock)."""
+
+
+def _folder_writable(folder):
+    """True when a file can be created in `folder` (a probe file that is removed at once)."""
+    probe = Path(folder) / f".probe.{os.getpid()}.{threading.get_ident()}"
+    try:
+        fd = os.open(str(probe), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except OSError:
+        return False
+    os.close(fd)
+    try:
+        probe.unlink()
+    except OSError:
+        pass
+    return True
 
 
 def _unlink_retry(path, tries=25):
@@ -198,11 +219,13 @@ def exclusive(path, stale_sec=1800):
     path.parent.mkdir(parents=True, exist_ok=True)
     me = os.getpid()
     fd = None
+    denied = 0
     for _ in range(6):
         try:
             fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             break
         except PermissionError:   # Windows: the file is being deleted by its owner, or is open in another process: not ours yet
+            denied += 1
             time.sleep(0.01)
             continue
         except FileExistsError:
@@ -223,6 +246,9 @@ def exclusive(path, stale_sec=1800):
             if not dead or not _take_over(path, info):
                 break
     if fd is None:
+        if denied >= 6 and not path.exists() and not _folder_writable(path.parent):
+            # not "another run is in progress": nobody holds a lock; the folder cannot be written
+            raise LockFolderError(f"cannot create the lock file {path}: the folder cannot be written to (check its permissions)")
         yield False
         return
     try:

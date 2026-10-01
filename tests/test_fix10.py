@@ -67,11 +67,11 @@ class TestOneLockForEveryWrite(Safety):
         res = self.cycle(bridge)                             # the next approvals run applies the reply, once
         self.assertEqual([c["status"] for c in res], ["approved"])
         self.assertEqual(len(self.posts_of("POST")), 1)
-        self.assertEqual(len([p for p in bridge.posts if p.startswith("[kimeru 実行 #1")]), 1)
+        self.assertEqual(len([p for p in bridge.posts if p.startswith(("[kimeru 実行 #1]", "[kimeru 実行 #1 "))]), 1)
         self.cycle(bridge)
         self.cycle(bridge)
         self.assertEqual(len(self.posts_of("POST")), 1)
-        self.assertEqual(len([p for p in bridge.posts if p.startswith("[kimeru 実行 #1")]), 1)
+        self.assertEqual(len([p for p in bridge.posts if p.startswith(("[kimeru 実行 #1]", "[kimeru 実行 #1 "))]), 1)
         item = self.state()
         self.assertEqual(item["status"], "approved")
         self.assertEqual(item["exec"]["0"]["state"], "done")
@@ -154,10 +154,10 @@ class TestRedoOnEveryScreen(Safety):
         for _ in range(2):
             self.cycle(bridge, http=fail)                          # the same reply does not act again
         self.assertEqual(len(self.posts_of("POST")), 2)
-        results = len([p for p in bridge.posts if p.startswith("[kimeru 実行 #1")])
+        results = len([p for p in bridge.posts if p.startswith(("[kimeru 実行 #1]", "[kimeru 実行 #1 "))])
         self.cycle(bridge, http=fail, reply="再実行 1")            # the second reply after the result post acts
         self.assertEqual(len(self.posts_of("POST")), 3)
-        self.assertEqual(len([p for p in bridge.posts if p.startswith("[kimeru 実行 #1")]), results + 1)   # and its result is posted
+        self.assertEqual(len([p for p in bridge.posts if p.startswith(("[kimeru 実行 #1]", "[kimeru 実行 #1 "))]), results + 1)   # and its result is posted
         for _ in range(2):
             self.cycle(bridge, http=fail)
         self.assertEqual(len(self.posts_of("POST")), 3)
@@ -196,7 +196,7 @@ class TestARefusedRedoOfAnUnknownResult(Safety):
         self.cycle(bridge, reply="再実行 1")
         self.assertEqual(self.calls, [])                     # nothing was sent, nothing was read
         self.assertEqual(self.state()["exec"]["0"]["state"], "unknown")
-        told = [p for p in bridge.posts if p.startswith("[kimeru 実行 #1")][-1]
+        told = [p for p in bridge.posts if p.startswith(("[kimeru 実行 #1]", "[kimeru 実行 #1 "))][-1]
         self.assertIn("確かめられませんでした", told)
         self.assertNotIn("書けていません", told)
         self.assertNotIn("直したら", told)

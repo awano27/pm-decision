@@ -233,6 +233,7 @@ if (-not $py) {
   }
 }
 Rec 'T6' $(if ($py) { (Short $v) + " ($($py -join ' '))" } else { 'NG Python 3.10+ なし（Level 1 以降は SKIP）' })
+# NOTE: -c programs passed through Py must not contain a double quote (Windows PowerShell 5.1 drops it from array elements); use '' for a Python single quote
 function Py([string[]]$a) { & $py[0] $py[1..9] @a 2>&1 | Out-String }
 
 if ($py) {
@@ -348,7 +349,7 @@ if ($selfOk -and (Want 'T22')) {
     $base = Get-Random -Minimum 100 -Maximum 899
     [IO.File]::WriteAllText((Join-Path $out22 'approvals.json'), "{`"next`": $base, `"items`": {}}")
     # the target the work item "came from": the settings' organization and project (kimeru writes only where the item came from)
-    $tgt = (Py @('-c', 'import json; from kimeru import config, pull; config.apply([]); o, p = pull.ado_names(config.value("ado_org"), config.value("ado_project")); print(json.dumps({"org": o, "project": p}))')).Trim()
+    $tgt = (Py @('-c', 'import json; from kimeru import config, pull; config.apply([]); o, p = pull.ado_names(config.value(''ado_org''), config.value(''ado_project'')); print(json.dumps({''org'': o, ''project'': p}))')).Trim()
     $origin = try { $tgt | ConvertFrom-Json } catch { $null }
     $t22text = "kimeru の試験です。このコメントは、承認のあとに 1 回だけ書かれます。`n件数 < 3 のとき <b> を使う、という文を含みます。"
     $rec = [ordered]@{ graph = 'check'; event_kind = 'ado.workitem.created'; event_id = "t22-$wi"; node = 'request_info'; outcome = 'decide'; needs_human = $true; advice = ''
@@ -374,7 +375,7 @@ if ($selfOk -and (Want 'T22')) {
         # the text has line breaks: it goes through a file, never through the command line (a .bat shim cuts an argument at a line break)
         $t22file = Join-Path $out22 't22text.txt'
         [IO.File]::WriteAllText($t22file, $t22text, (New-Object Text.UTF8Encoding $false))
-        $rb = try { (Py @('-c', 'import json, sys; from kimeru import config, execute; config.apply([]); print(json.dumps(execute.inspect_comment(sys.argv[1], sys.argv[2], execute.comment_text(dict(text=open(sys.argv[3], encoding="utf-8").read())))))', $wi, 'kimeru の試験です', $t22file)) -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 1 | ConvertFrom-Json } catch { $null }
+        $rb = try { (Py @('-c', 'import json, sys; from kimeru import config, execute; config.apply([]); print(json.dumps(execute.inspect_comment(sys.argv[1], sys.argv[2], execute.comment_text(dict(text=open(sys.argv[3], encoding=''utf-8'').read())))))', $wi, 'kimeru の試験です', $t22file)) -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 1 | ConvertFrom-Json } catch { $null }
         $shape = if ($rb -and $rb.PSObject.Properties['found']) { "読み返した件数=$($rb.found) タグで包まれた=$($rb.wrapped_in_tags) エスケープされた=$($rb.escaped) 同じ文面の確認が一致=$($rb.same_text_check)" } else { '読み返せず（az のサインインか、通信を確かめてください）' }
         $seen = YesNo "   ADO の作業項目 $wi に、kimeru のコメントが **1 件だけ** ありますか"
         $good = $seen -and $rb -and $rb.found -eq 1 -and $rb.same_text_check
@@ -550,7 +551,7 @@ if ($py -and (Want 'T15')) {
   Say "T15 GitHub Copilot で文面の下書き（架空のサンプル 1 件。業務のデータは送りません）"
   $cop = (Get-Command copilot -ErrorAction SilentlyContinue).Source
   if (-not $cop -and $py) {
-    $c = ((Py @('-c', 'from kimeru import writer; print(writer.find_exe("copilot", "KIMERU_COPILOT_EXE") or "")')) -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 1)
+    $c = ((Py @('-c', 'from kimeru import writer; print(writer.find_exe(''copilot'', ''KIMERU_COPILOT_EXE'') or '''')')) -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 1)
     if ($c -and (Test-Path ([string]$c).Trim())) { $cop = ([string]$c).Trim() }
   }
   if (-not $cop) {

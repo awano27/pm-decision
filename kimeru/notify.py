@@ -23,6 +23,7 @@ from . import writer as writer_mod
 HERE = Path(__file__).resolve().parent.parent
 REPLY = re.compile(r"^(OK|NG|保留|聞き返し|再実行|済)\s*#?(\d+)\s*[.。!！]*$", re.IGNORECASE)
 REDRAFT = re.compile(r"^修正\s*#?(\d+)\s*[:：]?\s*(\S.*)$")
+REDO_K = re.compile(r"^再実行\s*#?(\d+)\s*-\s*(\d+)\s*[.。!！]*$")   # `再実行 N-k`: run again, k = the result count the PM saw (stated in the result post)
 PASTE = re.compile(r"^下書き\s*#?(\d+)\s*[:：]?\s*(\S.*)$")   # the PM brings back what Microsoft 365 Copilot wrote
 MAX_PASTE = 1200
 
@@ -37,6 +38,12 @@ def parse_redraft(line):
     """("3", "もっと短く") for "修正 3 もっと短く"; None otherwise."""
     m = REDRAFT.match(unicodedata.normalize("NFKC", line).strip())
     return (m.group(1), m.group(2).strip()) if m else None
+def parse_redo_k(line):
+    """("1", 2) for "再実行 1-2" (the redo of #1 that the PM wrote under its 2nd result post); None otherwise."""
+    m = REDO_K.match(unicodedata.normalize("NFKC", line).strip())
+    return (m.group(1), int(m.group(2))) if m else None
+
+
 def parse_paste(line):
     """("3", "受領しました。…") for "下書き 3 受領しました。…"; None otherwise."""
     m = PASTE.match(unicodedata.normalize("NFKC", line).strip())
@@ -444,13 +451,34 @@ def fresh_entries(read, x_boundary=True):
     top = {}   # the highest result count seen so far, per item
     for i, e in enumerate(tl):
         x = parse_result_entry(e)
-        if x:
+        if e.startswith("P:"):
+            top[e[2:]] = 0   # the counts are taken after the last approval post of that number only: when numbers are used again
+        if x:                # (a state folder made new), the result posts of the earlier item above it are not this item's
             top[x[0]] = max(top.get(x[0], 0), x[1])
         if e.startswith("R:"):
             r = parse_reply(e[2:]) or parse_redraft(e[2:]) or parse_paste(e[2:])
             num = r and (r[1] if r[0] in STATUS else r[0])
             if num and i > last_post.get(num, len(tl)):
                 out.append((e[2:], top.get(num, 0)))
+    return out
+
+
+def redo_k_entries(read):
+    """[(number, k)] for the `再実行 N-k` replies on the screen, in order, once each. Unlike a bare `再実行 N` they do not depend on which
+    result posts are visible: k names the result post the PM answered. Only a reply that stands above the most recent visible
+    approval post "[kimeru #N]" of the same number is left out (an item that used the number before)."""
+    tl = read.get("timeline")
+    if tl is None:
+        lines = [(0, line) for line in read.get("replies", [])]
+        last_post = {}
+    else:
+        lines = [(i, e[2:]) for i, e in enumerate(tl) if e.startswith("R:")]
+        last_post = {e[2:]: i for i, e in enumerate(tl) if e.startswith("P:")}
+    out = []
+    for i, line in lines:
+        r = parse_redo_k(line)
+        if r and (tl is None or i > last_post.get(r[0], -1)) and r not in out:
+            out.append(r)
     return out
 
 
@@ -572,15 +600,17 @@ def count_result(ap, text):
     if not it:
         return text
     it["x_seq"] = int(it.get("x_seq", 0)) + 1
-    return f"[kimeru 実行 #{m.group(1)} {it['x_seq']}]" + text[m.end():]
+    from . import execute
+    return f"[kimeru 実行 #{m.group(1)} {it['x_seq']}]" + text[m.end():] + execute.redo_hint(m.group(1), it["x_seq"], text)
 
 
 def redo_mark(it):
     """The result count that was reached when the last `再実行` of the item acted: a reply that follows no later result post than
-    that is already answered. -1 when none acted; an item of an earlier version (redo_seen) counts as 0."""
+    that is already answered. -1 when none acted. An item of an earlier version (redo_seen) has no mark and no counts: it is -1 too,
+    so its first new reply acts (at most one run more than before the update; the same-text check guards it) and sets the mark."""
     m = it.get("redo_mark")
     if m is None:
-        return 0 if it.get("redo_seen") else -1
+        return -1
     try:
         return int(m)
     except (TypeError, ValueError):
@@ -662,6 +692,27 @@ def _collect(out, bridge, writer=None, real=False, send=False):
         if r0 and r0[0] == "再実行":
             seen_results[r0[1]] = max(seen_results.get(r0[1], 0), seen)
     redo_done = set()
+
+    def run_redo(num, it):   # `再実行`: once per number per step, only while something failed or is unknown; the mark is saved before the run
+        redo_done.add(num)
+        it["redo_mark"] = int(it.get("x_seq", 0))   # the results made so far; those of this redo come after
+        ap.save()   # saved before the run: a stop in the middle must not run the same reply again
+        changes.append({"id": int(num), "status": "redo", "real": execute.redo(out, ap, int(num), it, post)})
+
+    for num, k in redo_k_entries(read):   # `再実行 N-k`: acts once, when k is the item's latest result count and no redo has acted since
+        it = ap.data["items"].get(num)
+        if not real or num in redo_done or not it or it["status"] != "approved"                 or not any(execute.unresolved(v) for v in (it.get("exec") or {}).values()):
+            continue
+        cur = int(it.get("x_seq", 0))
+        if k != cur:   # not the latest result: ignored, and recorded (once per count)
+            if k not in (it.get("redo_ignored") or []):
+                it["redo_ignored"] = (it.get("redo_ignored") or []) + [k]
+                ap.save()
+                changes.append({"id": int(num), "status": "redo_ignored", "k": k, "latest": cur})
+            continue
+        if redo_mark(it) >= cur:   # already acted on this result
+            continue
+        run_redo(num, it)
     for line in replies:
         ps = parse_paste(line)
         if ps:
@@ -684,12 +735,10 @@ def _collect(out, bridge, writer=None, real=False, send=False):
             if not real or num in redo_done or not it or it["status"] != "approved" \
                     or not any(execute.unresolved(v) for v in (it.get("exec") or {}).values()):
                 continue
-            redo_done.add(num)
             if seen_results.get(num, 0) <= redo_mark(it):   # no result post newer than the last redo is before this reply: it was answered
+                redo_done.add(num)
                 continue
-            it["redo_mark"] = int(it.get("x_seq", 0))   # the results made so far; those of this redo come after
-            ap.save()   # saved before the run: a stop in the middle must not run the same reply again
-            changes.append({"id": int(num), "status": "redo", "real": execute.redo(out, ap, int(num), it, post)})
+            run_redo(num, it)
             continue
         if word == "済":   # the PM saw the comment in ADO: what was not known is closed
             if real and it and it["status"] == "approved" and execute.close_unknown(out, ap, int(num), it):

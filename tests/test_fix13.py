@@ -76,7 +76,7 @@ class TestRedoByTheResultItFollows(Safety):
     def test_the_result_post_carries_its_count(self):
         bridge, fail = self.start()
         self.cycle(bridge, http=fail, reply="再実行 1")
-        results = [p.split("\n")[0].split("]")[0] for p in bridge.posts if p.startswith("[kimeru 実行 #1")]
+        results = [p.split("\n")[0].split("]")[0] for p in bridge.posts if p.startswith(("[kimeru 実行 #1]", "[kimeru 実行 #1 "))]
         self.assertEqual(results, ["[kimeru 実行 #1 1", "[kimeru 実行 #1 2"])
         self.assertEqual(notify.parse_result_entry("X:1:2"), ("1", 2))
         self.assertEqual(notify.parse_result_entry("X:1"), ("1", 0))      # a post of an earlier version has no count
@@ -136,13 +136,13 @@ class TestRedoByTheResultItFollows(Safety):
         self.assertIn("X:1:0", bridge.read()["timeline"])
         self.series(bridge, fail, redos=2)
 
-    def test_the_count_of_replies_that_the_earlier_version_kept_is_read_as_an_answered_reply(self):
+    def test_the_count_of_replies_that_the_earlier_version_kept_is_not_a_mark(self):
         bridge, fail = self.start()
         it = notify.Approvals(self.out).data["items"]["1"]
         self.assertIsNone(it.get("redo_mark"))
         self.assertEqual(notify.redo_mark(it), -1)
         it["redo_seen"] = 1
-        self.assertEqual(notify.redo_mark(it), 0)
+        self.assertEqual(notify.redo_mark(it), -1)      # fix 14: an item of the earlier version has no mark, so its next reply acts
         it["redo_mark"] = 3
         self.assertEqual(notify.redo_mark(it), 3)
 
@@ -401,14 +401,24 @@ class TestFullTextIsReadWhileItIsReplaced(unittest.TestCase):
                 "out = Path(sys.argv[2]); stop = out / 'stop'; i = 0\n"
                 "while not stop.exists():\n"
                 "    fulltext.save(out, 'g:w%d:n' % (i % 4), {'text': 'x' * 2000})\n"
-                "    i += 1\n")
+                "    i += 1\n"
+                "    with open(out / 'ticks', 'ab') as f: f.write(b'x')\n")
             p = subprocess.Popen([sys.executable, "-c", child, str(ROOT), str(out)])
             try:
                 time.sleep(0.3)
-                missing = sum(1 for _ in range(1500) if fulltext.load(out, "g:keep:n") is None)
+                ticks = out / "ticks"
+                before = ticks.stat().st_size if ticks.exists() else 0
+                missing, loads, end = 0, 0, time.time() + 40
+                while True:   # at least 1500 reads, and until the writer has saved at least 30 times while they ran
+                    missing += fulltext.load(out, "g:keep:n") is None
+                    loads += 1
+                    saves = (ticks.stat().st_size if ticks.exists() else 0) - before
+                    if (loads >= 1500 and saves >= 30) or time.time() > end:
+                        break
             finally:
                 stop.write_text("1")
                 p.wait(timeout=60)
+            self.assertGreaterEqual(saves, 30, "the reads must overlap many saves, or the test proves nothing")
             self.assertEqual(missing, 0)
             self.assertEqual(p.returncode, 0)
 

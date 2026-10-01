@@ -852,6 +852,12 @@ if ($Action -eq 'read') {
         $entry = "R:" + $c
         if (-not $seen.ContainsKey($c)) { $seen[$c] = 1; $replies.Add($c) }
       }
+      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^再実行\s*#?(\d+)\s*-\s*(\d+)\s*[.。!！]*$') {
+        # `再実行 N-k`: run again, under the k-th result post of #N (notify.parse_redo_k)
+        $c = '再実行 {0}-{1}' -f $Matches[1], $Matches[2]
+        $entry = "R:" + $c
+        if (-not $seen.ContainsKey($c)) { $seen[$c] = 1; $replies.Add($c) }
+      }
       elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^修正\s*#?(\d+)\s*[:：]?\s*(\S.*)$') {
         # redraft request for a writer draft (notify.parse_redraft): keep the instruction text
         $entry = 'R:修正 {0} {1}' -f $Matches[1], $Matches[2].Trim()

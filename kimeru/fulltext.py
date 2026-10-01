@@ -350,16 +350,39 @@ def _read(out, tries=60):
     return {}
 
 
-def _write(out, data):
+class DeleteFailed(OSError):
+    """A full text that was to be deleted is still on the disk (the file could not be removed)."""
+
+
+def _record_failure(out, what):
+    """Leave a note in warnings.jsonl that a full text stayed on the disk (the delete is tried again in the next cycle)."""
+    try:
+        line = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "full_text": f"delete failed: {what}"}
+        with (Path(out) / "warnings.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def _write(out, data, strict=False):
     """Write the file, and only the file: fsutil.write_atomic keeps the previous version as .bak, which would keep a deleted
-    full text on the disk. An empty file is not kept at all."""
+    full text on the disk. An empty file is not kept at all. strict=True (a delete: drop, purge): a file that cannot be removed is
+    an error (DeleteFailed, noted in warnings.jsonl), never a success; the older copy is removed first, so that what is left
+    still holds the deleted text under its own name and the next cycle tries again."""
     p = _path(out)
     bak = p.with_name(p.name + ".bak")
     if not data:
         from . import fsutil
-        for f in (p, bak):
-            fsutil._unlink_retry(f)   # a reader that has the file open for a moment must not fail the delete
+        for f in (bak, p):
+            if not fsutil._unlink_retry(f) and strict:   # a reader that has the file open for a moment must not fail the delete
+                _record_failure(out, f.name)
+                raise DeleteFailed(f"{f} could not be removed: the full text stays until the next cycle")
         return
+    if strict:
+        from . import fsutil
+        if not fsutil._unlink_retry(bak):
+            _record_failure(out, bak.name)
+            raise DeleteFailed(f"{bak} could not be removed: the full text stays until the next cycle")
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(f"{p.name}.tmp.{os.getpid()}.{threading.get_ident()}")   # one temporary file per process and thread
     try:
@@ -422,7 +445,7 @@ def drop(out, key):
         data = _read(out)
         if key in data:
             del data[key]
-            _write(out, data)
+            _write(out, data, strict=True)
             return True
         return False
 
@@ -448,7 +471,7 @@ def purge_locked(out, now=None):
             return []
         for k in gone:
             del data[k]
-        _write(out, data)
+        _write(out, data, strict=True)
     from . import notify
     ap = notify.Approvals(out)
     changed = False

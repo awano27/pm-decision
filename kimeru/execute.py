@@ -304,6 +304,16 @@ def not_known(st):
     return (st or {}).get("state") in ("running", "unknown")
 
 
+def redo_hint(num, k, text):
+    """The sentence added to a result post (count k) that offers `再実行`: the exact reply for this result, and the two kinds of reply
+    that are lost. "" for a post that offers no redo."""
+    if f"再実行 {num}" not in text:
+        return ""
+    return (f" もう一度やり直すには「再実行 {num}-{k}」と返信してください（この結果 {k} の件に 1 回だけ効きます）。"
+            f"「再実行 {num}」だけの返信は、この投稿が画面に見えていて、この投稿より後に送ったときだけ効きます。"
+            f"この投稿より前に送った返信と、この投稿が画面から流れたあとの「再実行 {num}」は効きません")
+
+
 def _unknown_text(num, action):
     return (f"[kimeru 実行 #{num}] {_target(action)} へのコメントは、書けたかどうか分かりません。"
             f"ADO を確かめてください（作業項目を開いて、コメントがあるかどうか）。"

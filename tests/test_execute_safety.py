@@ -105,7 +105,7 @@ class TestUnknownResult(Safety):
                 bridge = self.decide_and_post()
                 self.cycle(bridge, http=self.http_with(post_error=err), reply="OK 1")
                 self.assertEqual(self.state()["exec"]["0"]["state"], "unknown")
-                told = [p for p in bridge.posts if p.startswith("[kimeru 実行 #1")]
+                told = [p for p in bridge.posts if p.startswith(("[kimeru 実行 #1]", "[kimeru 実行 #1 "))]
                 self.assertTrue(told and "ADO を確かめて" in told[-1])
                 self.assertNotIn("直したら", told[-1])
                 self.assertNotIn("実行できませんでした", told[-1])
@@ -349,7 +349,7 @@ class TestUnknownStaysUnknown(Safety):
             raise pull.PullError("HTTP 401 for <url>")
         self.cycle(bridge, http=http, reply="再実行 1")
         self.assertEqual(self.state()["exec"]["0"]["state"], "unknown")
-        told = [p for p in bridge.posts if p.startswith("[kimeru 実行 #1")][-1]
+        told = [p for p in bridge.posts if p.startswith(("[kimeru 実行 #1]", "[kimeru 実行 #1 "))][-1]
         self.assertIn("確かめられませんでした", told)
         self.assertNotIn("直したら", told)
         self.assertNotIn("実行できませんでした", told)
@@ -515,7 +515,7 @@ class TestTarget(Safety):
         notify.notify(self.out, bridge, send=True, real=True)
         self.cycle(bridge, reply="OK 1")
         self.assertEqual(self.calls, [])
-        told = [p for p in bridge.posts if p.startswith("[kimeru 実行 #1")]
+        told = [p for p in bridge.posts if p.startswith(("[kimeru 実行 #1]", "[kimeru 実行 #1 "))]
         self.assertTrue(told and "違うため、書きません" in told[-1])
         self.assertEqual(self.state()["exec"]["0"]["state"], "failed")
 
@@ -567,7 +567,7 @@ class TestPostsWhileCollecting(Safety):
         self.assertTrue(notify.Approvals(self.out).data["outbox"])
         bridge.fail_posts = False
         self.cycle(bridge)
-        self.assertTrue(any(p.startswith("[kimeru 実行 #1") and "実行しました" in p for p in bridge.posts))
+        self.assertTrue(any(p.startswith(("[kimeru 実行 #1]", "[kimeru 実行 #1 ")) and "実行しました" in p for p in bridge.posts))
         self.assertFalse(notify.Approvals(self.out).data["outbox"])
         self.assertEqual(len(self.posts_of("POST")), 1)
         n = len(bridge.posts)

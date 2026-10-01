@@ -404,35 +404,59 @@ def _notify_locked(out, bridge, send, real):
     return posted
 
 
-def fresh_replies(read, x_boundary=True):
-    """Replies that come after the most recent visible post with the same number.
+def parse_result_entry(e):
+    """("1", 2) for the timeline entry "X:1:2" (the 2nd result post about #1); ("1", 0) for "X:1" (a post of an earlier version,
+    which has no count); None for anything else."""
+    if not e.startswith("X:"):
+        return None
+    num, _, k = e[2:].partition(":")
+    try:
+        return num, int(k) if k else 0
+    except ValueError:
+        return num, 0
+
+
+def fresh_entries(read, x_boundary=True):
+    """[(reply line, results seen)] for the replies that come after the most recent visible post with the same number.
+    `results seen` is the highest count k of the result posts "[kimeru 実行 #N k]" of that number that stand before the reply on the
+    screen (0 when none does).
 
     Old "OK 1" lines from an earlier run stay in the chat; without this, a new
     item #1 would be approved by them. With a timeline, a reply counts only if
     it appears after the last "[kimeru #1]" post (or, unless x_boundary is False, after the last result post
-    "[kimeru 実行 #1]", so that an answered `再実行 1` does not act again); if that post is not visible,
+    "[kimeru 実行 #1 k]", so that an answered `再実行 1` does not act again); if that post is not visible,
     freshness cannot be proven and the reply is ignored.
     """
     tl = read.get("timeline")
     if tl is None:  # older bridge without ordering
-        return list(read.get("replies", []))
+        return [(line, 0) for line in read.get("replies", [])]
     last_post, last_result = {}, {}
     for i, e in enumerate(tl):
-        if e.startswith("P:") or (x_boundary and e.startswith("X:")):   # "X:N" is a result post ("[kimeru 実行 #N]"): a reply before it is answered
-            last_post[e[2:]] = i
-        if e.startswith("X:"):
-            last_result[e[2:]] = i
+        x = parse_result_entry(e)
+        if e.startswith("P:") or (x_boundary and x):   # "X:N:k" is a result post ("[kimeru 実行 #N k]"): a reply before it is answered
+            last_post[x[0] if x else e[2:]] = i
+        if x:
+            last_result[x[0]] = i
     if not x_boundary:   # the approval post may be off the screen: a result post is a boundary too (after it, a reply is new)
         for num, i in last_result.items():
             last_post.setdefault(num, i)
     out = []
+    top = {}   # the highest result count seen so far, per item
     for i, e in enumerate(tl):
+        x = parse_result_entry(e)
+        if x:
+            top[x[0]] = max(top.get(x[0], 0), x[1])
         if e.startswith("R:"):
             r = parse_reply(e[2:]) or parse_redraft(e[2:]) or parse_paste(e[2:])
             num = r and (r[1] if r[0] in STATUS else r[0])
             if num and i > last_post.get(num, len(tl)):
-                out.append(e[2:])
+                out.append((e[2:], top.get(num, 0)))
     return out
+
+
+def fresh_replies(read, x_boundary=True):
+    """The reply lines of fresh_entries."""
+    return [line for line, _ in fresh_entries(read, x_boundary)]
 
 
 STALE_ACTION_KEYS = ("drafted_by", "held_for", "writer_warning", "variant", "ask_back", "ask_back_unverified", "unverified")
@@ -531,29 +555,44 @@ def flush_outbox(ap, bridge, send):
             ap.data["outbox"] = box[k:]
             ap.save()
             return False
-        _result_delivered(ap, text)
     ap.data["outbox"] = []
     ap.save()
     return True
 
 
-RESULT_POST = re.compile(r"^\[kimeru 実行 #(\d+)\]")
+RESULT_POST = re.compile(r"^\[kimeru 実行 #(\d+)(?: \d+)?\]")
 
 
-def _result_delivered(ap, text):
-    """A result post "[kimeru 実行 #N]" is in the chat now: it is the boundary for the `再実行 N` replies before it, so the count
-    of replies that already acted starts again from 0. That happens at the next read, once the post is on the screen (see _collect):
-    a post the screen does not show must not make the same reply act again."""
+def count_result(ap, text):
+    """A result post "[kimeru 実行 #N] ..." gets the count of its item in its first line: "[kimeru 実行 #N k] ...", k = 1, 2, 3 ...
+    (item["x_seq"] counts the result posts made so far). The reader hands every result post back as "X:N:k", so a `再実行 N`
+    reply is judged by which result it follows, not by how many posts or replies the screen happens to show."""
     m = RESULT_POST.match(text)
     it = m and ap.data["items"].get(m.group(1))
-    if it and it.get("redo_seen"):
-        it["redo_reset"] = True
+    if not it:
+        return text
+    it["x_seq"] = int(it.get("x_seq", 0)) + 1
+    return f"[kimeru 実行 #{m.group(1)} {it['x_seq']}]" + text[m.end():]
+
+
+def redo_mark(it):
+    """The result count that was reached when the last `再実行` of the item acted: a reply that follows no later result post than
+    that is already answered. -1 when none acted; an item of an earlier version (redo_seen) counts as 0."""
+    m = it.get("redo_mark")
+    if m is None:
+        return 0 if it.get("redo_seen") else -1
+    try:
+        return int(m)
+    except (TypeError, ValueError):
+        return -1
 
 
 def make_post(ap, bridge, send):
     """`post(text)` for execute.py: the text is put in the outbox first; it is posted by one flush_outbox at the end of the step
-    (not once per text). Without send it is only pasted (never sent) and stays in the outbox. It never raises."""
+    (not once per text). Without send it is only pasted (never sent) and stays in the outbox. It never raises.
+    A result post is numbered here (count_result)."""
     def post(text):
+        text = count_result(ap, text)
         ap.data.setdefault("outbox", []).append(text)
         ap.save()
         if not send:
@@ -615,30 +654,13 @@ def _collect(out, bridge, writer=None, real=False, send=False):
     writer = writer if writer is not None else writer_mod.get_writer()
     changes = []
     read = bridge.read()
-    replies = fresh_replies(read)
-    redo_count = {}
-    for line in replies:   # how many `再実行 N` replies stand after the last of "[kimeru #N]" and "[kimeru 実行 #N]" on the screen
-        r0 = parse_reply(line)                       # (the same starting point as redo_seen: a result post starts the count again)
+    fresh = fresh_entries(read)
+    replies = [line for line, _ in fresh]
+    seen_results = {}   # for `再実行`: the highest result count of the item that stands before the reply (the context of the reply)
+    for line, seen in fresh:
+        r0 = parse_reply(line)
         if r0 and r0[0] == "再実行":
-            redo_count[r0[1]] = redo_count.get(r0[1], 0) + 1
-    xcount = {}   # how many result posts "[kimeru 実行 #N]" the screen shows, per item
-    if read.get("timeline") is not None:
-        for e in read["timeline"]:
-            if e.startswith("X:"):
-                xcount[e[2:]] = xcount.get(e[2:], 0) + 1
-        for n0, it0 in ap.data["items"].items():
-            seen0, cnt0, x0 = int(it0.get("redo_seen", 0)), redo_count.get(n0, 0), xcount.get(n0, 0)
-            # The count of replies that already acted starts again from 0 only when the result post of that redo is PROVEN to be on the
-            # screen: a result post is shown that was not there when the reply acted (more of them than then), or the replies that acted
-            # stand before the last one. An old result post alone proves nothing, and a boundary that is not on the screen lowers nothing:
-            # until it is proven the count is kept and a reply that looks new waits for a later cycle (a reply never acts twice).
-            if it0.get("redo_reset"):
-                if x0 > int(it0.get("redo_xn", 0)) or (x0 and cnt0 < seen0):
-                    it0["redo_seen"] = 0
-                    it0.pop("redo_reset", None)
-                    it0.pop("redo_xn", None)
-            elif seen0 and x0 and cnt0 < seen0:   # the replies that acted are before a result post that is shown
-                it0["redo_seen"] = cnt0
+            seen_results[r0[1]] = max(seen_results.get(r0[1], 0), seen)
     redo_done = set()
     for line in replies:
         ps = parse_paste(line)
@@ -663,13 +685,9 @@ def _collect(out, bridge, writer=None, real=False, send=False):
                     or not any(execute.unresolved(v) for v in (it.get("exec") or {}).values()):
                 continue
             redo_done.add(num)
-            seen = int(it.get("redo_seen", 0))
-            cnt = redo_count.get(num, 0)
-            if cnt <= seen:   # this reply already acted, whether or not its result post is visible: it is not run again
-                it["redo_seen"] = min(seen, cnt)
+            if seen_results.get(num, 0) <= redo_mark(it):   # no result post newer than the last redo is before this reply: it was answered
                 continue
-            it["redo_seen"] = cnt
-            it["redo_xn"] = xcount.get(num, 0)   # the result posts on the screen now: one more must appear once this redo is answered
+            it["redo_mark"] = int(it.get("x_seq", 0))   # the results made so far; those of this redo come after
             ap.save()   # saved before the run: a stop in the middle must not run the same reply again
             changes.append({"id": int(num), "status": "redo", "real": execute.redo(out, ap, int(num), it, post)})
             continue

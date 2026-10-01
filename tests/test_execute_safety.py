@@ -105,7 +105,7 @@ class TestUnknownResult(Safety):
                 bridge = self.decide_and_post()
                 self.cycle(bridge, http=self.http_with(post_error=err), reply="OK 1")
                 self.assertEqual(self.state()["exec"]["0"]["state"], "unknown")
-                told = [p for p in bridge.posts if p.startswith("[kimeru 実行 #1]")]
+                told = [p for p in bridge.posts if p.startswith("[kimeru 実行 #1")]
                 self.assertTrue(told and "ADO を確かめて" in told[-1])
                 self.assertNotIn("直したら", told[-1])
                 self.assertNotIn("実行できませんでした", told[-1])
@@ -282,7 +282,8 @@ class TestOneCollectAtATime(Safety):
         buf = io.StringIO()
         with fsutil.exclusive(self.out / "approvals.lock"), contextlib.redirect_stdout(buf), \
                 mock.patch("kimeru.notify.PowerShellBridge", lambda: bridge):
-            self.assertEqual(cli.main(["--out", str(self.out), "approvals"]), 0)
+            self.assertEqual(cli.main(["--out", str(self.out), "approvals"]), 1)   # like `notify`: nothing was done, so it fails
+        self.assertIn("another approvals run is in progress", buf.getvalue())
         self.assertIn("nothing was read or applied", buf.getvalue())
 
     def test_a_lock_left_by_a_dead_process_is_taken_over(self):
@@ -348,7 +349,7 @@ class TestUnknownStaysUnknown(Safety):
             raise pull.PullError("HTTP 401 for <url>")
         self.cycle(bridge, http=http, reply="再実行 1")
         self.assertEqual(self.state()["exec"]["0"]["state"], "unknown")
-        told = [p for p in bridge.posts if p.startswith("[kimeru 実行 #1]")][-1]
+        told = [p for p in bridge.posts if p.startswith("[kimeru 実行 #1")][-1]
         self.assertIn("確かめられませんでした", told)
         self.assertNotIn("直したら", told)
         self.assertNotIn("実行できませんでした", told)
@@ -514,7 +515,7 @@ class TestTarget(Safety):
         notify.notify(self.out, bridge, send=True, real=True)
         self.cycle(bridge, reply="OK 1")
         self.assertEqual(self.calls, [])
-        told = [p for p in bridge.posts if p.startswith("[kimeru 実行 #1]")]
+        told = [p for p in bridge.posts if p.startswith("[kimeru 実行 #1")]
         self.assertTrue(told and "違うため、書きません" in told[-1])
         self.assertEqual(self.state()["exec"]["0"]["state"], "failed")
 
@@ -566,7 +567,7 @@ class TestPostsWhileCollecting(Safety):
         self.assertTrue(notify.Approvals(self.out).data["outbox"])
         bridge.fail_posts = False
         self.cycle(bridge)
-        self.assertTrue(any(p.startswith("[kimeru 実行 #1]") and "実行しました" in p for p in bridge.posts))
+        self.assertTrue(any(p.startswith("[kimeru 実行 #1") and "実行しました" in p for p in bridge.posts))
         self.assertFalse(notify.Approvals(self.out).data["outbox"])
         self.assertEqual(len(self.posts_of("POST")), 1)
         n = len(bridge.posts)

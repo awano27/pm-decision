@@ -93,7 +93,8 @@ class Bridge:
             elif text.startswith("[kimeru #"):
                 tl.append("P:" + text[len("[kimeru #"):].split("]")[0])
             elif text.startswith("[kimeru 実行 #"):
-                tl.append("X:" + text[len("[kimeru 実行 #"):].split("]")[0])
+                head = text[len("[kimeru 実行 #"):].split("]")[0].split()   # "N" or "N k"
+                tl.append("X:%s:%s" % (head[0], head[1] if len(head) > 1 else 0))
         return {"timeline": tl, "replies": list(self.replies)}
 
 

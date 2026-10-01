@@ -824,7 +824,7 @@ if ($Action -eq 'read') {
   $posts = New-Object System.Collections.Generic.List[string]
   $replies = New-Object System.Collections.Generic.List[string]
   $seen = @{}
-  # timeline: posts ("P:N") and replies ("R:OK N") in screen order (oldest first). One message is
+  # timeline: posts ("P:N"), result posts ("X:N:k") and replies ("R:OK N") in screen order (oldest first). One message is
   # exposed by several UIA nodes, so consecutive duplicates are collapsed.
   $timeline = New-Object System.Collections.Generic.List[string]
   $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
@@ -841,9 +841,10 @@ if ($Action -eq 'read') {
         $entry = "P:" + $Matches[1]
         if (-not $posts.Contains($Matches[1])) { $posts.Add($Matches[1]) }
       }
-      elseif ($l -match '^\[kimeru 実行 #(\d+)\]') {
-        # a result post about #N: replies to #N before it were answered (notify.fresh_replies)
-        $entry = "X:" + $Matches[1]
+      elseif ($l -match '^\[kimeru 実行 #(\d+)(?:\s+(\d+))?\]') {
+        # a result post about #N, the k-th one ("[kimeru 実行 #N k]"; 0 for a post of an earlier version that has no count):
+        # replies to #N before it were answered (notify.fresh_entries). The count keeps two result posts from being folded into one line.
+        $entry = 'X:{0}:{1}' -f $Matches[1], $(if ($Matches[2]) { [int]$Matches[2] } else { 0 })
       }
       elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留|聞き返し|再実行|済)\s*#?(\d+)\s*[.。!！]*$') {
         # phones often send full-width or re-cased text ("ＯＫ　６７５", "Ok 675"): canonicalize

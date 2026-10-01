@@ -371,7 +371,10 @@ if ($selfOk -and (Want 'T22')) {
       if ($done -eq 1) {
         # read back what ADO stored (read only; counts and true/false only): did it wrap the comment in tags, did it keep `<` as `&lt;`,
         # and did the same-text check of kimeru find it (a redo must not write it again)
-        $rb = try { (Py @('-c', 'import json, sys; from kimeru import config, execute; config.apply([]); print(json.dumps(execute.inspect_comment(sys.argv[1], sys.argv[2], execute.comment_text(dict(text=sys.argv[3])))))', $wi, 'kimeru の試験です', $t22text)) -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 1 | ConvertFrom-Json } catch { $null }
+        # the text has line breaks: it goes through a file, never through the command line (a .bat shim cuts an argument at a line break)
+        $t22file = Join-Path $out22 't22text.txt'
+        [IO.File]::WriteAllText($t22file, $t22text, (New-Object Text.UTF8Encoding $false))
+        $rb = try { (Py @('-c', 'import json, sys; from kimeru import config, execute; config.apply([]); print(json.dumps(execute.inspect_comment(sys.argv[1], sys.argv[2], execute.comment_text(dict(text=open(sys.argv[3], encoding="utf-8").read())))))', $wi, 'kimeru の試験です', $t22file)) -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 1 | ConvertFrom-Json } catch { $null }
         $shape = if ($rb -and $rb.PSObject.Properties['found']) { "読み返した件数=$($rb.found) タグで包まれた=$($rb.wrapped_in_tags) エスケープされた=$($rb.escaped) 同じ文面の確認が一致=$($rb.same_text_check)" } else { '読み返せず（az のサインインか、通信を確かめてください）' }
         $seen = YesNo "   ADO の作業項目 $wi に、kimeru のコメントが **1 件だけ** ありますか"
         $good = $seen -and $rb -and $rb.found -eq 1 -and $rb.same_text_check

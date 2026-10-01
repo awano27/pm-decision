@@ -25,11 +25,18 @@ switch ($Action) {
     Out-Json @{ ok = $true; typed = $true; sent = [bool]$Send }
   }
   'read' {
+    # like the real screen: only the last KIMERU_FAKE_TAIL messages are visible, and consecutive identical lines are folded into one
+    $msgs = @($chat.messages)
+    $tail = [int]$env:KIMERU_FAKE_TAIL
+    if ($tail -gt 0 -and $msgs.Count -gt $tail) { $msgs = @($msgs | Select-Object -Last $tail) }
     $tl = New-Object System.Collections.Generic.List[string]
-    foreach ($m in @($chat.messages)) {
+    foreach ($m in $msgs) {
       $first = ($m -split "`r?`n")[0].Trim()
-      if ($first -match '^\[kimeru #(\d+)\]') { $tl.Add("P:" + $Matches[1]) }
-      elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留)\s*#?(\d+)$') { $c = 'R:{0} {1}' -f $Matches[1].ToUpper(), $Matches[2]; $tl.Add($c) }
+      $c = $null
+      if ($first -match '^\[kimeru #(\d+)\]') { $c = "P:" + $Matches[1] }
+      elseif ($first -match '^\[kimeru 実行 #(\d+)(?:\s+(\d+))?\]') { $c = 'X:{0}:{1}' -f $Matches[1], $(if ($Matches[2]) { [int]$Matches[2] } else { 0 }) }
+      elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留|聞き返し|再実行|済)\s*#?(\d+)$') { $c = 'R:{0} {1}' -f $Matches[1].ToUpper(), $Matches[2] }
+      if ($c -and ($tl.Count -eq 0 -or $tl[$tl.Count - 1] -ne $c)) { $tl.Add($c) }
     }
     Out-Json @{ ok = $true; posts = @(); replies = @(); timeline = @($tl) }
   }

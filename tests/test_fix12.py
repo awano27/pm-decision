@@ -47,13 +47,13 @@ class TestALockOfALiveProcessIsKept(unittest.TestCase):
             _age(self.lock, 1801)                              # 30 minutes and a second: the old rule would take it over
             with fsutil.exclusive(self.lock) as other:
                 self.assertFalse(other)
-            self.assertEqual(self.lock.read_text(), str(os.getpid()))
+            self.assertEqual(self.lock.read_text(), fsutil.lock_text())
         self.assertFalse(self.lock.exists())
 
     def test_an_old_lock_of_another_live_process_is_not_taken_over_and_a_dead_one_is(self):
         p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
         try:
-            self.lock.write_text(str(p.pid))
+            self.lock.write_text(fsutil.lock_text(p.pid))
             _age(self.lock, 7200)
             with fsutil.exclusive(self.lock) as got:
                 self.assertFalse(got)
@@ -68,7 +68,7 @@ class TestALockOfALiveProcessIsKept(unittest.TestCase):
         self.lock.write_text(str(DEAD_PID))
         with fsutil.exclusive(self.lock) as got:
             self.assertTrue(got)
-            self.assertEqual(self.lock.read_text(), str(os.getpid()))
+            self.assertEqual(self.lock.read_text(), fsutil.lock_text())
         self.assertFalse(self.lock.exists())
 
     def test_a_lock_without_a_readable_owner_falls_back_to_its_age(self):
@@ -200,7 +200,7 @@ class TestARedoActsOncePerReply(Safety):
         def lagging():   # the newest result post is not on the screen yet: only the old one
             r = real()
             tl = r["timeline"]
-            last = max(i for i, e in enumerate(tl) if e == "X:1")
+            last = max(i for i, e in enumerate(tl) if e.startswith("X:1:"))
             return {**r, "timeline": [e for i, e in enumerate(tl) if i != last]}
         bridge.read = lagging
         # this cycle posts the result first (the flush at its start), then reads a screen that does not show it yet

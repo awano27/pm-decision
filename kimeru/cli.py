@@ -556,6 +556,7 @@ def main(argv=None):
                 res = nt.collect(out, bridge, real=True, send=a.send)
                 if getattr(res, "busy", False):
                     print(busy.format("nothing was read or applied"))
+                    return 1
                 for ch in res:
                     print(f"#{ch['id']} -> {ch['status']}" + (f" ({len(ch['executed'])} actions planned)" if "executed" in ch else ""))
         except Exception as e:  # one readable line instead of a traceback (the check script records it)

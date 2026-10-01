@@ -334,12 +334,20 @@ def _locked(out, wait_sec=30.0):
         time.sleep(0.05)
 
 
-def _read(out):
-    try:
-        data = json.loads(_path(out).read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
+def _read(out, tries=60):
+    """The kept texts. A reader outside full_text.lock (load) can meet the moment in which a writer replaces the file; Windows
+    answers PermissionError then, which is waited out (a missing or damaged file is {})."""
+    for k in range(tries):
+        try:
+            data = json.loads(_path(out).read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except PermissionError:
+            if k == tries - 1:
+                return {}
+            time.sleep(0.005 * min(k + 1, 10))
+        except (OSError, ValueError):
+            return {}
+    return {}
 
 
 def _write(out, data):
@@ -348,8 +356,9 @@ def _write(out, data):
     p = _path(out)
     bak = p.with_name(p.name + ".bak")
     if not data:
+        from . import fsutil
         for f in (p, bak):
-            f.unlink(missing_ok=True)
+            fsutil._unlink_retry(f)   # a reader that has the file open for a moment must not fail the delete
         return
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(f"{p.name}.tmp.{os.getpid()}.{threading.get_ident()}")   # one temporary file per process and thread
@@ -359,7 +368,7 @@ def _write(out, data):
         fsutil._replace(tmp, p)
     finally:
         tmp.unlink(missing_ok=True)
-    bak.unlink(missing_ok=True)
+    fsutil._unlink_retry(bak)
 
 
 def keep_days():

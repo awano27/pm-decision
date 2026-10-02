@@ -51,6 +51,7 @@ Add-Type -Namespace K -Name W -MemberDefinition @'
 [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr h, out uint pid);
 [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
 [DllImport("user32.dll")] public static extern void mouse_event(int f, int x, int y, int d, int e);
+[DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, int flags, int extra);
 '@
 
 $script:PrevFg = [IntPtr]::Zero
@@ -61,8 +62,14 @@ function Assert-Foreground($w) {
   if ($cur -ne $h) {
     if ($script:PrevFg -eq [IntPtr]::Zero) { $script:PrevFg = $cur }   # the window the person was in: put back afterwards (Restore-Foreground)
     [void][K.W]::ShowWindow($h, 9); [void][K.W]::SetForegroundWindow($h); Start-Sleep -Milliseconds 400
+    if ([K.W]::GetForegroundWindow() -ne $h) {
+      # Windows refuses to let a process that is not in front take the front (foreground lock). A bare Alt press (no other key) lifts
+      # the lock for the next call. Nothing is typed into any window; the check below still refuses unless Teams really is in front.
+      [K.W]::keybd_event(0x12, 0, 0, 0); [K.W]::keybd_event(0x12, 0, 2, 0)
+      [void][K.W]::SetForegroundWindow($h); Start-Sleep -Milliseconds 400
+    }
   }
-  if ([K.W]::GetForegroundWindow() -ne $h) { Fail 'Teams is not the foreground window; no keys sent' }
+  if ([K.W]::GetForegroundWindow() -ne $h) { Fail 'Teams is not the foreground window; no keys sent (click the Teams window once, then retry)' }
 }
 function Save-Foreground($w) {
   # a fixed link may bring Teams to the front by itself: remember the window the person was in, so Restore-Foreground can go back

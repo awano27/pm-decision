@@ -85,6 +85,8 @@ class TestRetry(unittest.TestCase):
             self.assertEqual(ans["q"]["noul"], 0.9)
         finally:
             srv.shutdown()
+            srv.server_close()
+            self.assertEqual(srv.fileno(), -1)  # shutdown stops serve_forever; server_close releases the listening socket
 
     def test_same_file_twice_decides_once(self):
         with tempfile.TemporaryDirectory() as d:

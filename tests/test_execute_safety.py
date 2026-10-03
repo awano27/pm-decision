@@ -456,6 +456,7 @@ class TestThePostsAreSentTogether(Safety):
         self.assertLessEqual(bridge.attempts, 2)                                # not 20 x 20
         ap = notify.Approvals(self.out)
         self.assertGreaterEqual(len(ap.data["outbox"]), 20)                      # nothing was lost
+        self.assertFalse(ap.data.get("outbox_delivery_unknown"))                  # fake failure is known to be before send
         bridge.fail_posts = False
         self.cycle(bridge)
         self.assertEqual(notify.Approvals(self.out).data["outbox"], [])
@@ -566,6 +567,7 @@ class TestPostsWhileCollecting(Safety):
         self.assertEqual([p for p in bridge.posts if p.startswith("[kimeru 実行")], [])
         self.assertTrue(notify.Approvals(self.out).data["outbox"])
         bridge.fail_posts = False
+        self.assertFalse(notify.Approvals(self.out).data.get("outbox_delivery_unknown"))
         self.cycle(bridge)
         self.assertTrue(any(p.startswith(("[kimeru 実行 #1]", "[kimeru 実行 #1 ")) and "実行しました" in p for p in bridge.posts))
         self.assertFalse(notify.Approvals(self.out).data["outbox"])

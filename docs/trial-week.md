@@ -1,6 +1,8 @@
 # 1 週間の試し方
 
-実際の業務のメッセージで、kimeru の判断が合っているかを、1 週間で測ります。**本文は外に出ません**（PC の中だけ）。
+最初の試行では対象 ADO プロジェクトを 1 つに絞り、情報不足の確認依頼を扱います。導入前後の作業時間、下書きの利用状況、通知を本人が受け取ったか、作業を手動で完了したかを別々に記録します。1 週間は任意の観察期間で、改善や精度を約束するものではありません。追加シナリオを試す場合は pilot の結果と分けてください。**trial 集計は本文を共有しません**が、通常の case / `out` のファイルには本文が含まれる場合があります。
+
+通知受理は端末受信の証拠ではなく、端末受信も case 完了の証拠ではありません。これらは本人の確認を別々に記録してください。[要件ドラフト](requirements.md) は case の材料を明示的にローカルへ永続保存するので、作成前に保存先を確認します。
 
 ## 準備（初日、10 分）
 
@@ -20,6 +22,17 @@ python -m kimeru schedule install                # 5 分ごとの自動運転（
 python -m kimeru review            # 1 件ずつ「合っている / 違う / 分からない」。違うときは、正しい答えを選ぶ（20 件まで。--limit で変える）
 ```
 
+結果全体が違っていても、誤りを質問単位のラベルにできないときは、確認時に `w`（最終結果が違う）を選びます。これは最終結果の誤りとして記録し、質問単位の正誤ラベルは作りません。
+
+case ごとの before/after の時間と下書き利用状況は手動で計測し、次のローカルコマンドに明示します。これらの値は業務成果の自動測定ではありません。
+
+```powershell
+python -m kimeru trial record --case 1 --before-minutes 18 --after-minutes 12 --draft edited --outcome correct
+python -m kimeru trial report
+```
+
+通知経路の設定状態を読むだけなら `python -m kimeru onboarding status` を使います。通知を送る操作は別の `onboarding notification-test --send` で、送信受理後に端末を本人が確認してから `onboarding confirm TOKEN` を実行します。dry run / status は送信しません。pilot の case を自動的に完了にする機能ではありません。
+
 Teams は使いません。確かめた結果は、状態フォルダの `fixtures_user.jsonl`（評価用の形）と `reviews.jsonl`（正誤と、その判断をした判断モデルの名前）に、PC の中だけで残ります。元のイベントは、既定では要約の長さ（120 文字）までしか記録に残りません。長い依頼の全文を評価用の例に残したいときだけ、`python -m kimeru config set record_event_full 1` にします（記録が、それだけ敏感になります: [SECURITY.md](../SECURITY.md#記録に残る範囲と期間)）。
 
 ## 1 週間後
@@ -27,9 +40,14 @@ Teams は使いません。確かめた結果は、状態フォルダの `fixtur
 ```powershell
 python -m kimeru digest --week           # 件数、自動と人の割合、規則で決めた件数、重大な通知、承認の結果、一致率
 python -m kimeru digest --week --share   # Issue に貼れる形（数値と環境だけ。追加したグラフの名前は伏せます）
+python -m kimeru trial report --share    # 集計のみ。Jev と判断モデル不明の試行は除外
 python -m kimeru calibrate               # 係数を調整できるか（モデルは呼びません）
 python -m kimeru config show --share     # Issue に貼れる設定の一覧（パス・組織・サブスクリプションは出ません）
 ```
+
+`trial report --share` は個別 case の計測ペアを出さず、Jev と判断モデルの出所が分からない試行を除いて集計します。導入前の時間が未記録なら、時間差は `Unknown` のままです。承認から引き渡しまでの時間も証拠がない場合は `Unknown` と表示されます。
+
+引き渡しの集計は、ブリッジによる画面読み戻しと、本人が「自分とのチャットに表示された」と申告した記録を区別して保存します。どちらも自分とのチャットへの引き渡し確認であり、ADO 側の作業完了の証拠ではありません。
 
 - `calibrate` は、正誤を付けた質問が **100 問** 以上あるときだけ、変更を提案します。足りなければ、足りない数を表示して、何も変えません。
 - 提案は、データを 2 つに分け、片方で探し、もう片方で確かめて、確信して間違える件数が増えないときだけ出ます。

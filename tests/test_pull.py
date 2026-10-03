@@ -20,6 +20,7 @@ NOW = datetime(2026, 9, 25, 1, 0, tzinfo=timezone.utc)
 
 WI = {"id": 4812, "fields": {"System.WorkItemType": "Bug", "System.Title": "本番で全ユーザーがログインできない",
                              "System.CreatedBy": {"displayName": "Tanaka"}, "System.CreatedDate": "2026-09-25T00:30:00Z",
+                             "System.Description": "別途記録する説明: 現行画面では対象期間を選べない",
                              "Microsoft.VSTS.TCM.ReproSteps": "<div>再現: ログイン → 500</div>"}}
 ALERT = {"id": "/subscriptions/s1/providers/Microsoft.AlertsManagement/alerts/abc-123", "name": "checkout-api 5xx rate",
          "properties": {"essentials": {"severity": "Sev1", "monitorCondition": "Fired", "alertState": "New",
@@ -99,14 +100,15 @@ class TestAdoTenant(unittest.TestCase):
 
 class TestAdo(unittest.TestCase):
     def test_new_items_dropped_once_and_since_advances(self):
-        http = FakeHttp([("/wiql", {"workItems": [{"id": 4812}]}), ("/workitems?ids=4812", {"value": [WI]})])
+        http = FakeHttp([("/wiql", {"asOf": "2026-09-25T00:35:00Z", "workItems": [{"id": 4812}]}),
+                         ("/workitems?ids=4812", {"value": [WI]})])
         with tempfile.TemporaryDirectory() as d:
             inbox, out = Path(d) / "inbox", Path(d) / "out"
             self.assertEqual(pull.pull_ado("org", "proj", inbox, out, http=http, token="t", now=NOW), 1)
             self.assertIn("2026-09-24T01:00:00Z", http.calls[0][2]["query"])  # first run looks back 24h
             self.assertIn("timePrecision=true", http.calls[0][1])
             self.assertEqual(pull.pull_ado("org", "proj", inbox, out, http=http, token="t", now=NOW), 0)  # seen
-            self.assertIn("2026-09-25T01:00:00Z", http.calls[2][2]["query"])  # since advanced
+            self.assertIn("2026-09-25T00:30:00Z", http.calls[2][2]["query"])  # server asOf minus overlap
             files = list(inbox.glob("*.json"))
             self.assertEqual(len(files), 1)
             self.assertFalse(list(inbox.glob("*.tmp")))
@@ -301,7 +303,9 @@ class TestJudgeSees(unittest.TestCase):
     def test_work_item(self):
         ev = events.normalize({"eventType": "workitem.created", "resource": WI})[0]
         self.assertEqual(set(events.state_of(ev)), {"kind", "source", "id", "ts", "type", "title", "area", "created_by", "priority",
-                                                    "description", "acceptance_criteria"})
+                                                    "description", "repro_steps", "acceptance_criteria"})
+        self.assertEqual(ev["description"], "別途記録する説明: 現行画面では対象期間を選べない")
+        self.assertEqual(ev["repro_steps"], "再現: ログイン → 500")
 
     def test_meeting_item(self):
         ev = events.normalize({"title": "定例", "date": "2026-09-28", "text": "- 決定: 来週リリース"})[0]

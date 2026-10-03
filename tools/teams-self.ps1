@@ -26,10 +26,16 @@
   Personal Teams shows "(あなた)"; work accounts may show "(自分)". Override with -SelfMarker.
 #>
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('status', 'open', 'post', 'send', 'read', 'diag', 'learn', 'chats', 'readchat')][string]$Action,
+  [Parameter(Mandatory = $true)][ValidateSet('status', 'open', 'post', 'send', 'read', 'diag', 'learn', 'chats', 'readchat', 'test-messages', 'test-compare', 'test-readback', 'test-container', 'test-failure', 'test-send-once')][string]$Action,
   [string]$Text = '',
   [string]$ChatId = '',      # readchat: the chat to open (its id from `chats`)
   [int]$Count = 5,           # readchat: how many of the last messages to read
+  [string]$ReadbackText = '',
+  [string]$TestRows = '',
+  [string]$PriorIds = '',
+  [string]$PriorAllIds = '',
+  [ValidateSet('pre-send', 'attempted', 'sent')][string]$TestDeliveryState = 'pre-send',
+  [int]$PriorCount = 0,
   [string]$Preview = '',     # readchat: the start of the chat's list preview (a screen that reports no selection is checked against it)
   [switch]$Send,
   [string]$SelfMarker = $env:KIMERU_SELF_MARKER   # e.g. "自分" if your Teams shows another word
@@ -88,9 +94,116 @@ function Restore-Foreground {
 
 function Out-Json($o) { $o | ConvertTo-Json -Compress -Depth 5 }
 $script:InRead = $false   # readchat: a failure must not end the script before the chat is put back
+$script:DeliveryTyped = $false
+$script:DeliveryAttempted = $false
+$script:DeliverySent = $false
+function Get-SentEvidence {
+  if ($script:DeliverySent) { return $true }
+  if ($script:DeliveryAttempted) { return $null }
+  $false
+}
+function Get-DeliveryFailureEvidence($msg) {
+  # A send is definitely absent only when the bridge never entered a send action.
+  # Once Invoke/SendKeys is attempted, failures are ambiguous until readback proves delivery.
+  $sent = Get-SentEvidence
+  return @{ ok = $false; error = $msg; typed = [bool]$script:DeliveryTyped; sent = $sent
+            readback = @{ matched = $false; message_id = '' } }
+}
+function Get-SendGuardFailure([bool]$SelfChat, [bool]$ComposeOwned) {
+  if (-not $SelfChat) { return 'window changed before send (title is not the self chat); aborted' }
+  if (-not $ComposeOwned) { return 'compose box does not start with [kimeru; not sending' }
+  return ''
+}
+function Get-KeySendGuardFailure([bool]$Foreground, [bool]$ComposeFocused) {
+  if (-not $Foreground) { return 'Teams is not the foreground window; no keys sent (click the Teams window once, then retry)' }
+  if (-not $ComposeFocused) { return 'keyboard focus is not the compose box; nothing sent' }
+  return ''
+}
+function Invoke-SendOnce([bool]$ButtonAvailable, [scriptblock]$InvokeButton, [scriptblock]$SendKey,
+                         [scriptblock]$WaitForSent, $Button = $null) {
+  # Once an operation is attempted, never send again in this bridge call. UI response/readback may be delayed.
+  $script:DeliveryAttempted = $true
+  if ($ButtonAvailable) {
+    try { [void](& $InvokeButton $Button) } catch {}
+  } else {
+    try { [void](& $SendKey '^{ENTER}') } catch {}
+  }
+  $cleared = $false
+  try { $cleared = [bool](& $WaitForSent) } catch {}
+  if ($ButtonAvailable) { return $(if ($cleared) { 'button' } else { 'button-unknown' }) }
+  return $(if ($cleared) { 'keys:^{ENTER}' } else { 'keys-unknown' })
+}
 function Fail($msg) {
   if ($script:InRead) { throw [System.Exception]::new('KFAIL:' + $msg) }
-  Out-Json @{ ok = $false; error = $msg }; exit 2
+  Out-Json (Get-DeliveryFailureEvidence $msg); exit 2
+}
+
+function Normalize-MeaningfulText([string]$s) {
+  # Teams may render line breaks and non-breaking spaces differently. Collapse whitespace
+  # runs, but keep the boundary between words (unlike the old remove-all-whitespace check).
+  (($s -replace '[\u200b\ufeff]', '') -replace '[\s\u00a0]+', ' ').Trim()
+}
+function Runtime-Identity($el) {
+  try { return (@($el.GetRuntimeId()) -join '.') } catch { return '' }
+}
+function Select-MessageContainerId($ancestors, [string]$fallback) {
+  foreach ($candidate in $ancestors) {
+    $aid = [string]$candidate.automation_id
+    $kind = [string]$candidate.kind
+    $individualMessage = $aid -match '(?i)^(?:message|chat-message|conversation-message)(?:[-_](?:item|bubble|body|content|container))(?:[-_][a-z0-9]+)?$'
+    if ($kind -in @('Group', 'ListItem') -and $individualMessage -and
+        $aid -notmatch '(?i)(list|pane|root|collection|thread)') {
+      if ($candidate.runtime_id) { return [string]$candidate.runtime_id }
+    }
+  }
+  $fallback
+}
+function Get-MessageContainerIdentity($el) {
+  $fallback = Runtime-Identity $el
+  $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+  $p = $walker.GetParent($el)
+  $ancestors = @()
+  for ($i = 0; $p -and $i -lt 6; $i++) {
+    $kind = ([string]$p.Current.ControlType.ProgrammaticName -split '\.')[-1]
+    $ancestors += [pscustomobject]@{ automation_id = [string]$p.Current.AutomationId; kind = $kind; runtime_id = (Runtime-Identity $p) }
+    $p = $walker.GetParent($p)
+  }
+  Select-MessageContainerId $ancestors $fallback
+}
+function Collapse-MessageRows([object[]]$rows, [int]$count = 100) {
+  $seen = @{}
+  $messages = @()
+  $flat = New-Object 'System.Collections.Generic.List[object]'
+  foreach ($value in $rows) {
+    if ($value -is [array]) { foreach ($inner in $value) { $flat.Add($inner) } }
+    else { $flat.Add($value) }
+  }
+  foreach ($row in @($flat | Sort-Object { [double]$_.y })) {
+    $id = [string]$row.container_id
+    if (-not $id) { $id = [string]$row.runtime_id }
+    if (-not $id -or $seen.ContainsKey($id)) { continue }
+    $seen[$id] = $true
+    $messages += [ordered]@{ message_id = $id; text = Normalize-MeaningfulText ([string]$row.text); sender = ''; time = '' }
+  }
+  @($messages | Select-Object -Last $count)
+}
+function Test-MeaningfulTextMatch([string]$left, [string]$right) {
+  (Normalize-MeaningfulText $left) -ceq (Normalize-MeaningfulText $right)
+}
+function Find-NewMatchingMessage($messages, [string]$text, $priorIds, [int]$priorCount = 0, $priorAllIds = $null) {
+  if ($priorAllIds) {
+    $currentIds = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($message in $messages) { [void]$currentIds.Add([string]$message.message_id) }
+    foreach ($id in $priorAllIds) { if (-not $currentIds.Contains([string]$id)) { return @{ matched = $false; message_id = '' } } }
+  }
+  $matches = @($messages | Where-Object {
+    (Test-MeaningfulTextMatch $text ([string]$_.text)) -and -not $priorIds.Contains([string]$_.message_id)
+  })
+  $matchingCount = @($messages | Where-Object { Test-MeaningfulTextMatch $text ([string]$_.text) }).Count
+  if ($matchingCount -gt $priorCount -and $matches.Count -eq 1 -and $matches[0].message_id) {
+    return @{ matched = $true; message_id = [string]$matches[0].message_id }
+  }
+  @{ matched = $false; message_id = '' }
 }
 
 # ---- one Teams operation at a time, and never while the person is typing / moving the mouse ----
@@ -402,19 +515,25 @@ function Get-ChatMessages($w, $count) {
     if ($r.Width -le 0 -or $r.Height -le 0 -or $r.X -lt ($listRight - 2)) { continue }
     $n = ([string]$e.Current.Name).Trim()
     if ($n.Length -lt 1) { continue }
-    if ([string]$e.Current.AutomationId -match '^(message-body|content-|body-)') { $byId += [pscustomobject]@{ y = $r.Y; text = $n } }
+    if ([string]$e.Current.AutomationId -match '^(message-body|content-|body-)') { $byId += [pscustomobject]@{ y = $r.Y; text = $n; container_id = (Get-MessageContainerIdentity $e) } }
     elseif ($n.Length -ge 4 -and $r.Y -gt ($wr.Y + $wr.Height * 0.12) -and $r.Y -lt ($wr.Y + $wr.Height * 0.88) -and
-            $e.Current.ControlType -in @($CT::ListItem, $CT::Group, $CT::Text)) { $byName += [pscustomobject]@{ y = $r.Y; text = $n } }
+            $e.Current.ControlType -in @($CT::ListItem, $CT::Group, $CT::Text)) { $byName += [pscustomobject]@{ y = $r.Y; text = $n; container_id = (Get-MessageContainerIdentity $e) } }
   }
   $how = if ($byId.Count) { 'ids' } else { 'names' }
   $rows = if ($byId.Count) { $byId } else { $byName }
-  $seen = @{}; $msgs = @()
-  foreach ($x in ($rows | Sort-Object y)) {
-    $t = ($x.text -replace '\s+', ' ')
-    if ($t.Length -gt 4000) { $t = $t.Substring(0, 4000) }
-    if (-not $seen.ContainsKey($t)) { $seen[$t] = 1; $msgs += [ordered]@{ text = $t; sender = ''; time = '' } }
+  [pscustomobject]@{ how = $how; messages = @(Collapse-MessageRows $rows $Count) }
+}
+
+function Find-PostedReadback([string]$text, $priorIds, [int]$priorCount, $priorAllIds) {
+  for ($i = 0; $i -lt 20; $i++) {
+    $current = Get-TeamsWindow
+    if (-not (Test-SelfTitleStrict $current)) { return @{ matched = $false; message_id = '' } }
+    $read = Get-ChatMessages $current 100
+    $found = Find-NewMatchingMessage $read.messages $text $priorIds $priorCount $priorAllIds
+    if ($found.matched) { return $found }
+    Start-Sleep -Milliseconds 250
   }
-  [pscustomobject]@{ how = $how; messages = @($msgs | Select-Object -Last $Count) }
+  @{ matched = $false; message_id = '' }
 }
 
 function Mask($s) {
@@ -518,6 +637,58 @@ function Open-SelfChat($w) {
         ", selected chats: " + $(if ($sel) { $sel } else { 'none' }) + ")")
 }
 
+if ($Action -eq 'test-compare') {
+  Out-Json @{ matches = (Test-MeaningfulTextMatch $Text $ReadbackText) }; exit 0
+}
+if ($Action -eq 'test-failure') {
+  switch ($TestDeliveryState) {
+    'pre-send' { $script:DeliveryTyped = $false; $script:DeliveryAttempted = $false; $script:DeliverySent = $false }
+    'attempted' { $script:DeliveryTyped = $false; $script:DeliveryAttempted = $true; $script:DeliverySent = $false }
+    'sent' { $script:DeliveryTyped = $true; $script:DeliveryAttempted = $true; $script:DeliverySent = $true }
+  }
+  Out-Json (Get-DeliveryFailureEvidence 'test failure'); exit 0
+}
+if ($Action -eq 'test-send-once') {
+  if (-not $TestRows -or -not (Test-Path -LiteralPath $TestRows)) { Out-Json @{ error = 'test scenario file not found' }; exit 2 }
+  $script:SendScenario = Get-Content -Raw -Encoding UTF8 -LiteralPath $TestRows | ConvertFrom-Json
+  $script:SendCounts = @{ invokes = 0; keys = 0; key_values = @() }
+  $script:DeliveryTyped = $true
+  $guard = Get-SendGuardFailure ([bool]$script:SendScenario.self_ok) ([bool]$script:SendScenario.compose_ok)
+  if (-not $guard -and -not [bool]$script:SendScenario.button_present) {
+    $foregroundOk = if ($null -eq $script:SendScenario.foreground_ok) { $true } else { [bool]$script:SendScenario.foreground_ok }
+    $guard = Get-KeySendGuardFailure $foregroundOk ([bool]$script:SendScenario.focused)
+  }
+  $via = 'guarded'
+  if (-not $guard) {
+    $invoke = { param($button) $script:SendCounts.invokes++; if ($script:SendScenario.invoke_throws) { throw 'mock invoke failure' } }
+    $key = { param($value) $script:SendCounts.keys++; $script:SendCounts.key_values += $value; if ($script:SendScenario.key_throws) { throw 'mock key failure' } }
+    $wait = { [bool]$script:SendScenario.wait_sent }
+    $via = Invoke-SendOnce ([bool]$script:SendScenario.button_present) $invoke $key $wait ([pscustomobject]@{ mock = $true })
+  }
+  Out-Json @{ via = $via; guard = $guard; invokes = $script:SendCounts.invokes; keys = $script:SendCounts.keys;
+              key_values = @($script:SendCounts.key_values); attempted = $script:DeliveryAttempted;
+              sent = (Get-SentEvidence) }; exit 0
+}
+if ($Action -eq 'test-messages') {
+  if (-not $TestRows -or -not (Test-Path -LiteralPath $TestRows)) { Fail 'test rows file not found' }
+  $rows = @(Get-Content -Raw -Encoding UTF8 -LiteralPath $TestRows | ConvertFrom-Json)
+  Out-Json @{ messages = @(Collapse-MessageRows $rows 100) }; exit 0
+}
+if ($Action -eq 'test-readback') {
+  if (-not $TestRows -or -not (Test-Path -LiteralPath $TestRows)) { Fail 'test rows file not found' }
+  $rows = @(Get-Content -Raw -Encoding UTF8 -LiteralPath $TestRows | ConvertFrom-Json)
+  $prior = New-Object 'System.Collections.Generic.HashSet[string]'
+  foreach ($id in ($PriorIds -split ',')) { if ($id) { [void]$prior.Add($id) } }
+  $priorAll = New-Object 'System.Collections.Generic.HashSet[string]'
+  foreach ($id in ($PriorAllIds -split ',')) { if ($id) { [void]$priorAll.Add($id) } }
+  $messages = @(Collapse-MessageRows $rows 100)
+  Out-Json @{ readback = (Find-NewMatchingMessage $messages $Text $prior $PriorCount $priorAll) }; exit 0
+}
+if ($Action -eq 'test-container') {
+  if (-not $TestRows -or -not (Test-Path -LiteralPath $TestRows)) { Fail 'test rows file not found' }
+  $snapshot = Get-Content -Raw -Encoding UTF8 -LiteralPath $TestRows | ConvertFrom-Json
+  Out-Json @{ identity = (Select-MessageContainerId $snapshot.ancestors ([string]$snapshot.fallback)) }; exit 0
+}
 if ($Action -in 'open', 'post', 'send', 'read', 'readchat') { Enter-UiLock $(if ($Action -eq 'readchat') { 60000 } else { 180000 }) }
 if ($Action -in 'post', 'send') { Wait-UserIdle 3 60 }   # writing moves the screen: not while the person works. readchat does not wait: it checks and postpones
 $w = Get-TeamsWindow
@@ -740,32 +911,55 @@ function Wait-Sent($w) {
   for ($i = 0; $i -lt 12; $i++) { Start-Sleep -Milliseconds 250; if (-not (Test-BoxHasKimeru $w)) { return $true } }
   $false
 }
+function Send-KeyOnce($key) { [System.Windows.Forms.SendKeys]::SendWait($key) }
 
 function Send-Box($w) {
   # send only what kimeru wrote: the self chat (title with the learned name) + compose box starts with [kimeru
-  if (-not (Test-SelfTitleStrict (Get-TeamsWindow))) { Fail 'window changed before send (title is not the self chat); aborted' }
-  if (-not (Test-BoxHasKimeru $w)) { Fail 'compose box does not start with [kimeru; not sending' }
+  $guard = Get-SendGuardFailure (Test-SelfTitleStrict (Get-TeamsWindow)) (Test-BoxHasKimeru $w)
+  if ($guard) { Fail $guard }
   # 1) the Send button: works whether Enter or Ctrl+Enter sends in this user's Teams settings
   $btn = Find-All $w $CT::Button | Where-Object { $_.Current.Name -match '^(送信|Send)(\s*\(|$)' -and $_.Current.IsEnabled } | Select-Object -First 1
   if ($btn) {
-    try { $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch {}
-    if (Wait-Sent $w) { return 'button' }
+    $invoke = { param($target) $target.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
+    $wait = { Wait-Sent $w }
+    # A button invocation is the only send action in this call, even if its response is delayed or throws.
+    return Invoke-SendOnce $true $invoke {} $wait $btn
   }
-  # 2) keys, re-checking the target each time (Enter may only insert a line break)
-  foreach ($k in @('^{ENTER}', '{ENTER}')) {
-    if (-not (Test-SelfTitleStrict (Get-TeamsWindow))) { Fail 'window changed before send (title is not the self chat); aborted' }
-    if (-not (Test-BoxHasKimeru $w)) { return 'keys' }
-    Assert-Foreground $w
-    (Get-Box $w).SetFocus(); Start-Sleep -Milliseconds 150
-    Assert-Foreground $w
-    if (-not (Test-BoxFocused)) { Fail 'keyboard focus is not the compose box; nothing sent' }
-    [System.Windows.Forms.SendKeys]::SendWait($k)
-    if (Wait-Sent $w) { return "keys:$k" }
-  }
-  Fail 'message was not sent (compose box still holds the text); press Send in Teams by hand'
+  # With no button, use the configured legacy key fallback once, after checking its focus target.
+  $guard = Get-SendGuardFailure (Test-SelfTitleStrict (Get-TeamsWindow)) (Test-BoxHasKimeru $w)
+  if ($guard) { Fail $guard }
+  Assert-Foreground $w
+  (Get-Box $w).SetFocus(); Start-Sleep -Milliseconds 150
+  Assert-Foreground $w
+  $guard = Get-KeySendGuardFailure $true (Test-BoxFocused)
+  if ($guard) { Fail $guard }
+  $sendKey = { param($key) Send-KeyOnce $key }
+  $wait = { Wait-Sent $w }
+  return Invoke-SendOnce $false {} $sendKey $wait
 }
 
-if ($Action -eq 'send') { $how = Send-Box $w; Out-Json @{ ok = $true; sent = $true; via = $how }; exit 0 }
+if ($Action -eq 'send') {
+  $box = Get-Box $w
+  $Text = Get-BoxText $box
+  if (-not $Text.Trim().StartsWith('[kimeru')) { Fail 'compose box does not start with [kimeru; not sending' }
+  $script:DeliveryTyped = $true
+  $beforeWindow = Get-TeamsWindow
+  if (-not (Test-SelfTitleStrict $beforeWindow)) { Fail 'the window title changed before the self-chat readback baseline; nothing sent' }
+  # Leave one slot for the message we expect to add; otherwise a 100-item window
+  # would always evict its oldest prior ID on a successful send.
+  $priorMessages = @(Get-ChatMessages $beforeWindow 99).messages
+  $priorIds = New-Object 'System.Collections.Generic.HashSet[string]'
+  $priorAllIds = New-Object 'System.Collections.Generic.HashSet[string]'
+  $priorCount = 0
+  foreach ($old in $priorMessages) {
+    [void]$priorAllIds.Add([string]$old.message_id)
+    if (Test-MeaningfulTextMatch ([string]$old.text) $Text) { $priorCount++; [void]$priorIds.Add([string]$old.message_id) }
+  }
+  $how = Send-Box $w
+  $readback = Find-PostedReadback $Text $priorIds $priorCount $priorAllIds
+  if ($readback.matched) { $script:DeliverySent = $true }
+  Out-Json @{ ok = $true; typed = $script:DeliveryTyped; sent = (Get-SentEvidence); via = $how; readback = $readback }; exit 0
+}
 
 if ($Action -eq 'post') {
   if (-not $Text.StartsWith('[kimeru')) { Fail 'refusing to post text that does not start with [kimeru' }
@@ -811,8 +1005,10 @@ if ($Action -eq 'post') {
   }
   $box = Get-Box $w
   # the box must hold exactly the planned text: an old draft left in the box would otherwise go out with it
-  $typed = (Squash (Get-BoxText $box)) -eq (Squash $Text)
+  $typed = Test-MeaningfulTextMatch (Get-BoxText $box) $Text
+  $script:DeliveryTyped = $typed
   $sent = $false
+  $readback = @{ matched = $false; message_id = '' }
   if ($Send) {
     if (-not $typed) {
       # take our paste back out when the box holds only kimeru text; a person's draft stays as it was
@@ -822,9 +1018,24 @@ if ($Action -eq 'post') {
       Fail ("compose box does not hold exactly the planned text ($shape); not sent" +
             $(if ($cleared) { '; the pasted text was removed again' } else { '; clear the box in Teams and retry' }))
     }
-    [void](Send-Box $w); $sent = $true
+    $priorIds = New-Object 'System.Collections.Generic.HashSet[string]'
+    $priorAllIds = New-Object 'System.Collections.Generic.HashSet[string]'
+    $beforeWindow = Get-TeamsWindow
+    if (-not (Test-SelfTitleStrict $beforeWindow)) { Fail 'the window title changed before the self-chat readback baseline; nothing sent' }
+    $priorMessages = @(Get-ChatMessages $beforeWindow 99).messages
+    $priorCount = 0
+    foreach ($old in $priorMessages) {
+      [void]$priorAllIds.Add([string]$old.message_id)
+      if (Test-MeaningfulTextMatch ([string]$old.text) $Text) {
+        $priorCount++
+        [void]$priorIds.Add([string]$old.message_id)
+      }
+    }
+    [void](Send-Box $w); $sent = Get-SentEvidence
+    $readback = Find-PostedReadback $Text $priorIds $priorCount $priorAllIds
+    if ($readback.matched) { $script:DeliverySent = $true; $sent = $true }
   }
-  Out-Json @{ ok = $true; typed = $typed; sent = $sent }; exit 0
+  Out-Json @{ ok = $true; typed = $typed; sent = $sent; readback = $readback }; exit 0
 }
 
 if ($Action -eq 'read') {

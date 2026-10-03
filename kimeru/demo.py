@@ -43,7 +43,8 @@ class DemoTeams:
         self.posts.append(text)
         if send and text.startswith("[kimeru #"):
             self.timeline.append("P:" + text.split("#", 1)[1].split("]", 1)[0])
-        return {"ok": True}
+        return {"ok": True, "typed": True, "sent": bool(send),
+                "readback": {"matched": bool(send), "message_id": f"demo-{len(self.posts)}" if send else ""}}
 
     def read(self):
         return {"ok": True, "timeline": list(self.timeline)}

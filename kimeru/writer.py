@@ -10,7 +10,7 @@ the full text in the self chat (notify.py) and answers OK / NG / 修正 N <指�
 
   KIMERU_WRITER=copilot   GitHub Copilot CLI (`copilot`, the user's own sign-in; organization contract)
   KIMERU_WRITER=claude    Claude Code CLI (`claude -p`, the user's own login)
-  KIMERU_WRITER=codex     OpenAI Codex CLI (`codex exec`, the user's own ChatGPT / API login)
+  KIMERU_WRITER=codex     currently falls back: `codex exec` has no supported no-tools guarantee
   KIMERU_WRITER=grok      xAI Grok CLI (`grok --prompt-file`, the user's own login)
   KIMERU_WRITER=cmd       any other CLI: KIMERU_WRITER_CMD="<command that reads the prompt on stdin and prints the answer>"
   KIMERU_WRITER=m365      no LLM call: the approval post is followed by a ready-to-paste request for
@@ -65,7 +65,7 @@ PURPOSE = {
     "ado.create": "作業項目の説明（2〜4 行。何を確認・作成すれば完了か。材料の具体名を使う）",
 }
 LABEL = {"teams.reply": "返信", "teams.post": "チャネル投稿", "ado.comment": "チケットへのコメント", "ado.create": "作業項目の説明"}
-EVENT_FIELDS = ("author", "text", "item", "meeting", "title", "description", "work_item_type",
+EVENT_FIELDS = ("author", "text", "item", "meeting", "title", "description", "repro_steps", "work_item_type",
                 "rule", "severity", "condition")
 MAX_FIELD = 2000
 TOKENS = re.compile(
@@ -314,11 +314,9 @@ class CopilotWriter:
 
 
 class CodexWriter:
-    """OpenAI Codex CLI, one non-interactive turn: read-only sandbox, no session kept, empty folder; the answer is read
-    from the file Codex writes (its stdout also carries progress lines)."""
+    """Fail closed until Codex CLI can guarantee that no tools are available to the writer."""
     NAME = "codex"
-    # Fixed on purpose: without -m, Codex uses whatever ~/.codex/config.toml says (here: the largest model at maximum
-    # reasoning, slow and heavy for a 3-sentence reply). `codex debug models` lists the names this login can use.
+    # Keep configured model preferences intact while the Codex route is fail-closed.
     DEFAULT_MODEL = "gpt-6-luna"
     DEFAULT_EFFORT = "low"
 
@@ -334,17 +332,9 @@ class CodexWriter:
     def ask_text(self, prompt):
         if not self.exe:
             raise RuntimeError("codex CLI not found (npm i -g @openai/codex)")
-        with tempfile.TemporaryDirectory() as d:
-            out = os.path.join(d, "answer.txt")
-            cmd = [self.exe, "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "--color", "never",
-                   "-o", out] + (["-m", self.model] if self.model else []) \
-                + (["-c", f'model_reasoning_effort="{self.effort}"'] if self.effort else []) + ["-"]
-            text = _run(cmd, prompt, self.timeout)
-            try:
-                with open(out, encoding="utf-8") as h:
-                    return h.read() or text
-            except OSError:
-                return text
+        # --ignore-user-config preserves CODEX_HOME authentication, and --disable can turn off
+        # known features, but neither is a supported guarantee that every current/future tool is absent.
+        raise RuntimeError("Cannot guarantee a tool-free Codex invocation with supported CLI controls; using template fallback")
 
 
 class GrokWriter:

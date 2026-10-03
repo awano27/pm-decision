@@ -145,7 +145,8 @@
       "_comment": "safety net: a work item that states customers/production are broken right now is P1 whatever the model scores Exclude vetoes only within the same field; test-env wording next to a production cue goes to a person (mixed).",
       "fields": [
         "title",
-        "description"
+        "description",
+        "repro_steps"
       ],
       "patterns": [
         "(本番|全ユーザー|全顧客|多数の顧客|顧客から)[^。]{0,40}(できない|できません|不可|クラッシュ|落ちる|送られない|届かない|0 ?円|表示されない|エラー)",
@@ -200,7 +201,8 @@
       "kind": "match",
       "_comment": "explicit reproduction steps or expected result -> ready; anything else is asked to the model",
       "fields": [
-        "description"
+        "description",
+        "repro_steps"
       ],
       "patterns": [
         "再現|期待(する|される)?(結果|値|動作)?|実際(の結果)?[:：]",

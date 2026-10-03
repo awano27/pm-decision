@@ -145,6 +145,22 @@ def _iso(dt):
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+ADO_OVERLAP = timedelta(minutes=5)
+
+
+def _aware_utc(value):
+    """Parse a server timestamp, rejecting malformed or timezone-free values."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None or dt.utcoffset() is None:
+        return None
+    return dt.astimezone(timezone.utc)
+
+
 def _drop(inbox, name, payload):
     inbox = Path(inbox)
     inbox.mkdir(parents=True, exist_ok=True)
@@ -180,7 +196,15 @@ def pull_ado(org, project, inbox, out, http=http_json, token=None, now=None, fir
     wiql = ("SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project "
             f"AND [System.CreatedDate] >= '{since}' ORDER BY [System.CreatedDate] ASC")
     res = http("POST", f"{base}/wiql?timePrecision=true&api-version=7.1", token, {"query": wiql})
-    ids = [w["id"] for w in res.get("workItems", []) if w["id"] not in sec["seen"]]
+    # WIQL's asOf is the server-side query watermark. Keep a small overlap so a
+    # delayed or boundary-timestamp item can be seen on the next poll too.
+    asof = _aware_utc(res.get("asOf"))
+    if asof and asof > now.astimezone(timezone.utc) + ADO_OVERLAP:
+        asof = None                  # a future server timestamp could skip unseen work
+    old_seen = sec.get("seen") or []
+    seen = {str(v) for v in old_seen}
+    seen_at = sec.setdefault("seen_at", {})
+    ids = [w["id"] for w in res.get("workItems", []) if str(w.get("id")) not in seen]
     n = 0
     for i in range(0, len(ids), 200):  # workitems batch limit
         chunk = ids[i:i + 200]
@@ -190,10 +214,27 @@ def pull_ado(org, project, inbox, out, http=http_json, token=None, now=None, fir
                                                    "resource": {"id": wi["id"], "fields": wi.get("fields", {})},
                                                    "kimeru_origin": {"org": org, "project": project}})
             sec["seen"].append(wi["id"])
+            created = _aware_utc((wi.get("fields") or {}).get("System.CreatedDate"))
+            if created:
+                seen_at[str(wi["id"])] = _iso(created)
             n += 1
-        sec["seen"] = sec["seen"][-2000:]
         st.save()  # a later failure must not re-deliver what is already in the inbox
-    sec["since"] = _iso(now)
+    if asof:
+        next_since = _iso(asof - ADO_OVERLAP)
+        cutoff = _aware_utc(next_since)
+        # IDs from the old list have no timestamp and are retained. New IDs can
+        # be pruned once they fall outside the overlap window.
+        if cutoff:
+            keep = []
+            for value in sec["seen"]:
+                key = str(value)
+                created = _aware_utc(seen_at.get(key))
+                if not created or created >= cutoff:
+                    keep.append(value)
+                else:
+                    seen_at.pop(key, None)
+            sec["seen"] = list(dict.fromkeys(keep))
+        sec["since"] = next_since
     st.save()
     return n
 
@@ -314,15 +355,19 @@ def teams_events(chats, sec, include_existing=False):
         t = str(c.get("time") or "").strip()
         prev = sigs.get(cid)
         if isinstance(prev, str):                      # saved by an older version: take a new baseline, emit nothing
-            sigs[cid] = {"p": sig, "t": t, "n": 0}
+            sigs[cid] = {"p": sig, "t": t, "n": 0, "mention": bool(c.get("mention"))}
             continue
         if prev is None:
             new_msg = True
-            entry = sigs[cid] = {"p": sig, "t": t, "n": 0}
+            entry = sigs[cid] = {"p": sig, "t": t, "n": 0, "mention": bool(c.get("mention"))}
         else:
             entry = prev
+            old_mention = entry.get("mention")
             new_msg = entry.get("p") != sig or _resent(entry.get("t"), t)
             entry["p"], entry["t"] = sig, t
+            if kind == "group" and old_mention is False and bool(c.get("mention")):
+                new_msg = True
+            entry["mention"] = bool(c.get("mention"))
         if not new_msg or (first and not include_existing):
             continue
         if not preview or preview.startswith(OWN_PREFIXES):

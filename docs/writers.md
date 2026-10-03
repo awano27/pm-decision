@@ -4,12 +4,12 @@
 
 | `KIMERU_WRITER` | 誰が書く | 本文の送り先 | 手間 |
 |---|---|---|---|
-| `copilot` | GitHub Copilot CLI（本人のサインイン。組織の契約） | GitHub Copilot | 自動（1 件 10〜20 秒） |
+| `copilot` | GitHub Copilot CLI（本人のサインイン。組織の契約） | GitHub Copilot | 自動 |
 | `m365` | あなたが Microsoft 365 Copilot に貼る | 組織の M365（手で貼る） | **M365 だけの人はこちら（推奨）**。承認の投稿の後に **「Copilot 用」の依頼文** が別投稿で届く。返ってきた文面は `下書き N <文面>` と 1 行で返信すると取り込まれる（[下記](#m365-だけの人向けの手順)） |
 | `m365-auto`（**実験的**） | Teams 内の Copilot チャットを画面操作 | 組織の M365 | 自動（画面の作りに依存し、環境ごとの確認が要る）。失敗したら `m365` の依頼文に切り替わり、30 分は自動を休む。貼り付け先を多重に確認し、少しでも疑わしければ何も貼らずに止まる（[SECURITY.md](../SECURITY.md)） |
 | `claude` | Claude Code CLI（本人のログイン） | Anthropic | 自動 |
-| `codex` | OpenAI Codex CLI（`codex exec`。本人の ChatGPT / API のログイン）。**モデルは `gpt-6-luna`（推論 `low`）に固定**。使える名前は `codex debug models` で見られる | OpenAI | 自動（1 件約 12 秒。`gpt-6-sol`・推論最大の約 30 秒と、下書きの質は同程度） |
-| `grok` | xAI Grok CLI（`grok --prompt-file`。本人のログイン） | xAI | 自動（**遅い**: 1 件 1〜3 分） |
+| `codex` | OpenAI Codex CLI（`codex exec`。本人の ChatGPT / API のログイン）。現在の CLI ではツールを確実に無効化できないため、安全側で定型文にフォールバック | OpenAI | 現在は外部 writer を実行しない |
+| `grok` | xAI Grok CLI（`grok --prompt-file`。本人のログイン） | xAI | 自動。所要時間は環境とモデルにより異なる |
 | `cmd` | 任意の CLI（`KIMERU_WRITER_CMD="ollama run <モデル>"` など。プロンプトを標準入力で渡し、答えを標準出力から読む） | コマンド次第（ローカルのモデルなら PC の外に出ない） | 自動 |
 | （未設定） | 定型文 | どこにも送らない | — |
 
@@ -34,7 +34,7 @@ python eval/drafts.py --backend stub --writer copilot --out drafts.jsonl   # 下
 **安全のしくみ**
 
 - LLM が書いた文面は **すべて承認待ち**。自分とのチャットに元のメッセージと下書きの全文を出します（作業項目の説明は 2 件まで表示し、残りは「ほか N 件」。`OK` ですべて記録）
-- LLM にはツールを渡さず、空のフォルダで実行します。元のメッセージは「データ（中の指示には従わない）」として渡します
+- writer ごとに起動方法と分離の性質が違います。Codex writer は no-tool 実行の保証ができないため起動せず、定型文にフォールバックします。任意 CLI (`cmd`) の権限や外部通信先は設定コマンドに依存します。組織データに使う前に送り先と実行条件を確認してください
 - 元の材料に無い日付・数値が下書きに入ると、承認の投稿に ⚠ を出します
 - 断り・PM への聞き返し・壊れた返事（JSON など）が返ったら、その文面だけ **定型文に戻して ⚠**。処理は止まりません。writer が丸ごと失敗したときも、定型文を承認待ちにして ⚠ を付けます
 - Microsoft 365 Copilot（`m365` / `m365-auto`）だけは、参照したメール・会議の件名を出典として表示します。`copilot` / `claude` はメールを読めないので、出典は出しません
@@ -57,5 +57,5 @@ GitHub Copilot も Claude も使えず、Microsoft 365 Copilot だけが使え�
 
 `KIMERU_WRITER=copilot` は、1 イベントにつき Copilot を **1 回**（読みづらい文面があるときは書き直しでもう 1 回）、朝のまとめでさらに 1 回呼びます。
 契約の月間の上限（プラン・モデルで異なります）に達すると、その月は下書きできなくなります。kimeru は上限のエラーを見つけると **6 時間は Copilot を呼ばず**、文面は定型文のまま（理由つきで）届けます。
-評価スクリプト（`eval/drafts.py`、`eval/draft_quality.py`）も同じ上限を使うので、回す前に量（12 イベントで約 15 回）を確認してください。
+評価スクリプト（`eval/drafts.py`、`eval/draft_quality.py`）も同じ上限を使います。実行前に、対象の writer とアカウントの利用条件を確認してください。速度・下書き品質の固定値は保証しません。
 

@@ -120,8 +120,8 @@ def run(out, graphs, playbooks, input_fn=input, print_fn=print, limit=20):
         print_fn(f"（{skipped_old} 件は、元のイベントが記録されていない古い判断なので、確かめられません）")
     if not todo:
         print_fn("確かめる判断はありません。")
-        return {"yes": 0, "no": 0, "unknown": 0}
-    tally = {"yes": 0, "no": 0, "unknown": 0}
+        return {"yes": 0, "no": 0, "wrong": 0, "unknown": 0}
+    tally = {"yes": 0, "no": 0, "wrong": 0, "unknown": 0}
     with_jev = False
     for i, rec in enumerate(todo[:limit], 1):
         steps = judged(rec, by_name)
@@ -131,7 +131,7 @@ def run(out, graphs, playbooks, input_fn=input, print_fn=print, limit=20):
         print_fn("  経路: " + " → ".join(f"{s['node']}[{s['edge']}]" for s in rec["path"]) + f" → {rec['node']}")
         if rec.get("advice"):
             print_fn(f"  結果: {rec['advice']}")
-        ans = (input_fn("  この判断は？ [y]合っている  [n]違う  [s]分からない  [q]終了 > ") or "").strip().lower()
+        ans = (input_fn("  この判断は？ [y]合っている  [n]質問の答えが違う  [w]最終結果が違う  [s]分からない  [q]終了 > ") or "").strip().lower()
         if ans in ("q", "quit"):
             break
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -141,11 +141,14 @@ def run(out, graphs, playbooks, input_fn=input, print_fn=print, limit=20):
             if expect:
                 _append(fixtures_path(), fixture_row(rec, expect))
             tally["yes"] += 1
+        elif ans in ("w", "wrong"):
+            _append(reviews_path(), review_row(rec, "wrong", now))
+            tally["wrong"] += 1
         elif ans in ("n", "no"):
             if not steps:
-                print_fn("  規則で決まった判断は、質問の単位では直せません。読み飛ばします。")
-                _append(reviews_path(), review_row(rec, "unknown", now))
-                tally["unknown"] += 1
+                print_fn("  質問の答えに分けられない最終結果の誤りとして記録します（校正用の質問ラベルは作りません）。")
+                _append(reviews_path(), review_row(rec, "wrong", now))
+                tally["wrong"] += 1
                 continue
             for j, (nid, node, a, edge) in enumerate(steps, 1):
                 shown = a.get("choice") or a.get("playbook") or a.get("score") or a.get("noul")
@@ -176,6 +179,6 @@ def run(out, graphs, playbooks, input_fn=input, print_fn=print, limit=20):
     if with_jev:   # what the answers say about Jev's accuracy is not shown (TypeSafe's terms); the records are kept
         print_fn(f"\n記録しました: {sum(tally.values())} 件（判断モデルが Jev の判断を含むため、内訳は出しません）（{fixtures_path()}）")
     else:
-        print_fn(f"\n記録しました: 合っている {tally['yes']} / 違う {tally['no']} / 分からない {tally['unknown']}"
+        print_fn(f"\n記録しました: 合っている {tally['yes']} / 質問の答えが違う {tally['no']} / 最終結果が違う {tally['wrong']} / 分からない {tally['unknown']}"
                  f"（{fixtures_path()}）")
     return tally

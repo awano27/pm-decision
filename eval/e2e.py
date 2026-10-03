@@ -46,17 +46,25 @@ def fixtures(name="fixtures.jsonl"):
 
 
 class Recording:
-    """Wraps a backend, caching every answer by (node id / question id)."""
+    """Wraps a backend, caching each answer by question id and full question shape."""
 
     def __init__(self, inner):
         self.inner, self.cache = inner, {}
         self.profile = getattr(inner, "profile", None)
 
+    @staticmethod
+    def _key(q, question):
+        return q, json.dumps(question, ensure_ascii=False, sort_keys=True)
+
+    def cached(self, q, question):
+        return self.cache.get(self._key(q, question))
+
     def ask(self, state, questions):
-        missing = {q: v for q, v in questions.items() if q not in self.cache}
+        missing = {q: v for q, v in questions.items() if self._key(q, v) not in self.cache}
         if missing:
-            self.cache.update(self.inner.ask(state, missing))
-        return {q: self.cache[q] for q in questions}
+            answers = self.inner.ask(state, missing)
+            self.cache.update({self._key(q, questions[q]): answers[q] for q in missing})
+        return {q: self.cache[self._key(q, v)] for q, v in questions.items()}
 
 
 def ideal_answer(node, label):
@@ -84,18 +92,54 @@ class Oracle:
         for q, v in questions.items():
             node = self.g["nodes"].get(q)
             if node is not None and q in self.labels and node["kind"] == "judge":
-                out[q] = ideal_answer(node, self.labels[q])
+                out[q] = ideal_answer(node, _accepted_model_label(node, self.labels[q], self.rec.cached(q, v)))
             elif q == "playbook":   # plan node: label keyed by the plan node id
                 plan_ids = [n for n, x in self.g["nodes"].items() if x["kind"] == "plan" and n in self.labels]
-                out[q] = ideal_answer(self.g["nodes"][plan_ids[0]], self.labels[plan_ids[0]]) if plan_ids else \
+                out[q] = ideal_answer(self.g["nodes"][plan_ids[0]],
+                                      _accepted_model_label(self.g["nodes"][plan_ids[0]], self.labels[plan_ids[0]], self.rec.cached(q, v))) if plan_ids else \
                     self.rec.ask(state, {q: v})[q]
             else:
                 out[q] = self.rec.ask(state, {q: v})[q]
         return out
 
 
+def _accepted_model_label(node, label, answer):
+    """Use a model value when it is one of the accepted alternatives; otherwise use the first label."""
+    if not isinstance(label, list):
+        return label
+    if node.get("kind") == "plan" or node.get("question", {}).get("type") == "choice":
+        value = (answer or {}).get("choice")
+        return value if value in label else label[0]
+    if node.get("question", {}).get("type") == "noul":
+        score = (answer or {}).get("noul")
+        value = score >= 0.5 if isinstance(score, (int, float)) else None
+        return value if value in label else label[0]
+    return label
+
+
 def _acts(res):
     return json.dumps(res.get("actions", []), ensure_ascii=False, sort_keys=True)
+
+
+def _safe_fallback(model, g, event):
+    """A low-confidence route is safe only when it ends at its explicit terminal target."""
+    class NoAnswers:
+        def ask(self, state, questions):
+            raise AssertionError("a terminal fallback target must not ask another question")
+
+    for step in model.get("path", []):
+        if step.get("edge") != "unsure":
+            continue
+        source = g["nodes"].get(step.get("node"), {})
+        target = (source.get("routes") or {}).get("unsure")
+        if not target or g["nodes"].get(target, {}).get("kind") not in ("decide", "advise"):
+            continue
+        branch = dict(g)
+        branch["start"] = target
+        final = graph.run(branch, event, NoAnswers(), playbooks=PBS)
+        if model.get("node") == final.get("node") and _acts(model) == _acts(final):
+            return True
+    return False
 
 
 def run_one(fx, backend):
@@ -104,17 +148,18 @@ def run_one(fx, backend):
     model = graph.run(g, fx["event"], rec, playbooks=PBS)
     ideal = graph.run(g, fx["event"], Oracle(rec, fx["expect"], g), playbooks=PBS)
     human = bool(model.get("needs_human"))   # actually queued for the PM, not just an advise terminal
-    unsure = any(s["edge"] == "unsure" for s in model["path"])
     same_actions = _acts(model) == _acts(ideal)
+    severe_miss = ideal["node"] in SEVERE and model["node"] not in SEVERE and not human
     if model["node"] == ideal["node"] and same_actions:
         outcome = "correct"
     elif human:
         outcome = "human"
-    elif unsure:
-        outcome = "fallback"   # low confidence took the graph's designed safe route (e.g. task marked needs-owner)
+    elif severe_miss:
+        outcome = "wrong"
+    elif _safe_fallback(model, g, fx["event"]):
+        outcome = "fallback"
     else:
         outcome = "wrong"
-    severe_miss = ideal["node"] in SEVERE and model["node"] not in SEVERE and not human
     return {"id": fx["id"], "graph": g["name"], "model": model["node"], "ideal": ideal["node"],
             "outcome": outcome, "severe_miss": severe_miss,
             "actions_differ": model["node"] == ideal["node"] and not same_actions,

@@ -292,6 +292,26 @@ def test(sender=None):
     return result
 
 
+def send_challenge(challenge, sender=None):
+    """Send an onboarding challenge through configured routes without touching push_state.json.
+
+    The challenge is the only variable content and is an opaque, freshly generated identifier; no case, person,
+    message body or sender is included. Results distinguish route acceptance from later human receipt confirmation.
+    """
+    routes = enabled_routes()
+    if not routes:
+        return {"(none)": "no route"}
+    text = f"kimeru notification test challenge {challenge}"
+    result = {}
+    for route in routes:
+        try:
+            (sender(route, text) if sender else _sender(route)(text))
+            result[route] = "accepted"
+        except Exception as exc:
+            result[route] = f"failed ({type(exc).__name__})"
+    return result
+
+
 def status_lines(out, now=None):
     now = time.time() if now is None else now
     routes = enabled_routes()

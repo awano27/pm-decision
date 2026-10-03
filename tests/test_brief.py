@@ -71,7 +71,9 @@ class TestCollect(unittest.TestCase):
             write(d, "queue.jsonl", [q])
 
             class B:
-                def post(self, text, send): return {"ok": True}
+                def post(self, text, send):
+                    return {"ok": True, "typed": True, "sent": bool(send),
+                            "readback": {"matched": bool(send), "message_id": "brief-fake" if send else ""}}
             notify.notify(d, B(), send=True)
             texts = [i["text"] for i in brief.collect(d, now=NOW)]
             self.assertEqual(texts, ["確認待ち #1: 優先度を判定できないチケット"])

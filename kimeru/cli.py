@@ -14,6 +14,7 @@
   python -m kimeru --backend kev schedule install [--minutes 5]   # every N min, no admin
 """
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -69,10 +70,10 @@ SAVE_FAILED = {"state": "preview_only", "why": "全文を保存できなかっ�
 
 
 EVENT_KEEP = ("kind", "id", "author", "text", "item", "meeting", "title", "description", "work_item_type",
-              "rule", "severity", "condition", "mentions_me", "context", "date", "chat_id", "chat_title", "origin")
+              "repro_steps", "rule", "severity", "condition", "mentions_me", "context", "date", "chat_id", "chat_title", "origin")
 
 
-EVENT_TEXT = ("text", "description", "item", "title", "meeting", "condition", "context")   # free text: cut in the records
+EVENT_TEXT = ("text", "description", "repro_steps", "item", "title", "meeting", "condition", "context")   # free text: cut in the records
 EVENT_TEXT_SUMMARY = 120     # what the records kept before the event was recorded at all: the length of `summary`
 EVENT_TEXT_FULL = 2000       # with the setting record_event_full=1
 
@@ -167,7 +168,7 @@ def _no_action(res):
             and all(a.get("type") == "log.only" for a in res.get("actions") or []))
 
 
-def _merge_into_pending(out, ev, res):
+def _merge_into_pending(out, ev, res, source_event=None, source_request=None, source_key=None, source_material=None):
     """A new message in a chat whose earlier message still waits for the PM joins that item (posted again under the same
     number) instead of becoming a second one, but only when all of these hold; otherwise it is a matter of its own:
     the same sender as the waiting item, a result that raises no notice, and a result that goes to the same place as the
@@ -181,7 +182,9 @@ def _merge_into_pending(out, ev, res):
                 _append(out / "warnings.jsonl", {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                                                  "merge": "skipped: approvals.json is in use by another run", "event_id": ev.get("id")})
                 return False
-            return _merge_locked(out, ev, res, notify)
+            return _merge_locked(out, ev, res, notify, source_event=source_event,
+                                 source_request=source_request, source_key=source_key,
+                                 source_material=source_material)
     except fsutil.LockFolderError as e:   # the lock cannot be created (the folder cannot be written): the message is a matter of its own, not a parked file
         try:
             _append(out / "warnings.jsonl", {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -191,22 +194,73 @@ def _merge_into_pending(out, ev, res):
         return False
 
 
-def _merge_locked(out, ev, res, notify):
+def _severity_rank(value):
+    word = str(value or "").strip().lower()
+    for token, rank in (("sev0", 4), ("critical", 4), ("sev1", 3), ("high", 3),
+                        ("sev2", 2), ("medium", 2), ("sev3", 1), ("low", 1)):
+        if token in word:
+            return rank
+    return None
+
+
+def _merge_locked(out, ev, res, notify, source_event=None, source_request=None, source_key=None, source_material=None):
     ap = notify.Approvals(out)
     for it in ap.data["items"].values():
         rec = it["record"]
         old = rec.get("event") or {}
-        if it["status"] not in ("pending", "held") or old.get("chat_id") != ev["chat_id"]:
+        if it.get("status") not in ("pending", "held") or old.get("chat_id") != ev["chat_id"]:
             continue
         if old.get("author") != ev.get("author"):
             continue
+        old_severity = _severity_rank(old.get("severity"))
+        new_severity = _severity_rank((res.get("event") or {}).get("severity") or ev.get("severity"))
+        if old_severity is not None and new_severity is not None and new_severity > old_severity:
+            continue
         if not (_no_action(res) or res.get("node") == rec.get("node")):
             continue
-        rec.setdefault("followups", []).append({"text": " ".join(str(ev.get("text", "")).split())[:300],
-                                               "at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
-        it["posted"], it["request_posted"] = False, False      # posted again, with the follow-up, under the same number
-        ap.save()
-        _append(out / "merged.jsonl", {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "into": it["key"], "event_id": ev.get("id")})
+        revision = int(it.get("revision") or rec.get("revision") or 1)
+        updated = copy.deepcopy(res)
+        updated["revision"] = revision + 1
+        followup_limit = _record_limit()
+        def safe_followup(row):
+            if not isinstance(row, dict):
+                return row
+            text = " ".join(str(row.get("text", "")).split())
+            if len(text) > followup_limit:
+                text = _cut(text, followup_limit)
+            return {**row, "text": text} if "text" in row else row
+        followup_text = " ".join(str(ev.get("text", "")).split())
+        if len(followup_text) > followup_limit:
+            followup_text = _cut(followup_text, followup_limit)
+        updated["followups"] = [safe_followup(row) for row in (rec.get("followups") or [])] + [{
+            "text": followup_text,
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds")
+        }]
+        key = it["key"]
+        if source_event is not None:
+            from . import fulltext
+            fulltext.drop_safe(out, key)
+            fulltext.save(out, key, source_event, request=source_request, material=source_material)
+        elif source_key and source_key != key:
+            from . import fulltext
+            latest = fulltext.load(out, source_key)
+            fulltext.drop_safe(out, key)  # remove the superseded source even if no new full text was staged
+            if latest:
+                fulltext.save(out, key, latest, request=latest.get("request"), material=latest.get("material"))
+            fulltext.drop_safe(out, source_key)
+        preserve = {name: it[name] for name in ("key", "work", "handoff_evidence", "handoff_unknown",
+                                                 "delivery_unknown", "delivery_unknown_part", "delivery_unknown_at",
+                                                 "delivery_unknown_revision")
+                    if name in it}
+        if it.get("delivery_unknown") and "delivery_unknown_revision" not in preserve:
+            preserve["delivery_unknown_revision"] = revision
+        it.clear()
+        it.update(preserve)
+        it.update({"revision": revision + 1, "status": "pending", "posted": False, "toasted": False,
+                   "request_posted": False, "record": updated})
+        ap.save(compact=True)  # no backup of the stale draft or frozen execution body
+        _append(out / "merged.jsonl", {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                       "into": key, "event_id": ev.get("id"), "revision": revision + 1})
         return True
     return False
 
@@ -353,22 +407,35 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
                 res["material_event"].pop("直前のやり取り", None)
             res["judge"] = _judge_info(backend)
             res["graph_key"] = key
-            # a chat's new message is always judged; it joins a waiting item only under the rules of _merge_into_pending
-            merged = dedup and _merge_into_pending(out, ev, res)
+            source_key = f"{res.get('graph')}:{res.get('event_id')}:{res.get('node')}"
+            source_request = None
+            source_material = {}
             if ev_run.get("full"):
-                # the records that stay hold an excerpt; the whole text waits in full_text.json until the PM decides.
-                # No .jsonl file gets it: the paste-in request for Copilot is rebuilt from the excerpt for the record
-                request = fulltext.redact_request(res, ev_run)
+                # Seal the approval material before trying a follow-up merge. The merge may
+                # then replace the pending case with this scrubbed revision under its old key.
+                source_request = fulltext.redact_request(res, ev_run)
                 res_keep = fulltext.scrub(res, ev_run["text"], kept["text"])
                 held = fulltext.scrub(held, ev_run["text"], kept["text"])
-                saved = True
-                if res["needs_human"] and not merged:
-                    saved = _save_full(out, f"{res.get('graph')}:{res.get('event_id')}:{res.get('node')}", ev_run, request=request)
                 res = res_keep
-                if not saved:
-                    res["read_full"] = dict(SAVE_FAILED)
+                limit = _record_limit()
+                for field in EVENT_TEXT:
+                    value = (res.get("material_event") or {}).get(field)
+                    if isinstance(value, str) and len(value) > limit:
+                        excerpt = kept["text"] if field == "text" else _cut(value, limit)
+                        source_material[field] = value
+                        res = fulltext.scrub(res, value, excerpt)
+                        held = fulltext.scrub(held, value, excerpt)
             else:
-                res, held = _seal_material(res, held, out, f"{res.get('graph')}:{res.get('event_id')}:{res.get('node')}", ev_run, merged)
+                # This also stages long material under the new event key. A successful merge
+                # moves that short-lived entry to the unchanged case key and removes the old key.
+                res, held = _seal_material(res, held, out, source_key, ev_run, merged=False)
+            # A follow-up is merged only after all permanent material has been sealed/scrubbed.
+            merged = dedup and _merge_into_pending(out, ev, res, source_event=ev_run if ev_run.get("full") else None,
+                                                  source_request=source_request, source_key=source_key,
+                                                  source_material=source_material)
+            if ev_run.get("full") and not merged and res["needs_human"]:
+                if not _save_full(out, source_key, ev_run, request=source_request, material=source_material):
+                    res["read_full"] = dict(SAVE_FAILED)
             _append(out / "decisions.jsonl", res)
             if merged:
                 res["merged"] = True
@@ -426,6 +493,18 @@ class _Parser(argparse.ArgumentParser):
 def main(argv=None):
     _safe_streams()
     argv_list = list(sys.argv[1:] if argv is None else argv)
+    # Global options remain usable on either side of a pass-through command.
+    normalized, out_value = [], None
+    i = 0
+    while i < len(argv_list):
+        if argv_list[i] == "--out" and i + 1 < len(argv_list):
+            out_value = argv_list[i + 1]
+            i += 2
+            continue
+        normalized.append(argv_list[i])
+        i += 1
+    if out_value is not None:
+        argv_list = ["--out", out_value, *normalized]
     broken = None
     try:   # settings: argument > environment > config file > default (read once, here)
         for w in config.apply(argv_list):
@@ -504,9 +583,34 @@ def main(argv=None):
     p_p.add_argument("--project")
     p_p.add_argument("--subscription")
     p_p.add_argument("--login", action="store_true", help="ado: first `az login` into the organization's tenant")
-    a = ap.parse_args(argv)
+    p_work = sub.add_parser("work", help="track progress separately from approval and execution")
+    work_sub = p_work.add_subparsers(dest="work_action", required=True, parser_class=_Parser)
+    work_sub.add_parser("list", help="list approved cases and their explicit progress")
+    p_work_set = work_sub.add_parser("set")
+    p_work_set.add_argument("case", type=int)
+    p_work_set.add_argument("state", choices=["approved", "in_progress", "done", "blocked"])
+    p_work_set.add_argument("--owner")
+    p_work_set.add_argument("--due")
+    p_work_set.add_argument("--completion-condition")
+    p_delivery = sub.add_parser("delivery", help="inspect and explicitly resolve an ambiguous self-chat delivery")
+    delivery_sub = p_delivery.add_subparsers(dest="delivery_action", required=True, parser_class=_Parser)
+    delivery_sub.add_parser("list", help="list ambiguous deliveries without showing their bodies")
+    for action in ("show", "retry", "confirm"):
+        p_delivery_action = delivery_sub.add_parser(action)
+        p_delivery_action.add_argument("kind", choices=["case", "notice", "outbox", "brief"])
+        p_delivery_action.add_argument("target")
+        if action == "retry":
+            p_delivery_action.add_argument("--confirm-not-sent", action="store_true")
+        elif action == "confirm":
+            p_delivery_action.add_argument("--confirm-delivered", action="store_true")
+    # These handlers own their command-specific parser; forward the remainder before
+    # loading graphs, a backend or a writer.
+    for name in ("onboarding", "trial", "requirements"):
+        passthrough = sub.add_parser(name)
+        passthrough.add_argument("args", nargs=argparse.REMAINDER)
+    a = ap.parse_args(argv_list)
     out = Path(a.out)
-    exempt = (a.cmd == "config" or (a.cmd == "schedule" and a.action in ("remove", "status"))
+    exempt = (a.cmd in ("config", "delivery") or (a.cmd == "schedule" and a.action in ("remove", "status"))
               or (a.cmd == "demo" and a.replay))   # these must work when the file is broken or a value is wrong
     file_ok = exempt and not (a.cmd == "config" and a.action != "path")   # `config show/set/unset` need a readable file
     if broken is not None and not file_ok:
@@ -520,11 +624,58 @@ def main(argv=None):
             print("kimeru: fix it with `kimeru config set <setting> <value>` (or unset the environment variable)", file=sys.stderr)
             return 2
 
+    if a.cmd in ("onboarding", "trial", "requirements"):
+        from . import onboarding, requirements, trial
+        handler = {"onboarding": onboarding, "trial": trial, "requirements": requirements}[a.cmd]
+        return handler.dispatch(a.args, Path(a.out))
+
+    if a.cmd == "work":
+        from . import work
+        if a.work_action == "list":
+            rows = work.list_work(out)
+            if not rows:
+                print("承認済みの作業項目はありません")
+            for row in rows:
+                print(f"#{row['case']} 改訂 {row['revision']} / 進捗 {row['state']} / 次: {row['next_action']} / "
+                      f"担当: {row['owner']} / 期限: {row['due']} / 完了条件: {row['completion_condition']}")
+            return 0
+        try:
+            work.set_state(out, a.case, a.state, owner=a.owner, due=a.due,
+                           completion_condition=a.completion_condition)
+        except work.WorkError as e:
+            print(f"work failed: {e}", file=sys.stderr)
+            return 2
+        print(f"#{a.case}: 進捗を {a.state} にしました")
+        return 0
+
     if a.cmd == "schedule":
         return schedule(a, out)
 
     if a.cmd == "config":
         return config_cmd(a)
+
+    if a.cmd == "delivery":
+        from . import notify as nt
+        if a.delivery_action == "list":
+            rows = nt.delivery_pending(out)
+            if getattr(rows, "busy", False):
+                print("delivery list: another approvals operation is in progress")
+                return 1
+            print(json.dumps(rows, ensure_ascii=False))
+            return 0
+        if a.delivery_action == "show":
+            text = nt.delivery_show(out, a.kind, a.target)
+            if text is None:
+                print("not_pending")
+                return 1
+            print(text)
+            return 0
+        if a.delivery_action == "retry":
+            result = nt.retry_delivery(out, a.kind, a.target, confirm_not_sent=a.confirm_not_sent)
+        else:
+            result = nt.confirm_delivery(out, a.kind, a.target, confirm_delivered=a.confirm_delivered)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") in ("released", "confirmed", "confirmation_required", "not_pending") else 1
 
     if a.cmd == "push":
         from . import push
@@ -570,8 +721,21 @@ def main(argv=None):
         print(text)
         if a.post:
             from . import notify as nt
-            nt.PowerShellBridge().post(text, a.send)
-            print("sent" if a.send else "pasted (not sent)")
+            delivery = nt.deliver_brief(out, nt.PowerShellBridge(), text, a.send,
+                                        datetime.now().astimezone().date().isoformat())
+            status = delivery["status"]
+            if status == "delivered":
+                print("sent (verified self-chat readback)")
+            elif status == "pasted":
+                print("pasted (not sent)")
+            elif status == "already_delivered":
+                print("already delivered today")
+            elif status == "delivery_unknown":
+                print("delivery unknown; inspect with `kimeru delivery show brief brief` and resolve explicitly")
+                return 1
+            else:
+                print(f"brief delivery {status}; no sent confirmation was recorded")
+                return 1
         return 0
 
     if a.cmd in ("notify", "approvals"):

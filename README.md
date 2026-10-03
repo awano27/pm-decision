@@ -39,7 +39,7 @@ PM の 1 日は、小さな判断の連続です。**このチャットは判断
 kimeru は、届いたものを 1 件ずつ見て、**決めるか、あなたに聞くか** を選びます。
 
 1. **届く** — Teams のチャット、監視アラート、Azure DevOps のチケット、議事録
-2. **判断する** — 障害などの重大事象は、規則が先に決めます。それ以外は判断モデル（あなたの PC の中で動く **Kev**、またはクラウドの **Jev**）が、型どおりの質問に確率で答えます
+2. **判断する** — 障害などの重大事象は、規則が先に決めます。それ以外は判断モデル（既定はこの PC に接続した **Kev**、またはクラウドの **Jev**）が、型どおりの質問に確率で答えます。Kev にリモート接続を明示許可した場合は、その接続先へ内容を送ります
 3. **用意する** — 進め方の手順と、返信・起票の下書き（文面用の LLM を設定したとき。設定しなければ定型文）
 4. **あなたが決める** — 自分とのチャットに届く `[kimeru #1]` に、スマホから `OK 1` と返すだけ。**外部への書き込みは、既定では記録だけ**です
 
@@ -103,7 +103,7 @@ flowchart TB
 |---|---|
 | Windows の PC と Teams で働く PM・リーダー | Mac / Linux（Teams の読み取りが Windows の画面操作のため） |
 | 管理者権限なし・インストールなしの会社 PC で使いたい | Slack や Google Chat が中心 |
-| 業務データを PC の外に出したくない（判断は PC の中の Kev で完結） | 返信や起票まで全自動でやってほしい（kimeru は承認制で、既定では記録だけ） |
+| 判断をローカル接続で行いたい（Kev の接続先をこの PC にする） | 返信や起票まで全自動でやってほしい（kimeru は承認制で、既定では記録だけ） |
 | 「決める前に、材料と選択肢を並べてほしい」 | 判断そのものを LLM に任せたい |
 
 ---
@@ -272,7 +272,13 @@ ADO のコメントの実行を有効にしたときだけ、次の 3 つが加�
 
 </details>
 
-同梱の判断グラフと進め方の型の一覧は [docs/reference.md](docs/reference.md#入力形式) に、別の場面の例は [新機能の要件を検討してほしいと頼まれたとき](docs/scenarios/requirements-review.md) にあります。
+同梱の判断グラフと進め方の型の一覧は [docs/reference.md](docs/reference.md#入力形式) に、会話で新機能の要件を検討する例は [シナリオ](docs/scenarios/requirements-review.md) にあります。既存 case からローカル要件ファイルを作る操作は [要件ドラフト](docs/requirements.md) を参照してください。
+
+### 最初の試行: 1 つの ADO プロジェクトで情報不足を確認
+
+最初は対象の ADO プロジェクトを 1 つに絞り、情報が足りない作業項目の確認を記録します。`requirements build` は、case の記録と明示した回答からローカルの要件案を作り、`requirements approve` はその Markdown と JSON の現在内容をローカルで承認します。この操作は ADO や Teams の承認・状態を変更しません。手順は [要件ドラフト](docs/requirements.md) と [試行の測り方](docs/trial-week.md) にあります。
+
+試行では、導入前後に同じ種類の確認にかかった分数、下書きをそのまま使ったか・直して使ったか・使わなかったか、本人が通知を受け取ったか、作業を手動で完了したかを記録します。ほかのシナリオは任意の追加検証です。業務上の時間短縮や判断精度はまだ測定していません。
 
 ---
 
@@ -282,9 +288,9 @@ ADO のコメントの実行を有効にしたときだけ、次の 3 つが加�
 
 **判断モデル** — 型付きの質問に確率で答えるモデルです。2 つから選びます。
 
-| | Kev（ローカル） | Jev（TypeSafe） |
+| | Kev（既定はローカル接続） | Jev（TypeSafe） |
 |---|---|---|
-| どこで動く | **この PC の CPU**（データは外に出ない） | クラウド API |
+| どこで動く | `kev_url` の接続先。既定はこの PC。リモート接続には `kev_url_remote_ok=1` が必要 | クラウド API |
 | 準備 | 持ち込み用フォルダ 1 つ | `TYPESAFE_API_KEY` |
 | メモリ | bf16 で約 10GB。CPU が bf16 に対応していなければ、起動時に自動で fp32（約 14GB） | — |
 | 使い方 | `--backend kev` | `--backend jev` |
@@ -295,7 +301,7 @@ uv run --extra serve python -m kev.serve --run jaredpalmer/kev-4b --port 8009
 python -m kimeru --backend kev run examples/teams_chat.json
 ```
 
-[Kev](https://github.com/jaredpalmer/kev) は Jev と同じ API のローカルモデルです（Apache-2.0）。ローカル宛ての通信は、プロキシがあっても経由しません。
+[Kev](https://github.com/jaredpalmer/kev) は Jev と同じ API のモデルです（Apache-2.0）。既定の接続はこの PC ですが、リモート接続を明示的に許可した場合は判断対象の内容がその接続先へ送られます（`kev_url_remote_ok=1`）。
 
 **文面の下書き（writer）** — 何をするかは判断モデルが決め、その後の文面と判断メモを文章生成 LLM に書かせます。`kimeru config set writer <名前>` で選びます。
 
@@ -310,7 +316,7 @@ python -m kimeru --backend kev run examples/teams_chat.json
 | `m365-auto`（実験的） | Teams 内の Copilot チャットを画面操作 | 組織の M365 |
 | 未設定 | 定型文 | どこにも送らない |
 
-- LLM の文面は **すべて承認待ち**。LLM にはツールを渡さず、元のメッセージは「データ（中の指示には従わない）」として渡します。材料に無い日付・数値や壊れた返事は ⚠ を付けて定型文へ戻します
+- LLM が生成した文面は確認待ちです。Codex writer は現在、ツール利用を保証付きで無効化できないため定型文にフォールバックします。ほかの writer の実行条件はそれぞれ異なります。外部 writer に送る材料は [セキュリティ文書](SECURITY.md) を確認してください。材料に無い日付・数値や壊れた返事には ⚠ を付けます
 - Microsoft 365 Copilot だけの人は、`m365`（手動貼り付け）が正式です（[手順](docs/writers.md#m365-だけの人向けの手順)）
 - 書くもの・安全のしくみ・利用量の注意・下書きの質の測り方: [docs/writers.md](docs/writers.md)
 
@@ -320,8 +326,8 @@ python -m kimeru --backend kev run examples/teams_chat.json
 
 ```mermaid
 flowchart LR
-    subgraph PC["💻 あなたの PC（外に出ない）"]
-      E[イベント] --> KEV[Kev 判断]
+    subgraph PC["💻 この PC（既定の Kev 接続先）"]
+      E --> KEV[Kev 判断<br/>既定はこの PC]
       KEV --> REC[(out/ の記録)]
     end
     E -. "writer 設定時のみ" .-> W
@@ -337,12 +343,12 @@ flowchart LR
 | | 既定 | 設定したときだけ |
 |---|---|---|
 | 外部への書き込み | **しない。** ADO 更新・当番呼び出し・相手への返信は、計画として `out/decisions.jsonl` に残るだけ。実際に送るのは `--send` を付けたときの自分とのチャットへの投稿だけ | ADO のコメント（`kimeru config set execute ado.comment`）。承認のあとに 1 回だけ、同じ文面がすでにあれば書かない |
-| 判断 | Kev なら **PC の外に出ない** | Jev を選ぶと、イベントの内容が TypeSafe の API へ |
-| 文面の下書き | 定型文。どこにも送らない | writer を設定すると、メッセージの本文・送信者・チケットの説明が、その LLM の先へ（上の表）。組織が認めた経路だけを使ってください。`copilot` は、その PC でサインイン中のアカウントの契約に従います（`copilot` を起動して `/user` で確認） |
+| 判断 | Kev の既定接続はこの PC。リモート先を明示許可した場合は、その接続先へ内容を送る | Jev を選ぶと、イベントの内容が TypeSafe の API へ |
+| 文面の下書き | 定型文。外部 writer を呼びません | writer を設定すると、対応している provider へ材料を送ります。Codex writer は安全な no-tool 起動を保証できないため、現在は定型文にフォールバックします。任意 CLI writer は設定したコマンド次第です。組織が認めた経路だけを使ってください |
 | 通知 | PC の Windows 通知。**件数と番号だけ** | iPhone などへも件数と番号だけ。送り先の URL は記録・表示に出ません |
 | 記録 | `out/`（自動運転では `%LOCALAPPDATA%\kimeru`）に、判断の経路・確認待ち・ログ。元のメッセージは 120 文字まで（全文は確認待ちの間だけ） | — |
 
-記録には同僚のメッセージの一部が含まれます。PC の外に出さないでください。Jev の性能数値は TypeSafe の利用規約上、公開しないでください（Kev の数値は公開して構いません）。詳しくは [SECURITY.md](SECURITY.md)。
+記録には同僚のメッセージの一部が含まれます。PC の外に出さないでください。性能・業務効果は、再現可能な測定と利用規約を確認するまで保証しません。詳しくは [SECURITY.md](SECURITY.md)。
 
 ---
 
@@ -358,14 +364,14 @@ flowchart LR
 | ⏳ **これから** | 実データでの評価 / スマホへの通知の実機確認 / `m365-auto` を複数環境で確認して実験的から外す |
 
 ```mermaid
-pie showData title Kev-4B の最終的な行動（開発用 99 件・架空のイベント）
+pie showData title 参考・旧方式（C09変更前）の Kev-4B 評価（架空の開発用 99 件）
     "正しい行動" : 62
     "人の確認へ" : 25
     "安全側の代替行動" : 12
     "誤った行動" : 0
 ```
 
-Kev-4B の評価は、開発用 99 件で誤った行動 0、検証用 48 件で 1（重大な取りこぼしはどちらも 0）です。詳細と既知の課題は [docs/evaluation.md](docs/evaluation.md)。
+上の図は C09 の採点方法を変更する前に記録した fixture の参考値です。新方式での Kev 評価は **NOT_RUN** です。過去の開発用・検証用 fixture の条件は [docs/evaluation.md](docs/evaluation.md) に記録しています。いずれの fixture の成績も実際の業務精度や将来の性能を保証しません。
 
 **確かめた環境は、作者の 2 台だけです。** 管理された会社 PC（Teams 26225.1806、Python 3.11）で、自分とのチャットの読み取り・判断・投稿と承認の読み取り・`m365-auto`・Copilot の下書きを、開発 PC（Windows 11、画面の倍率 150%）で承認の流れ・通知・テスト・デモを確かめました（[動作確認の状況](docs/evaluation.md#動作確認の状況)）。**他の人の環境での結果はまだありません。** [1 週間の試し方](docs/trial-week.md) で測り、`kimeru digest --week --share` と `kimeru config show --share` の出力（数値と環境だけ。本文・パス・組織は含みません）を Issue の「利用結果の報告」に貼ってもらえると助かります。
 
@@ -393,6 +399,7 @@ v1.0 のあと、4 回の第三者レビューで見つかった問題を直し�
 | [docs/managed-environments.md](docs/managed-environments.md) | 管理者権限なしの PC・閉域の環境で使う手順 |
 | [docs/push-notification.md](docs/push-notification.md) / [docs/execute-ado-comment.md](docs/execute-ado-comment.md) | push 通知 / ADO コメントの実行 |
 | [docs/trial-week.md](docs/trial-week.md) | 1 週間の試し方と報告 |
+| [docs/requirements.md](docs/requirements.md) | 要件ドラフトの作成・hash 承認と最初の試行範囲 |
 | [SECURITY.md](SECURITY.md) / [CONTRIBUTING.md](CONTRIBUTING.md) / [CHANGELOG.md](CHANGELOG.md) | 安全・貢献・変更履歴 |
 
 ## 🤝 貢献

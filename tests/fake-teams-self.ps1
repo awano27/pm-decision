@@ -21,8 +21,14 @@ switch ($Action) {
   'post' {
     if (-not $Text.StartsWith('[kimeru')) { Out-Json @{ ok = $false; error = 'refusing' }; exit 2 }
     $Text = $Text -replace '\\n', "`r`n"
-    if ($Send) { $chat.messages = @($chat.messages) + $Text; Save }
-    Out-Json @{ ok = $true; typed = $true; sent = [bool]$Send }
+    $messageId = ''
+    if ($Send) {
+      $chat.messages = @($chat.messages) + $Text
+      $messageId = 'fake-' + $chat.messages.Count
+      Save
+    }
+    Out-Json @{ ok = $true; typed = $true; sent = [bool]$Send
+                readback = @{ matched = [bool]$Send; message_id = $messageId } }
   }
   'read' {
     # like the real screen: only the last KIMERU_FAKE_TAIL messages are visible, and consecutive identical lines are folded into one

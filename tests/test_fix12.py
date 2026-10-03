@@ -21,7 +21,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from kimeru import cli, daily, execute, fsutil, fulltext, pull
+from kimeru import cli, daily, execute, fsutil, fulltext, notify, pull
 from tests.test_execute import GRAPHS, PBS, WI, Bridge, NoCriteria, ROOT
 from tests.test_execute_safety import Safety
 
@@ -194,6 +194,7 @@ class TestARedoActsOncePerReply(Safety):
         bridge.fail_posts = True                                # the result of the redo cannot be posted: it waits in the outbox
         self.cycle(bridge, http=fail, reply="再実行 1")         # POST 2
         self.assertEqual(self.posts_n(), 2)
+        self.assertFalse(notify.Approvals(self.out).data.get("outbox_delivery_unknown"))  # this fake fails before send
         bridge.fail_posts = False
         real = bridge.read
 
@@ -232,6 +233,7 @@ class TestARedoActsOncePerReply(Safety):
             self.cycle(bridge, http=fail)
         self.assertEqual(self.posts_n(), 2)
         bridge.fail_posts = False                               # now the result is posted
+        self.assertFalse(notify.Approvals(self.out).data.get("outbox_delivery_unknown"))
         for _ in range(3):
             self.cycle(bridge, http=fail)
         self.assertEqual(self.posts_n(), 2)

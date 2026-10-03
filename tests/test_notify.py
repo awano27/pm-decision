@@ -17,7 +17,8 @@ class FakeBridge:
 
     def post(self, text, send):
         self.posts.append((text, send))
-        return {"ok": True}
+        return {"ok": True, "typed": True, "sent": bool(send),
+                "readback": {"matched": bool(send), "message_id": f"fake-{len(self.posts)}" if send else ""}}
 
     def read(self):
         return {"ok": True, "posts": [], "replies": self.replies}
@@ -143,7 +144,7 @@ class TestPartialSend(unittest.TestCase):
         class FailSecond(FakeBridge):
             def post(self, text, send):
                 if len(self.posts) == 1:
-                    raise RuntimeError("compose box not found")
+                    raise notify.BridgeError("compose box not found", {"ok": False, "typed": False, "sent": False})
                 return super().post(text, send)
         with tempfile.TemporaryDirectory() as d:
             write_queue(d, REC, rec2)

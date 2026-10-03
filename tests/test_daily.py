@@ -9,7 +9,7 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 
-from kimeru import daily, events, graph, plan
+from kimeru import daily, events, graph, notify, plan
 from kimeru.backends import BackendUnavailable, StubBackend
 from kimeru.cli import process
 
@@ -40,7 +40,8 @@ class FakeTeams:
         self.posts.append((text, send))
         if send and text.startswith("[kimeru #"):
             self.timeline.append("P:" + text.split("#", 1)[1].split("]", 1)[0])
-        return {"ok": True}
+        return {"ok": True, "typed": True, "sent": bool(send),
+                "readback": {"matched": bool(send), "message_id": f"fake-{len(self.posts)}" if send else ""}}
 
     def read(self):
         return {"ok": True, "timeline": list(self.timeline)}
@@ -75,6 +76,40 @@ class TestDaily(unittest.TestCase):
             self.assertNotIn("brief", r)                              # once a day
             self.assertEqual(sum(1 for p, _ in t.posts if p.startswith("[kimeru brief")), 1)
             self.assertTrue(any(p.startswith("[kimeru brief 2026-09-28]") for p, _ in t.posts))  # cycle's date
+
+    def test_ambiguous_brief_delivery_is_saved_and_held_until_explicit_recovery(self):
+        class AmbiguousBrief(FakeTeams):
+            def __init__(self):
+                super().__init__()
+                self.ambiguous = True
+            def post(self, text, send):
+                if text.startswith("[kimeru brief") and send and self.ambiguous:
+                    self.posts.append((text, send))
+                    return {"ok": True, "typed": True, "sent": True,
+                            "readback": {"matched": True}}  # missing message identity is ambiguous
+                return super().post(text, send)
+        with tempfile.TemporaryDirectory() as d:
+            out, inbox, bridge = Path(d) / "out", Path(d) / "inbox", AmbiguousBrief()
+            run = lambda: daily.cycle(out, inbox, GRAPHS, StubBackend(), PBS, process,
+                                      bridge=bridge, send=True, now=datetime(2026, 9, 28, 8, 10))
+            first = run()
+            self.assertTrue(first["brief"].startswith("error: brief delivery_unknown"))
+            state = json.loads((out / "daily_state.json").read_text(encoding="utf-8"))
+            self.assertNotIn("brief_date", state)
+            self.assertIn("text", state["brief_delivery_unknown"])
+            self.assertEqual(len(notify.delivery_pending(out)), 1)
+            exact = notify.delivery_show(out, "brief", "brief")
+            self.assertTrue(exact.startswith("[kimeru brief 2026-09-28]"))
+            second = run()
+            self.assertTrue(second["brief"].startswith("error: brief delivery_unknown"))
+            self.assertEqual(sum(1 for text, sent in bridge.posts if text.startswith("[kimeru brief") and sent), 1)
+            self.assertEqual(notify.retry_delivery(out, "brief", "brief", confirm_not_sent=True)["status"], "released")
+            bridge.ambiguous = False
+            third = run()
+            self.assertEqual(third["brief"], 0)
+            state = json.loads((out / "daily_state.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["brief_date"], "2026-09-28")
+            self.assertNotIn("brief_delivery_unknown", state)
 
     def test_broken_step_does_not_stop_cycle(self):
         class Broken(FakeTeams):
@@ -163,9 +198,11 @@ class TestKnownIssues(unittest.TestCase):
                 return orig(text, send)
             t.post = flaky
             r = self.cycle(d, t, toaster=lambda a, b: shown.append((a, b)))
-            self.assertTrue(str(r["notify"]).startswith("error"))          # #2 failed after #1 was posted ...
+            self.assertFalse(notify.Approvals(Path(d) / "out").data["items"]["2"]["posted"])
+            self.assertTrue(notify.Approvals(Path(d) / "out").data["items"]["2"]["delivery_unknown"])
             self.assertEqual(shown[-1], ("kimeru: 確認待ち 1 件 / 投稿できていない確認待ち 1 件", "#1"))   # ... #1 is still announced, #2 counted apart
             t.post = orig
+            self.assertEqual(notify.retry_delivery(Path(d) / "out", "case", "2", confirm_not_sent=True)["status"], "released")
             r = self.cycle(d, t, toaster=lambda a, b: shown.append((a, b)), now=datetime(2026, 9, 28, 9, 5))
             self.assertEqual(shown[-1], ("kimeru: 確認待ち 1 件", "#2"))       # only the new one, once
 

@@ -66,7 +66,8 @@ def ado_workitem_created(p):
         "area": f.get("System.AreaPath"),
         "created_by": (f.get("System.CreatedBy") or {}).get("displayName") if isinstance(f.get("System.CreatedBy"), dict) else f.get("System.CreatedBy"),
         "priority": f.get("Microsoft.VSTS.Common.Priority"),
-        "description": _strip_html(f.get("System.Description") or f.get("Microsoft.VSTS.TCM.ReproSteps") or ""),
+        "description": _strip_html(f.get("System.Description") or ""),
+        "repro_steps": _strip_html(f.get("Microsoft.VSTS.TCM.ReproSteps") or ""),
         "acceptance_criteria": _strip_html(f.get("Microsoft.VSTS.Common.AcceptanceCriteria") or ""),
         # where `pull ado` took it from ({"org", "project"}); a service-hook payload has none: nothing is written back to it
         "origin": p.get("kimeru_origin") if isinstance(p.get("kimeru_origin"), dict) else None,

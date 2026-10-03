@@ -132,17 +132,42 @@ def validate(g, playbooks=None):
                     raise GraphError(f"{nid}: unknown playbooks {sorted(missing)}")
         elif k not in TERMINALS:
             raise GraphError(f"{nid}: unknown kind {k}")
-    # reachability + no cycles
-    seen, stack = set(), [(g["start"], ())]
+    # Reachability and cycle checks use a bounded traversal plus a topological
+    # order, so diamonds and shared tails are processed once per edge.
+    targets = {nid: _targets(node) for nid, node in nodes.items()}
+    seen, stack = set(), [g["start"]]
     while stack:
-        nid, path = stack.pop()
-        if nid in path:
-            raise GraphError(f"cycle at {nid}")
+        nid = stack.pop()
+        if nid in seen:
+            continue
         seen.add(nid)
-        stack += [(t, path + (nid,)) for t in _targets(nodes[nid])]
+        stack.extend(targets[nid])
     unreachable = set(nodes) - seen
     if unreachable:
         raise GraphError(f"unreachable nodes: {sorted(unreachable)}")
+
+    indegree = {nid: 0 for nid in nodes}
+    for outgoing in targets.values():
+        for target in outgoing:
+            indegree[target] += 1
+    ready = [nid for nid, degree in indegree.items() if degree == 0]
+    order = []
+    while ready:
+        nid = ready.pop()
+        order.append(nid)
+        for target in targets[nid]:
+            indegree[target] -= 1
+            if indegree[target] == 0:
+                ready.append(target)
+    if len(order) != len(nodes):
+        cycle_node = next(nid for nid, degree in indegree.items() if degree)
+        raise GraphError(f"cycle at {cycle_node}")
+
+    depth = {}
+    for nid in reversed(order):
+        depth[nid] = 1 + max((depth[target] for target in targets[nid]), default=0)
+        if depth[nid] > MAX_STEPS:
+            raise GraphError(f"path from {nid} exceeds the {MAX_STEPS}-step execution limit")
 
 
 def _split_non_adjacent(probs, at):
@@ -193,7 +218,9 @@ def route(node, ans, profile=None):
     """Return (edge_label, next_node_id) for a judge answer. `profile` adjusts thresholds
     for the backend that produced the answer (see profiles.py)."""
     from .profiles import conf, noul_band
+    from .backends import validate_answer
     q, r = node["question"], node["routes"]
+    validate_answer(q, ans)
     if q["type"] == "noul":
         p = ans["noul"]
         yes_at, no_at = noul_band(node, profile)

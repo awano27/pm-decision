@@ -1,3 +1,5 @@
+import atexit
+
 try:   # isolation from the real state folder, whichever way the tests are started
     from . import isolate  # noqa: F401
 except ImportError:
@@ -15,6 +17,7 @@ from kimeru.backends import StubBackend
 from kimeru.cli import process
 
 _STATE = tempfile.TemporaryDirectory()
+atexit.register(_STATE.cleanup)
 os.environ["KIMERU_STATE_DIR"] = _STATE.name       # tests never touch the real state directory
 os.environ["KIMERU_M365_NO_REST"] = "1"            # except the class that tests the rest itself
 
@@ -52,7 +55,8 @@ class FakeTeams:
     def post(self, text, send):
         self.posts.append(text)
         self.timeline.append("P:" + text.split("#", 1)[1].split("]", 1)[0])
-        return {"ok": True}
+        return {"ok": True, "typed": bool(send), "sent": bool(send),
+                "readback": {"matched": bool(send), "message_id": f"test-message-{len(self.posts)}"}}
 
     def read(self):
         return {"ok": True, "timeline": list(self.timeline)}
@@ -138,6 +142,13 @@ class TestWriter(unittest.TestCase):
         self.assertNotIn("\nPM からの修正指示:", m)
         self.assertEqual(writer.unverified("10/5 までに 3 件対応します", m), ["10/5", "3 件"])
         self.assertEqual(writer.unverified("10月1日にリリースします", "リリースは 10/1 とする"), [])   # same date, other form
+
+    def test_ado_description_and_repro_steps_are_both_writer_material(self):
+        res = {"node": "n", "path": [], "actions": [{"type": "ado.comment", "text": "確認します。"}]}
+        ev = {"description": "要件: 一覧画面が必要", "repro_steps": "1. 保存 2. 一覧を開く 3. 500"}
+        material = writer._material(res, ev)
+        self.assertIn('"description": "要件: 一覧画面が必要"', material)
+        self.assertIn('"repro_steps": "1. 保存 2. 一覧を開く 3. 500"', material)
 
     def test_alert_first_report_is_drafted_and_held(self):
         alert = {"schemaId": "azureMonitorCommonAlertSchema", "data": {"essentials": {
@@ -638,28 +649,18 @@ class TestOtherCliWriters(unittest.TestCase):
         for name in ("codex", "grok", "cmd"):
             self.assertEqual(writer.get_writer(name).NAME, name)
 
-    def test_codex_reads_the_answer_file_and_keeps_the_sandbox_read_only(self):
-        seen = {}
-
-        def fake_run(cmd, prompt, timeout):
-            seen["cmd"], seen["prompt"] = cmd, prompt
-            with open(cmd[cmd.index("-o") + 1], "w", encoding="utf-8") as h:
-                h.write('{"a1": "承知しました。"}')
-            return "progress lines that are not the answer"
-
+    def test_codex_fails_closed_when_cli_cannot_guarantee_a_tool_free_writer(self):
         w = writer.CodexWriter(exe="codex-not-real", model="gpt-x")
-        with mock.patch.object(writer, "_run", fake_run):
-            out = w.ask_text("PROMPT")
-        self.assertEqual(out, '{"a1": "承知しました。"}')
-        self.assertEqual(seen["prompt"], "PROMPT")
-        for flag in ("exec", "--ephemeral", "--skip-git-repo-check", "read-only", "-m", "gpt-x"):
-            self.assertIn(flag, seen["cmd"])
-        self.assertEqual(seen["cmd"][-1], "-")          # the prompt is read from stdin
+        with mock.patch.object(writer, "_run", side_effect=AssertionError("Codex must not receive the prompt")):
+            with self.assertRaisesRegex(RuntimeError, "tool-free"):
+                w.ask_text("UNTRUSTED EVENT")
 
-    def test_codex_falls_back_to_stdout_when_no_file_was_written(self):
-        w = writer.CodexWriter(exe="codex-not-real")
-        with mock.patch.object(writer, "_run", return_value="the answer"):
-            self.assertEqual(w.ask_text("x"), "the answer")
+    def test_codex_refusal_keeps_template_fallback_in_writer_pipeline(self):
+        res = {"node": "n", "path": [], "actions": [{"type": "teams.reply", "text": "定型文です。"}]}
+        with mock.patch.object(writer, "_run", side_effect=AssertionError("Codex must not receive the prompt")):
+            writer.apply(res, {"author": "A", "text": "依頼"}, writer.CodexWriter(exe="codex-not-real"))
+        self.assertEqual(res["actions"][0]["text"], "定型文です。")
+        self.assertIn("tool-free", res["writer_error"])
 
     def test_grok_gets_the_prompt_as_a_file_with_one_turn_and_no_web(self):
         seen = {}
@@ -701,35 +702,23 @@ class TestOtherCliWriters(unittest.TestCase):
 
 
 class TestCodexModelIsPinned(unittest.TestCase):
-    def cmd_of(self, **kw):
-        seen = {}
-
-        def fake_run(cmd, prompt, timeout):
-            seen["cmd"] = cmd
-            return "x"
-
+    def settings_of(self, **kw):
         w = writer.CodexWriter(exe="codex-not-real", **kw)
-        with mock.patch.object(writer, "_run", fake_run):
-            w.ask_text("p")
-        return seen["cmd"]
+        return w.model, w.effort
 
     def test_default_is_luna_with_low_effort(self):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("KIMERU_CODEX_MODEL", None)
             os.environ.pop("KIMERU_CODEX_EFFORT", None)
-            cmd = self.cmd_of()
-        self.assertEqual(cmd[cmd.index("-m") + 1], "gpt-6-luna")
-        self.assertIn('model_reasoning_effort="low"', cmd)
+        self.assertEqual(self.settings_of(), ("gpt-6-luna", "low"))
 
     def test_env_overrides(self):
         with mock.patch.dict(os.environ, {"KIMERU_CODEX_MODEL": "gpt-6-sol", "KIMERU_CODEX_EFFORT": "medium"}):
-            cmd = self.cmd_of()
-        self.assertEqual(cmd[cmd.index("-m") + 1], "gpt-6-sol")
-        self.assertIn('model_reasoning_effort="medium"', cmd)
+            settings = self.settings_of()
+        self.assertEqual(settings, ("gpt-6-sol", "medium"))
 
     def test_empty_env_counts_as_not_set(self):
         # one rule for every setting: an empty variable is not set, so the default applies (never an empty model name)
         with mock.patch.dict(os.environ, {"KIMERU_CODEX_MODEL": "", "KIMERU_CODEX_EFFORT": ""}):
-            cmd = self.cmd_of()
-        self.assertEqual(cmd[cmd.index("-m") + 1], "gpt-6-luna")
-        self.assertIn('model_reasoning_effort="low"', cmd)
+            settings = self.settings_of()
+        self.assertEqual(settings, ("gpt-6-luna", "low"))

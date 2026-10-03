@@ -23,13 +23,30 @@ def _parse(ts):
     return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
 
 
-def _within(rows, key, since):
+def _within(rows, key, since, now=None):
+    now = now or datetime.now(timezone.utc)
     out = []
     for r in rows:
         d = _parse(r.get(key))
-        if d and d >= since:
+        if d and since <= d <= now:
             out.append(r)
     return out
+
+
+def _date_issues(rows, key, now, include_missing=True):
+    """Count records that cannot support a weekly date-based metric."""
+    invalid = future = 0
+    for row in rows:
+        raw = row.get(key)
+        if not raw:
+            invalid += bool(include_missing)
+            continue
+        parsed = _parse(raw)
+        if parsed is None:
+            invalid += 1
+        elif parsed > now:
+            future += 1
+    return invalid, future
 
 
 def _rule_only(rec):
@@ -72,12 +89,17 @@ def collect(out, now=None):
     now = now or datetime.now(timezone.utc)
     since = now - timedelta(days=7)
     out = Path(out)
-    decisions = _within(review.read_jsonl(out / "decisions.jsonl"), "at", since)
-    approvals = review.read_jsonl(out / "approvals.log.jsonl")
-    dated = _within(approvals, "at", since)
-    undated = sum(1 for r in approvals if not r.get("at"))
-    judge_of_key = {review.decision_key(r): review.judge_of(r) for r in review.read_jsonl(out / "decisions.jsonl")}
-    reviews = _within(review.read_jsonl(review.reviews_path()), "at", since)
+    decision_rows = review.read_jsonl(out / "decisions.jsonl")
+    approval_rows = review.read_jsonl(out / "approvals.log.jsonl")
+    review_rows = review.read_jsonl(review.reviews_path())
+    decisions = _within(decision_rows, "at", since, now)
+    dated = _within(approval_rows, "at", since, now)
+    undated = sum(1 for r in approval_rows if not r.get("at"))
+    judge_of_key = {review.decision_key(r): review.judge_of(r) for r in decision_rows}
+    reviews = _within(review_rows, "at", since, now)
+    sources = ((decision_rows, True), (approval_rows, False), (review_rows, True))
+    invalid_evidence = sum(_date_issues(rows, "at", now, include_missing=missing)[0] for rows, missing in sources)
+    future_evidence = sum(_date_issues(rows, "at", now, include_missing=False)[1] for rows, _ in sources)
     per_graph = {}
     for r in decisions:
         g = per_graph.setdefault(r.get("graph", "?"), {"n": 0, "auto": 0, "human": 0, "rule": 0})
@@ -95,6 +117,7 @@ def collect(out, now=None):
     counted = [r for r in reviews if _judge_of_review(r, judge_of_key) not in (JevBackend.NAME, "unknown")]
     yes = sum(r.get("verdict") == "yes" for r in counted)
     no = sum(r.get("verdict") == "no" for r in counted)
+    wrong = sum(r.get("verdict") == "wrong" for r in counted)
     left_out = sum(r.get("verdict") in ("yes", "no") for r in reviews) - yes - no
     n = len(decisions)
     return {
@@ -103,7 +126,9 @@ def collect(out, now=None):
         "rule": sum(g["rule"] for g in per_graph.values()),
         "critical": sum(1 for r in decisions if r.get("notify")),
         "per_graph": per_graph, "approvals": statuses, "approvals_undated": undated,
-        "judges": judges, "models": models, "reviewed_yes": yes, "reviewed_no": no, "reviewed_left_out": left_out,
+        "invalid_evidence": invalid_evidence, "future_evidence": future_evidence,
+        "judges": judges, "models": models, "reviewed_yes": yes, "reviewed_no": no,
+        "reviewed_wrong": wrong, "reviewed_left_out": left_out,
         "perf": perf_line(decisions),
     }
 
@@ -187,14 +212,23 @@ def render(s, share=False):
         lines.append("承認の結果: 日時つきの記録なし")
     if s["approvals_undated"]:
         lines.append(f"（日時の無い古い承認の記録 {s['approvals_undated']} 件は、期間の集計に入れていません）")
+    if s.get("invalid_evidence"):
+        lines.append(f"日時が不正な記録 {s['invalid_evidence']} 件は、期間の集計に入れていません")
+    if s.get("future_evidence"):
+        lines.append(f"未来の日時の記録 {s['future_evidence']} 件は、期間の集計に入れていません")
     if s.get("perf") and "Jev" not in s["judges"]:
         lines.append(s["perf"])
     total = s["reviewed_yes"] + s["reviewed_no"]
     left_out = s.get("reviewed_left_out", 0)
     if total:
         lines.append(f"判断の一致率: {s['reviewed_yes'] * 100 // total}%（確かめた {total} 件のうち、合っている {s['reviewed_yes']} 件）")
+        if s.get("reviewed_wrong"):
+            lines.append(f"  最終結果が違うとされた判断: {s['reviewed_wrong']} 件（質問単位の一致率には混ぜていません）")
         if left_out:
             lines.append("  （Jev の判断、または判断モデルが分からない判断を確かめた分は、数えていません）")
+    elif s.get("reviewed_wrong"):
+        lines.append("判断の一致率: 出しません（最終結果が違うという確認は質問単位の一致率に混ぜません）")
+        lines.append(f"  最終結果が違うとされた判断: {s['reviewed_wrong']} 件")
     elif "Jev" in s["judges"] or left_out:
         lines.append("判断の一致率: 出しません（数えられる判断がありません。Jev の判断は数えません。Jev の性能の数値は、TypeSafe の利用規約で公開できません）")
     else:

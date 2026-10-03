@@ -16,6 +16,7 @@ import json
 import os
 import re
 import subprocess
+from datetime import datetime, timezone
 import unicodedata
 from pathlib import Path
 
@@ -212,8 +213,28 @@ class PowerShellBridge:
 
 def format_post(n, rec, full=None):
     """`full` is the full text kept while the item waits (fulltext.load): the post then shows it and the earlier messages."""
+    from . import execute
     ev = rec.get("event_kind", "")
-    lines = [f"[kimeru #{n}] 判断が必要（{rec.get('graph')}）", f"{ev} #{rec.get('event_id')}"]
+    memo = rec.get("memo") or {}
+    plan = rec.get("plan") or {}
+    advice = rec.get("advice") or "判断の詳細は以下を確認してください"
+    next_action = memo.get("next") or plan.get("summary") or "Unknown"
+    missing = memo.get("missing") or []
+    effects = []
+    for action in rec.get("actions", []):
+        kind = action.get("type", "?")
+        if kind in execute.SEND_READY:
+            effects.append("コピー用文面を自分チャットへ返す（相手には送信しない）")
+        elif kind == "ado.comment" and action.get("exec_text"):
+            effects.append("実行設定が有効なら、承認後に ADO へコメントを書き込む")
+        else:
+            effects.append("記録のみ")
+    revision = rec.get("revision", 1)
+    lines = [f"[kimeru #{n}] 判断が必要（{rec.get('graph')}） / 改訂 {revision}",
+             f"判断: {advice}", f"次の一手: {next_action}",
+             "不足情報: " + (" / ".join(str(v) for v in missing) if missing else "Unknown"),
+             "OK の効果: " + ("; ".join(dict.fromkeys(effects)) if effects else "記録のみ"),
+             f"{ev} #{rec.get('event_id')}"]
     rf = rec.get("read_full") or {}
     if rf.get("state") == "preview_only":
         lines.append("⚠ プレビューだけで判断しました（" + str(rf.get("why", ""))[:100] + "）。元のメッセージを Teams で確認してください")
@@ -237,7 +258,6 @@ def format_post(n, rec, full=None):
             lines.append("　直前のやり取り: " + str(t)[:120])
     for f in (rec.get("followups") or [])[-3:]:
         lines.append("続きのメッセージ: " + str(f.get("text", ""))[:120])
-    memo = rec.get("memo") or {}
     if memo:
         lines.append("Copilot のメモ:")
         if memo.get("summary"):
@@ -305,9 +325,21 @@ class Approvals:
         self.path = Path(out) / "approvals.json"
         self.data = fsutil.read_json(self.path, {"next": 1, "items": {}})
 
-    def save(self):
+    def save(self, compact=False):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        fsutil.write_atomic(self.path, json.dumps(self.data, ensure_ascii=False, indent=1))
+        text = json.dumps(self.data, ensure_ascii=False, indent=1)
+        if not compact:
+            fsutil.write_atomic(self.path, text)
+            return
+        # A follow-up replaces sensitive old material; an atomic backup would preserve
+        # the superseded draft/execution body. Replace atomically and remove stale backup.
+        tmp = self.path.with_name(f"{self.path.name}.tmp.{os.getpid()}.{id(self)}")
+        try:
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(tmp, self.path)
+            self.path.with_name(self.path.name + ".bak").unlink(missing_ok=True)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     def known(self, key):
         return any(it["key"] == key for it in self.data["items"].values())
@@ -350,6 +382,238 @@ def mark_toasted(out, nums, notice_keys, unposted=None):
             return False
         _mark_toasted_locked(out, nums, notice_keys, unposted)
         return True
+
+
+def delivery_pending(out):
+    """List sends whose result is ambiguous; the list contains targets and times, never post bodies."""
+    out = Path(out)
+    with fsutil.exclusive(lock_path(out)) as got:
+        if not got:
+            return fsutil.BusyList.busy_result()
+        ap = Approvals(out)
+        rows = []
+        for num, item in ap.data.get("items", {}).items():
+            if item.get("delivery_unknown"):
+                rows.append({"kind": "case", "target": str(num), "part": item.get("delivery_unknown_part", "post"),
+                             "at": item.get("delivery_unknown_at")})
+        uncertain = ap.data.get("notice_delivery_unknown", {})
+        if isinstance(uncertain, list):       # records written by the first delivery-evidence version
+            uncertain = {key: None for key in uncertain}
+        for key, at in uncertain.items():
+            rows.append({"kind": "notice", "target": str(key), "at": at})
+        if ap.data.get("outbox_delivery_unknown"):
+            rows.append({"kind": "outbox", "target": "outbox", "at": ap.data.get("outbox_delivery_unknown_at")})
+        daily = fsutil.read_json(out / "daily_state.json", {})
+        pending_brief = daily.get("brief_delivery_unknown")
+        if isinstance(pending_brief, dict):
+            rows.append({"kind": "brief", "target": "brief", "at": pending_brief.get("at"),
+                         "date": pending_brief.get("date")})
+        return rows
+
+
+def retry_delivery(out, kind, target, confirm_not_sent=False):
+    """Release one ambiguous delivery only after an explicit claim that it was not sent.
+
+    This changes no posted/delivered state and does not send anything. The normal
+    posting path may retry only after the caller supplies that confirmation.
+    """
+    if confirm_not_sent is not True:
+        return {"status": "confirmation_required"}
+    out = Path(out)
+    with fsutil.exclusive(lock_path(out)) as got:
+        if not got:
+            return {"status": "busy"}
+        ap = Approvals(out)
+        changed = False
+        if kind == "case":
+            num = str(target)
+            item = ap.data.get("items", {}).get(num)
+            if item and item.get("delivery_unknown"):
+                for name in ("delivery_unknown", "delivery_unknown_part", "delivery_unknown_at",
+                             "delivery_unknown_revision"):
+                    item.pop(name, None)
+                changed = True
+        elif kind == "notice":
+            uncertain = ap.data.get("notice_delivery_unknown", {})
+            if isinstance(uncertain, list):
+                uncertain = {key: None for key in uncertain}
+            if str(target) in uncertain:
+                uncertain.pop(str(target), None)
+                ap.data["notice_delivery_unknown"] = uncertain
+                changed = True
+        elif kind == "outbox" and str(target) == "outbox" and ap.data.get("outbox_delivery_unknown"):
+            ap.data.pop("outbox_delivery_unknown", None)
+            ap.data.pop("outbox_delivery_unknown_at", None)
+            changed = True
+        elif kind == "brief" and str(target) == "brief":
+            state_path = out / "daily_state.json"
+            state = fsutil.read_json(state_path, {})
+            if state.pop("brief_delivery_unknown", None) is not None:
+                fsutil.write_atomic(state_path, json.dumps(state, ensure_ascii=False))
+                state_path.with_name(state_path.name + ".bak").unlink(missing_ok=True)
+                changed = True
+        if not changed:
+            return {"status": "not_pending"}
+        if not (kind == "brief" and str(target) == "brief"):
+            ap.save()
+        at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        log = out / "delivery-recovery.log.jsonl"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"at": at, "kind": kind, "target": str(target), "action": "confirmed_not_sent"},
+                               ensure_ascii=False) + "\n")
+        return {"status": "released", "kind": kind, "target": str(target)}
+
+
+def delivery_show(out, kind, target):
+    """Return the exact text for a pending ambiguous delivery, for human inspection."""
+    out = Path(out)
+    ap = Approvals(out)
+    if kind == "case":
+        item = ap.data.get("items", {}).get(str(target))
+        if not item or not item.get("delivery_unknown"):
+            return None
+        record = item.get("record") or {}
+        if item.get("delivery_unknown_part") == "copilot_request":
+            from . import fulltext
+            full = fulltext.load(out, item["key"]) or {}
+            return f"[kimeru #{target} Copilot 用]\n{full.get('request') or record.get('copilot_request') or ''}"
+        from . import fulltext
+        return format_post(target, record, fulltext.load(out, item["key"]))
+    if kind == "outbox" and str(target) == "outbox" and ap.data.get("outbox_delivery_unknown"):
+        box = ap.data.get("outbox") or []
+        return box[0] if box else None
+    if kind == "notice":
+        uncertain = ap.data.get("notice_delivery_unknown", {})
+        if isinstance(uncertain, list):
+            uncertain = {key: None for key in uncertain}
+        key = str(target)
+        if key not in uncertain:
+            return None
+        path = out / "notices.jsonl"
+        if path.exists():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    record = json.loads(line)
+                    if _key(record) == key:
+                        return format_notice(record)
+        return None
+    if kind == "brief" and str(target) == "brief":
+        state = fsutil.read_json(out / "daily_state.json", {})
+        return (state.get("brief_delivery_unknown") or {}).get("text")
+    return None
+
+
+def deliver_brief(out, bridge, text, send, date):
+    """Post a brief with the same explicit delivery evidence and recovery hold used by daily."""
+    if not send:
+        bridge.post(text, False)
+        return {"status": "pasted"}
+    out = Path(out)
+    with fsutil.exclusive(lock_path(out)) as got:
+        if not got:
+            return {"status": "busy"}
+        state_path = out / "daily_state.json"
+        state = fsutil.read_json(state_path, {})
+        if state.get("brief_delivery_unknown"):
+            return {"status": "delivery_unknown"}
+        if state.get("brief_date") == date:
+            return {"status": "already_delivered"}
+        try:
+            result = bridge.post(text, True)
+            error_data = None
+        except Exception as e:
+            result = getattr(e, "data", None)
+            error_data = result
+        if _delivered(result, True):
+            state["brief_date"] = date
+            state.pop("brief_delivery_unknown", None)
+            fsutil.write_atomic(state_path, json.dumps(state, ensure_ascii=False))
+            state_path.with_name(state_path.name + ".bak").unlink(missing_ok=True)
+            return {"status": "delivered"}
+        if _delivery_unknown(error_data if error_data is not None else result, True):
+            state["brief_delivery_unknown"] = {
+                "date": date, "at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "text": text}
+            fsutil.write_atomic(state_path, json.dumps(state, ensure_ascii=False))
+            state_path.with_name(state_path.name + ".bak").unlink(missing_ok=True)
+            return {"status": "delivery_unknown"}
+        return {"status": "not_sent"}
+
+
+def confirm_delivery(out, kind, target, confirm_delivered=False):
+    """Resolve an ambiguous result from the user's explicit delivery confirmation."""
+    if confirm_delivered is not True:
+        return {"status": "confirmation_required"}
+    out = Path(out)
+    with fsutil.exclusive(lock_path(out)) as got:
+        if not got:
+            return {"status": "busy"}
+        ap = Approvals(out)
+        changed = False
+        if kind == "case":
+            item = ap.data.get("items", {}).get(str(target))
+            if item and item.get("delivery_unknown"):
+                part = item.get("delivery_unknown_part", "post")
+                uncertain_revision = item.get("delivery_unknown_revision", item.get("revision", 1))
+                if uncertain_revision == item.get("revision", 1):
+                    if part == "post":
+                        item["posted"], item["toasted"] = True, False
+                    elif part == "copilot_request":
+                        item["request_posted"] = True
+                # An older revision may have been delivered, but it cannot mark the
+                # current revised proposal as posted or approved.
+                for name in ("delivery_unknown", "delivery_unknown_part", "delivery_unknown_at", "delivery_unknown_revision"):
+                    item.pop(name, None)
+                changed = True
+        elif kind == "notice":
+            uncertain = ap.data.get("notice_delivery_unknown", {})
+            if isinstance(uncertain, list):
+                uncertain = {key: None for key in uncertain}
+            if str(target) in uncertain:
+                uncertain.pop(str(target), None)
+                ap.data["notice_delivery_unknown"] = uncertain
+                if str(target) not in ap.data.get("notices", []):
+                    ap.data.setdefault("notices", []).append(str(target))
+                changed = True
+        elif kind == "outbox" and str(target) == "outbox" and ap.data.get("outbox_delivery_unknown"):
+            box = list(ap.data.get("outbox") or [])
+            if box:
+                handoff = re.match(r"^\[kimeru 送信用 #(\d+)\]", str(box[0]))
+                if handoff:
+                    item = ap.data.get("items", {}).get(handoff.group(1))
+                    if item:
+                        prior = item.get("handoff_unknown") or {}
+                        item.setdefault("handoff_evidence", []).append({
+                            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                            "revision": prior.get("revision", item.get("revision", 1)),
+                            "source": "user_confirmation"})
+                        item.pop("handoff_unknown", None)
+            ap.data["outbox"] = box[1:]
+            ap.data.pop("outbox_delivery_unknown", None)
+            ap.data.pop("outbox_delivery_unknown_at", None)
+            changed = True
+        elif kind == "brief" and str(target) == "brief":
+            state_path = out / "daily_state.json"
+            state = fsutil.read_json(state_path, {})
+            pending = state.pop("brief_delivery_unknown", None)
+            if isinstance(pending, dict):
+                state["brief_date"] = pending.get("date")
+                fsutil.write_atomic(state_path, json.dumps(state, ensure_ascii=False))
+                state_path.with_name(state_path.name + ".bak").unlink(missing_ok=True)
+                changed = True
+        if not changed:
+            return {"status": "not_pending"}
+        # Brief state was saved above; all other state is saved in approvals.json.
+        if not (kind == "brief" and str(target) == "brief"):
+            ap.save()
+        at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        log = out / "delivery-recovery.log.jsonl"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"at": at, "kind": kind, "target": str(target),
+                                "action": "confirmed_delivered", "source": "user_confirmation"},
+                               ensure_ascii=False) + "\n")
+        return {"status": "confirmed", "kind": kind, "target": str(target)}
 
 
 def _mark_toasted_locked(out, nums, notice_keys, unposted=None):
@@ -447,17 +711,29 @@ def notify_notices(out, bridge, send=False):
 def _notify_notices_locked(out, bridge, send):
     ap = Approvals(out)
     done = set(ap.data.setdefault("notices", []))
+    uncertain = ap.data.setdefault("notice_delivery_unknown", {})
+    if isinstance(uncertain, list):
+        uncertain = ap.data["notice_delivery_unknown"] = {key: None for key in uncertain}
     q = out / "notices.jsonl"
     rows = [json.loads(l) for l in q.read_text(encoding="utf-8").splitlines() if l.strip()] if q.exists() else []
     posted = []
     for rec in rows:
         key = _key(rec)
-        if key in done:
+        if key in done or key in uncertain:
             continue
         fsutil.refresh(lock_path(out))
-        r = bridge.post(format_notice(rec), send) or {}
-        if send and (r.get("typed") is False or r.get("sent") is False):
-            raise RuntimeError(f"notice {key} was not posted as planned: {r}")
+        try:
+            r = bridge.post(format_notice(rec), send) or {}
+        except Exception as e:
+            if send and _delivery_unknown(getattr(e, "data", None), True):
+                ap.data["notice_delivery_unknown"][key] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                ap.save()
+            raise
+        if send and not _delivered(r, True):
+            if _delivery_unknown(r, True):
+                ap.data["notice_delivery_unknown"][key] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                ap.save()
+            raise RuntimeError(f"notice {key} was not posted with verified readback")
         if send:
             ap.data["notices"].append(key); done.add(key)
             ap.save()
@@ -490,6 +766,8 @@ def _notify_locked(out, bridge, send, real):
     fulltext.purge_safe(out)   # a full text kept too long is deleted (a failure is noted in warnings.jsonl; the posts go on); the item is then treated as decided from the preview
     ap = Approvals(out)
     for n, it in ap.data["items"].items():
+        if it.get("delivery_unknown"):
+            continue
         req = it["record"].get("copilot_request")
         if it["posted"] and (not req or it.get("request_posted")):
             continue
@@ -498,9 +776,20 @@ def _notify_locked(out, bridge, send, real):
             execute.freeze(it["record"], real)
             ap.save()
             fsutil.refresh(lock_path(out))
-            r = bridge.post(format_post(n, it["record"], fulltext.load(out, it["key"])), send) or {}
-            if send and (r.get("typed") is False or r.get("sent") is False):
-                raise RuntimeError(f"#{n} was not posted as planned: {r}")   # stays unposted; retried next cycle
+            try:
+                r = bridge.post(format_post(n, it["record"], fulltext.load(out, it["key"])), send) or {}
+            except Exception as e:
+                if send and _delivery_unknown(getattr(e, "data", None), True):
+                    it["delivery_unknown"], it["delivery_unknown_part"] = True, "post"
+                    it["delivery_unknown_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                    ap.save()
+                raise
+            if send and not _delivered(r, True):
+                if _delivery_unknown(r, True):
+                    it["delivery_unknown"], it["delivery_unknown_part"] = True, "post"
+                    it["delivery_unknown_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                    ap.save()
+                raise RuntimeError(f"#{n} was not posted with verified readback")
             if send:
                 it["posted"], it["toasted"] = True, False
                 ap.save()  # a failure on a later item must not forget what was already sent
@@ -508,9 +797,20 @@ def _notify_locked(out, bridge, send, real):
         if req and not it.get("request_posted"):   # its own message: one long-press copies just this
             req = (fulltext.load(out, it["key"]) or {}).get("request") or req   # the request with the whole text is kept apart from the records
             fsutil.refresh(lock_path(out))
-            r2 = bridge.post(f"[kimeru #{n} Copilot 用]" + chr(10) + req, send) or {}
-            if send and (r2.get("typed") is False or r2.get("sent") is False):
-                raise RuntimeError(f"#{n} Copilot request was not posted as planned: {r2}")
+            try:
+                r2 = bridge.post(f"[kimeru #{n} Copilot 用]" + chr(10) + req, send) or {}
+            except Exception as e:
+                if send and _delivery_unknown(getattr(e, "data", None), True):
+                    it["delivery_unknown"], it["delivery_unknown_part"] = True, "copilot_request"
+                    it["delivery_unknown_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                    ap.save()
+                raise
+            if send and not _delivered(r2, True):
+                if _delivery_unknown(r2, True):
+                    it["delivery_unknown"], it["delivery_unknown_part"] = True, "copilot_request"
+                    it["delivery_unknown_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                    ap.save()
+                raise RuntimeError(f"#{n} Copilot request was not posted with verified readback")
             if send:
                 it["request_posted"] = True
                 ap.save()
@@ -690,8 +990,28 @@ def _apply_paste(it, text):
 
 
 def _delivered(r, send):
-    """A post counts as delivered only when it was really sent."""
-    return bool(send) and not ((r or {}).get("typed") is False or (r or {}).get("sent") is False)
+    """A post counts as delivered only with typed, sent and identity-backed readback evidence."""
+    if not send or not isinstance(r, dict):
+        return False
+    readback = r.get("readback")
+    return (r.get("ok") is True and r.get("typed") is True and r.get("sent") is True
+            and isinstance(readback, dict) and readback.get("matched") is True
+            and isinstance(readback.get("message_id"), str) and bool(readback["message_id"].strip()))
+
+
+def _delivery_unknown(r, send):
+    """True when the bridge did not prove either delivery or a definitely unsent result."""
+    if not send:
+        return False
+    if _delivered(r, True):
+        return False
+    if isinstance(r, dict):
+        readback = r.get("readback")
+        matched = isinstance(readback, dict) and readback.get("matched") is True
+        # Only an explicit no-send result without contrary readback evidence is retryable.
+        if r.get("sent") is False and not matched:
+            return False
+    return True
 
 
 def flush_outbox(ap, bridge, send):
@@ -702,16 +1022,41 @@ def flush_outbox(ap, bridge, send):
     box = list(ap.data.get("outbox") or [])
     if not box or not send:
         return not box
+    if ap.data.get("outbox_delivery_unknown"):
+        return False
     for k, text in enumerate(box):
         fsutil.refresh(ap.path.with_name("approvals.lock"))
         try:
-            ok = _delivered(bridge.post(text, True), True)
-        except Exception:
+            result = bridge.post(text, True)
+            ok = _delivered(result, True)
+            unknown = _delivery_unknown(result, True)
+        except Exception as e:
             ok = False
+            unknown = _delivery_unknown(getattr(e, "data", None), True)
+            result = getattr(e, "data", None)
         if not ok:
             ap.data["outbox"] = box[k:]
+            if unknown:
+                ap.data["outbox_delivery_unknown"] = True
+                ap.data["outbox_delivery_unknown_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                handoff = re.match(r"^\[kimeru 送信用 #(\d+)\]", str(text))
+                if handoff and handoff.group(1) in ap.data.get("items", {}):
+                    item = ap.data["items"][handoff.group(1)]
+                    item.setdefault("handoff_unknown_history", []).append({
+                        "at": ap.data["outbox_delivery_unknown_at"], "revision": item.get("revision", 1)})
+                    item["handoff_unknown"] = {"at": ap.data["outbox_delivery_unknown_at"],
+                                               "revision": item.get("revision", 1)}
             ap.save()
             return False
+        handoff = re.match(r"^\[kimeru 送信用 #(\d+)\]", str(text))
+        if handoff and handoff.group(1) in ap.data.get("items", {}):
+            item = ap.data["items"][handoff.group(1)]
+            readback = result.get("readback") if isinstance(result, dict) else {}
+            item.setdefault("handoff_evidence", []).append({
+                "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "revision": item.get("revision", 1), "message_id": readback.get("message_id", ""),
+                "source": "bridge_readback"})
+            item.pop("handoff_unknown", None)
     ap.data["outbox"] = []
     ap.save()
     return True

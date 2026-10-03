@@ -107,7 +107,7 @@ class TestReview(Base):
         self.assertFalse(str(review.fixtures_path()).startswith(str(ROOT)))
         self.assertEqual(len(review.read_jsonl(review.reviews_path())), 2)
         # reviewed decisions are not asked again
-        self.assertEqual(self.run_review([])[0], {"yes": 0, "no": 0, "unknown": 0})
+        self.assertEqual(self.run_review([])[0], {"yes": 0, "no": 0, "wrong": 0, "unknown": 0})
 
     def test_unknown_and_quit(self):
         self.decide([self.chat("これは何ですか", i="1"), self.chat("あれは何ですか", i="2")])

@@ -195,12 +195,16 @@ class TestTheDailyCycleDoesNotStopWhenTheLockCannotBeCreated(unittest.TestCase):
             ap.data["unposted_announced"] = 2                                # "2 unposted" was announced and none is unposted now: the notice is cleared
             ap.save()
             t.chat_list = [one_on_one("これは何ですか", "8:05")]
+            posts_before_lock_denial = list(t.posts)
             with mock.patch.object(fsutil, "exclusive", deny_the_lock):
                 r = run(datetime(2026, 9, 28, 8, 10))                        # no exception
             self.assertEqual(r["judge"], 1)
             self.assertTrue(str(r["notify"]).startswith("error"), r)         # the steps that need the lock fail alone ...
             self.assertTrue(str(r["toast_clear"]).startswith("error"), r)
-            self.assertIsInstance(r["brief"], int)                           # ... and the brief, and the record of the cycle, are there
+            self.assertTrue(str(r["brief"]).startswith("error: LockFolderError"), r)
+            self.assertEqual(t.posts, posts_before_lock_denial)               # no message was posted while the lock was denied
+            daily_state = fsutil.read_json(out / "daily_state.json", {})
+            self.assertNotIn("brief_date", daily_state)                       # lock denial cannot be reported as delivered
             rows = [json.loads(l) for l in (out / "daily.log.jsonl").read_text(encoding="utf-8").splitlines()]
             self.assertEqual(rows[-1]["step"], "cycle")
             self.assertEqual(rows[-1]["report"]["judge"], 1)

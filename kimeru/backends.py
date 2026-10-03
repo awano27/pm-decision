@@ -4,6 +4,7 @@ score -> {"score", "confidence", "probabilities"}.
 """
 import http.client
 import json
+import math
 import os
 import time
 import urllib.error
@@ -14,6 +15,79 @@ from . import config
 
 
 API_KEYS = ("type", "instructions", "criteria")
+
+
+class BackendAnswerError(ValueError):
+    """A judge response is missing or malformed for its requested question."""
+
+
+def _probability_map(question, value, qid):
+    if value is None:  # probability maps are optional in supported judge responses
+        return
+    if not isinstance(value, dict):
+        raise BackendAnswerError(f"{qid}: probabilities must be an object")
+    qtype = question.get("type")
+    criteria = question.get("criteria") or {}
+    for key, probability in value.items():
+        if qtype == "choice":
+            valid_key = key in criteria
+        elif qtype == "noul":
+            valid_key = True  # the scalar noul answer is authoritative; maps are unused
+        else:
+            valid_key = str(key).isdigit() and 0 <= int(key) < len(criteria)
+        if not valid_key:
+            raise BackendAnswerError(f"{qid}: invalid probability key {key!r}")
+        if not _probability(probability):
+            raise BackendAnswerError(f"{qid}: probability for {key!r} must be between 0 and 1")
+
+
+def _probability(value):
+    return (not isinstance(value, bool) and isinstance(value, (int, float))
+            and math.isfinite(value) and 0 <= value <= 1)
+
+
+def validate_answer(question, answer, qid="answer"):
+    """Validate required typed values while accepting optional/partial probability maps."""
+    if not isinstance(answer, dict):
+        raise BackendAnswerError(f"{qid}: answer must be an object")
+    qtype = question.get("type")
+    if answer.get("type", qtype) != qtype:
+        raise BackendAnswerError(f"{qid}: answer type does not match {qtype!r}")
+    if "confidence" in answer and not _probability(answer["confidence"]):
+        raise BackendAnswerError(f"{qid}: confidence must be between 0 and 1")
+    if qtype == "noul":
+        if "noul" not in answer or not _probability(answer["noul"]):
+            raise BackendAnswerError(f"{qid}: noul must be a number between 0 and 1")
+    elif qtype == "choice":
+        criteria = question.get("criteria") or {}
+        if answer.get("choice") not in criteria:
+            raise BackendAnswerError(f"{qid}: choice must be one of {sorted(criteria)}")
+        if "confidence" not in answer:
+            raise BackendAnswerError(f"{qid}: confidence is required for choice answers")
+    elif qtype == "score":
+        # Scores are continuous against exclusive routing bands: a three-level
+        # scale accepts 2.6, while 3.0 is outside its [0, 3) range.
+        score, limit = answer.get("score"), len(question.get("criteria") or [])
+        if (isinstance(score, bool) or not isinstance(score, (int, float))
+                or not math.isfinite(score) or not 0 <= score < limit):
+            raise BackendAnswerError(f"{qid}: score must be at least 0 and below {limit}")
+        if "confidence" not in answer:
+            raise BackendAnswerError(f"{qid}: confidence is required for score answers")
+    else:
+        raise BackendAnswerError(f"{qid}: unsupported question type {qtype!r}")
+    _probability_map(question, answer.get("probabilities"), qid)
+    return answer
+
+
+def validate_answers(questions, answers):
+    if not isinstance(answers, dict):
+        raise BackendAnswerError("answers must be an object")
+    missing = set(questions) - set(answers)
+    if missing:
+        raise BackendAnswerError(f"missing answers: {', '.join(sorted(missing))}")
+    for qid, question in questions.items():
+        validate_answer(question, answers[qid], qid)
+    return answers
 
 
 def jev_questions(questions):
@@ -48,7 +122,10 @@ class JevBackend:
             req = urllib.request.Request(self.api + "/systemone", data=body, method="POST", headers=headers)
             try:
                 with _urlopen(req, self.TIMEOUT) as r:
-                    return json.loads(r.read().decode("utf-8"))["answers"]
+                    response = json.loads(r.read().decode("utf-8"))
+                    if not isinstance(response, dict):
+                        raise BackendAnswerError("response must be an object")
+                    return validate_answers(questions, response.get("answers"))
             except urllib.error.HTTPError as e:
                 if e.code in (429, 500, 502, 503, 504, 529) and attempt < self.retries - 1:
                     time.sleep(delay)

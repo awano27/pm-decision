@@ -147,4 +147,13 @@ def build(out, backend, top=3, now=None, date=None):
     lost = not_put_back(out, now=now)
     if lost:
         text += f"\n⚠ 開いたチャットを元へ戻せなかった件が {lost} 件あります。Teams で開いているチャットを確認してください"
+    # Progress is a local, explicit fact (or Unknown for legacy approvals). It is
+    # appended separately and does not create another model/ranking call.
+    from . import work
+    unfinished = [row for row in work.list_work(out) if row["state"] != "done"]
+    if unfinished:
+        text += "\n\n承認済み・未完了の作業（確認待ちとは別の進捗管理）:"
+        for row in unfinished:
+            text += (f"\n- #{row['case']} 改訂 {row['revision']} / {row['state']} / 次: {row['next_action']} / "
+                     f"担当: {row['owner']} / 期限: {row['due']} / 完了条件: {row['completion_condition']}")
     return text, ranked

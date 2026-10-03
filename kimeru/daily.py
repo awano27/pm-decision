@@ -345,16 +345,22 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
     today = now.strftime("%Y-%m-%d")
     # while the judge is down the brief would say "nothing to do" and be final for the day: wait for it
     if now.hour >= brief_hour and st.get("brief_date") != today and not r["waiting"]:
-        def do_brief():
-            text, ranked = brief_mod.build(out, backend, date=today)
-            if len(ranked) >= 2:   # a one-line day needs no summary, and an empty one must not invent one
-                text = _with_key_points(text)
-            bridge.post(text, send)
-            return len(ranked)
-        _step(out, "brief", do_brief, r)
-        if not str(r.get("brief", "")).startswith("error") and send:
-            st["brief_date"] = today
-            _step(out, "brief_state", lambda: fsutil.write_atomic(st_path, json.dumps(st)) or "saved", r)
+        if st.get("brief_delivery_unknown"):
+            r["brief"] = "error: brief delivery_unknown; use delivery show/confirm/retry"
+            _log(out, {"step": "brief", "status": "delivery_unknown_hold"})
+        else:
+            def do_brief():
+                text, ranked = brief_mod.build(out, backend, date=today)
+                if len(ranked) >= 2:   # a one-line day needs no summary, and an empty one must not invent one
+                    text = _with_key_points(text)
+                result = notify.deliver_brief(out, bridge, text, send, today)
+                status = result["status"]
+                if status in ("delivered", "pasted", "already_delivered"):
+                    return len(ranked)
+                if status == "delivery_unknown":
+                    return "error: brief delivery_unknown; use delivery show/confirm/retry"
+                return f"error: brief delivery {status}"
+            _step(out, "brief", do_brief, r)
     stuck = fulltext.failures()
     if stuck:   # a full text that could not be deleted is still on the disk: it is shown, not only written to warnings.jsonl
         r["full_text_delete_failed"] = stuck

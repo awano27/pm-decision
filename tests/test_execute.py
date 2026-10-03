@@ -80,10 +80,15 @@ class Bridge:
 
     def post(self, text, send):
         if self.fail_posts:
-            raise RuntimeError("Teams is not reachable")
+            error = RuntimeError("Teams is not reachable")
+            # This test double fails before typing or sending; distinguish that
+            # known-unsent outcome from an ambiguous bridge exception.
+            error.data = {"ok": False, "typed": False, "sent": False}
+            raise error
         self.posts.append(text)
         self.sent_flags.append(bool(send))
-        return {"ok": True, "typed": True, "sent": bool(send)}
+        return {"ok": True, "typed": True, "sent": bool(send),
+                "readback": {"matched": bool(send), "message_id": f"fake-{len(self.posts)}" if send else ""}}
 
     def read(self):
         tl = []

@@ -19,6 +19,26 @@ python -m kimeru schedule install|remove|status   # タスクスケジューラ�
 python -m kimeru push test|status                 # 通知の経路（iPhone 用）の試験と状態（[docs](push-notification.md)）
 ```
 
+#### 手動の進捗と曖昧な配信の確認
+
+`--out` はトップレベルのコマンドより前に指定します。`work` は明示承認済み case の作業進捗をローカルに記録します。`STATE` は `approved` / `in_progress` / `done` / `blocked` です。`done` は人が手動で付ける進捗で、case の承認状態、ADO の状態、外部実行を変更しません。
+
+```powershell
+python -m kimeru --out <出力先> work list
+python -m kimeru --out <出力先> work set N STATE [--owner TEXT] [--due YYYY-MM-DD] [--completion-condition TEXT]
+```
+
+配信結果が曖昧で自動再送を止めているときは、`delivery list` で本文を表示せず対象を確認し、必要なら `show` で保留中の本文をローカルに表示します。`KIND` は `case` / `notice` / `outbox` / `brief`、`TARGET` は case 番号・通知キー・`outbox`・`brief` です。
+
+```powershell
+python -m kimeru --out <出力先> delivery list
+python -m kimeru --out <出力先> delivery show KIND TARGET
+python -m kimeru --out <出力先> delivery retry KIND TARGET --confirm-not-sent
+python -m kimeru --out <出力先> delivery confirm KIND TARGET --confirm-delivered
+```
+
+`retry` は「送られていない」と確認した場合だけ `--confirm-not-sent` を付けます。これは自動再試行の保留を解除するだけで、その場で送信しません。`confirm` は、期待された本文全体が自分とのチャットに表示されたという本人の申告を `user_confirmation` として記録し、保留を解除します。画面の読み戻しによる確認とは区別され、case の承認、作業の完了、ADO 実行を意味しません。どちらも確認フラグを省けば状態を変更しません。古い改訂の不明結果を確認しても、新しい改訂を投稿済みにはしません。配信の確認記録はその時の申告または読み戻しの証拠として残し、実際の相手側の処理完了とは区別してください。
+
 ### Teams の本文を全文で読む
 
 既定では、チャット一覧の 1 行のプレビューだけを読みます。長い依頼は途中で切れ、その前のやり取りも見ません。`kimeru config set read_full 1` にすると、**必要な件だけ**、そのチャットを開いて直近のメッセージ（既定 5 件）を読みます（読み取りだけ。入力欄には触りません）。
@@ -54,6 +74,12 @@ python -m kimeru push test|status                 # 通知の経路（iPhone 用
 - `kimeru digest --week [--share]`: 直近 7 日の件数、自動と人の割合、規則で決めた件数、重大な通知、承認の結果、判断の一致率。`--share` は、Issue に貼れる形です（数値と環境だけ。同梱のグラフ以外の名前は「追加のグラフ N」に伏せ、本文・人名・件名・ID・パスは出ません）。**一致率は、Jev の判断を数えません**（期間や出力先が違っても）。Jev の性能の数値は、公開できません（TypeSafe の利用規約）
 - `kimeru config show --share`: Issue に貼れる設定の一覧です。パス、ADO の組織とプロジェクト、サブスクリプション、メールの宛先、接続先の URL は出さず、「設定あり」とだけ出します。1 行目に、kimeru の版、OS、Python、画面の倍率が出ます。不具合の報告には、`config show` ではなく、これを貼ってください
 - `kimeru calibrate [--apply | --revert | --allow-wider] [--min-questions N]`: 記録した回答を、別の係数で読み直して、`conf_scale` と `noul_scale` の変更を探します（条件は 1 週間の試し方）。**判断モデルごとに分けて**探し、適用します。Jev・Kev・CLM の判断を確かめた記録だけが対象で、stub など判断モデルの分からない記録からは、探さず、適用せず、理由を出します。`--apply` は、状態フォルダの `thresholds.json` に書きます。グラフと `profiles.py` は書き換えません。`--revert` は、このファイルを消します
+
+### 要件ドラフト
+
+`kimeru requirements build N [--answers PATH] [--force]` は、既存 case `N` から回答・利用可能な材料・source references をローカルの Markdown と JSON に保存します。case の承認状態は問いません。回答 JSON では `must_have`、`optional`、`out_of_scope`、`acceptance_criteria`、`open_questions` の5キーすべてが必須で、それぞれ文字列の配列です。回答がない項目は空配列にし、`Unknown` と追加質問として扱います。モデルに分類させません。通常 build は既存の成果物を上書きしません。
+
+`kimeru requirements approve N` は現在の 2 ファイルの hash を記録します。`kimeru requirements status N` は内容が変更されていない場合だけローカル成果物を approved と表示します。この記録は元 case の承認や外部 write を許可しません。詳細とオフライン walkthrough は [要件ドラフト](requirements.md) を参照してください。
 
 状態フォルダ（`%LOCALAPPDATA%\kimeru`、`KIMERU_STATE_DIR` で変えられます）のファイル:
 

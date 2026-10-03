@@ -358,12 +358,22 @@
       "patterns": [
         "(customers?|users?)[^.;]{0,40}(cannot|can't|unable to|are unable to)[^.;]{0,20}(pay|check ?out|sign in|log ?in|access|use the service)",
         "(支払|決済|購入|ログイン|サインイン|ログオン)[^。]{0,10}(できない|できません|不可|通らない|失敗)",
-        "(all|every) regions?|全(リージョン|ユーザー|拠点)",
-        "(完全|全面)?停止中|全停止|サービス停止|service (is )?down|outage"
+        "(all|every) regions? (?:are )?(?:currently )?(?:down|unavailable|failing|failed|returning (?:5xx|errors?))",
+        "全(リージョン|ユーザー|拠点)[^。]{0,12}現在[^。]{0,12}(停止|利用できない|障害|失敗|エラー)",
+        "(完全|全面)?停止中|全停止|サービス停止|service (?:is )?(?:currently )?down|service unavailable|(?:currently experiencing an )?outage (?:is )?(?:currently )?(?:active|ongoing)"
+      ],
+      "exclude": [
+        "(障害|エラー|停止|失敗)(?:なく|がない|はない|ではない|が発生していません|が発生していない|していません|していない)|正常|問題なく|利用できます|利用可能",
+        "明日|明後日|来週|来月|今後|将来|可能性|見込み|予測|予定|tomorrow|next (?:day|week|month)|will (?:be|happen|occur)|expected|forecast|might|may|could|possible|possibility|planned|future"
+      ],
+      "mixed_if": [
+        "全(リージョン|ユーザー|拠点)[^。]{0,12}現在[^。]{0,12}(?:障害|停止|エラー)(?:が発生しています|が発生している|が続いています|が続いている|中)",
+        "(all|every) regions? (?:are )?(?:currently )?(?:down|unavailable|failing|failed|returning (?:5xx|errors?))"
       ],
       "routes": {
         "yes": "plan_incident",
-        "no": "future_risk"
+        "no": "future_risk",
+        "mixed": "page_advice"
       }
     }
   }

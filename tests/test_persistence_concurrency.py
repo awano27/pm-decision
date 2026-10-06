@@ -220,7 +220,8 @@ class PushSingleFlight(unittest.TestCase):
         thread = threading.Thread(target=lambda: result.setdefault("first", push.run(self.out, now=1000, sender=sender)))
         thread.start()
         self.assertTrue(entered.wait(3), "first sender did not start")
-        relative_alias = Path(os.path.relpath(self.out, Path.cwd()))
+        # another spelling of the same folder (relpath fails when the temp folder is on another drive)
+        relative_alias = self.out / ".." / self.out.name
         second = push.run(relative_alias, now=1000, sender=lambda r, t: calls.append((r, t)))
         self.assertEqual(second, {"webhook": "busy; retry later"})
         release.set()

@@ -191,7 +191,16 @@ python -m kimeru config path
 - noul: `yes` / `no` / `unsure`。`yes_at`（既定 0.7）、`no_at`（既定 0.3）
 - choice: 各選択肢 + `unsure`。`min_conf`（既定 0.6）未満は unsure
 - score: `bands: [[上限(未満), node], ...]` + `unsure`。`guards` で「Sev0/1 なのに低い評価」を人へ回せる
+- 判断モデルの答えが壊れている（型が違う、選択肢に無い、確率が範囲外）ときも `unsure` の行き先へ進む。取り込んだファイルごと止まることはない
 - `unsure` の行き先は 3 通り: 人に回す（`advise`。確認待ちに入る）／次の質問へ／安全側の決定（`decide`。`notify: true` なら **[kimeru 通知]**、無ければ記録だけ）。同梱のグラフには、安全側の決定に直結する `unsure` があり、そのうち通知しないものもある（`python -m kimeru validate` の出力ではなく、各グラフの `routes.unsure` で確かめる）
+
+### グラフ全体の重大事象の守り（`severe`）
+
+```json
+{"severe": {"field": "severity", "pattern": "^Sev[01]$", "exempt": ["log_resolved"]}}
+```
+
+イベントの欄が `pattern` に当たると、`exempt` 以外のどの行き先でも PM に届く。`decide` は通知し（`notify`）、`advise` は確認待ちに入れる。判断モデルがどう答えても変わらない。同梱のグラフでは、アラートの Sev0/1（解消済みは除く）と、優先度 1 で起票された ADO の件に掛けている。
 
 ### match ノード（規則）
 

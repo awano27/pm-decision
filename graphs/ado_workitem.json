@@ -2,6 +2,11 @@
   "name": "workitem-intake",
   "event": "ado.workitem.created",
   "start": "critical_bug",
+  "severe": {
+    "_comment": "a work item filed at priority 1 always reaches the PM, whichever path the model's answers took",
+    "field": "priority",
+    "pattern": "^1$"
+  },
   "nodes": {
     "ready": {
       "kind": "judge",
@@ -66,8 +71,15 @@
           ]
         }
       },
-      "_comment": "ordinal: adjacent-level splits are expected (min_conf low); splits across non-adjacent levels go to a human",
+      "_comment": "ordinal: adjacent-level splits are expected (min_conf low); splits across non-adjacent levels go to a human. A work item filed at priority 1 that the model would lower goes to a person",
       "min_conf": 0.3,
+      "guards": [
+        {
+          "field": "priority",
+          "pattern": "^1$",
+          "below": 1.6
+        }
+      ],
       "routes": {
         "bands": [
           [

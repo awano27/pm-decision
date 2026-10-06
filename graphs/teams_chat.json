@@ -1,8 +1,37 @@
 {
   "name": "teams-chat-triage",
   "event": "teams.chat",
-  "start": "intent",
+  "start": "critical_incident",
   "nodes": {
+    "critical_incident": {
+      "kind": "match",
+      "_comment": "safety net: a chat that reports production or customers broken right now is an incident whatever the model answers. Questions, plans, tests and negations are left to the model (exclude); a recovery note goes to a person (mixed)",
+      "fields": [
+        "text"
+      ],
+      "patterns": [
+        "(本番|全ユーザー|全顧客|多数の(顧客|ユーザー|お客様)|顧客)[^。？?]{0,30}(できなく(なって|なりました)|できません|できない状態|通らなく|通りません|落ちて(い|ま)|止まって(い|ま)|停止して(い|ま)|ダウンして|つながりません|繋がりません|つながらなく|繋がらなく|エラーが(出て|発生して)(い|ま))",
+        "(本番|全ユーザー|全顧客|顧客|お客様|ユーザー)[^。？?]{0,30}(できない|通らない|つながらない|繋がらない|表示されない|届かない)(と|という|との)[^。？?]{0,15}(連絡|報告|問い合わせ|声|クレーム|苦情)",
+        "(多数|大量|複数)の(顧客|ユーザー|お客様)から(の)?(問い合わせ|報告|苦情|クレーム)が(来て|入って|あり|届いて)",
+        "\\b(production|prod|the site|the service|checkout|log ?in) (is|went) down\\b",
+        "\\bcustomers? (cannot|can't|are unable to|can no longer) (log ?in|sign in|pay|check ?out)"
+      ],
+      "exclude": [
+        "(テスト|検証|開発|ステージング)環境",
+        "(test|staging|dev) (env|environment)",
+        "ローカル(環境|で)",
+        "ないか|ないよう|ならないよう|場合|ケース|仕様|人は|ありません|せずに|理由|予定|想定|テスト(を|の)?追加|\\bno outage\\b|\\bif\\b|[?？]",
+        "復旧|解消|解決|直りました|直った|recovered|resolved|fixed"
+      ],
+      "mixed_if": [
+        "復旧|解消|解決|直りました|直った|recovered|resolved|fixed"
+      ],
+      "routes": {
+        "yes": "incident_bug",
+        "no": "intent",
+        "mixed": "ask_pm"
+      }
+    },
     "intent": {
       "kind": "judge",
       "question": {

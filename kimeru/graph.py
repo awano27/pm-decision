@@ -24,12 +24,18 @@ Node kinds
 
 Every path must end in decide or advise, and every judge must have an `unsure`
 route, so a low-confidence judgment always degrades to advice instead of guessing.
+A malformed judge answer takes the same `unsure` route.
+
+A graph may set "severe": {"field", "pattern", "exempt": [node ids]}. When the event field matches (e.g.
+severity Sev0/Sev1), every outcome outside `exempt` reaches the PM: a decide is notified, an advise is queued,
+whichever path the model's answers took.
 """
 import json
 import re
 from pathlib import Path
 
 from . import config
+from .backends import BackendAnswerError
 
 TERMINALS = ("decide", "advise")
 MAX_STEPS = 32
@@ -56,6 +62,15 @@ def validate(g, playbooks=None):
     nodes = g.get("nodes") or {}
     if g.get("start") not in nodes:
         raise GraphError(f"{g.get('name')}: start node missing")
+    sev = g.get("severe")
+    if sev is not None:
+        if (not isinstance(sev, dict) or not isinstance(sev.get("field"), str) or not isinstance(sev.get("pattern"), str)
+                or not isinstance(sev.get("exempt", []), list)):
+            raise GraphError(f"{g.get('name')}: severe needs a field and a pattern (text) and an optional exempt list")
+        re.compile(sev["pattern"])
+        unknown = [x for x in sev.get("exempt", []) if x not in nodes]
+        if unknown:
+            raise GraphError(f"{g.get('name')}: severe exempts unknown nodes {unknown}")
     from .actions import KNOWN
     for nid, n in nodes.items():
         k = n.get("kind")
@@ -208,6 +223,16 @@ def guard_hit(node, event, ans, edge):
     return None
 
 
+def severe_hit(g, nid, event):
+    """Why this outcome must reach the PM whatever the model said (see "severe" in the module doc), or None."""
+    import unicodedata
+    sev = g.get("severe")
+    if not sev or nid in sev.get("exempt", []):
+        return None
+    text = unicodedata.normalize("NFKC", str(event.get(sev["field"]) or ""))
+    return f"{sev['field']}={text}" if re.search(sev["pattern"], text, re.IGNORECASE) else None
+
+
 def match_node(node, event):
     """Pattern that matched cleanly (for the trace), or None."""
     edge, hit = match_eval(node, event)
@@ -312,6 +337,10 @@ def run(g, event, backend, state=None, playbooks=None, batch=None):
                    "actions": acts,
                    "needs_human": n["kind"] == "advise" and n.get("queue", False),
                    "notify": n["kind"] == "decide" and bool(n.get("notify"))}
+            severe = severe_hit(g, nid, event)
+            if severe and not (out["notify"] or out["needs_human"]):
+                out["severe_guard"] = severe
+                out["notify" if n["kind"] == "decide" else "needs_human"] = True
             if plan:
                 out["plan"] = plan
             return {"graph": g["name"], "event_id": event.get("id"), "event_kind": event.get("kind"),
@@ -326,7 +355,12 @@ def run(g, event, backend, state=None, playbooks=None, batch=None):
                 trace.append({"node": nid, "answer": {}, "edge": "unsure"})
                 nid = n["routes"]["unsure"]
                 continue
-            edge, plan, ans = planner.build(n, state, backend, playbooks)
+            try:
+                edge, plan, ans = planner.build(n, state, backend, playbooks)
+            except BackendAnswerError as e:
+                trace.append({"node": nid, "answer": {"invalid": str(e)[:200]}, "edge": "unsure"})
+                nid = n["routes"]["unsure"]
+                continue
             answers[nid] = ans
             trace.append({"node": nid, "answer": {"playbook": ans["playbook"].get("choice"),
                                                    "confidence": ans["playbook"].get("confidence"),
@@ -335,10 +369,16 @@ def run(g, event, backend, state=None, playbooks=None, batch=None):
                           "edge": edge})
             nid = n["routes"][edge]
             continue
-        if batch and not pre:
-            pre = backend.ask(state, {k: nodes[k]["question"] for k in reachable_judges(nodes, nid, event)})
-        ans = pre[nid] if nid in pre else backend.ask(state, {nid: n["question"]})[nid]
-        edge, nxt = route(n, ans, getattr(backend, "profile", None))
+        try:
+            if batch and not pre:
+                pre = backend.ask(state, {k: nodes[k]["question"] for k in reachable_judges(nodes, nid, event)})
+            ans = pre[nid] if nid in pre else backend.ask(state, {nid: n["question"]})[nid]
+            edge, nxt = route(n, ans, getattr(backend, "profile", None))
+        except BackendAnswerError as e:   # a malformed answer is not a judgment: the safe route, never a lost event
+            batch, pre = False, {}   # a batch with a bad answer is not trusted: ask the remaining questions one by one
+            trace.append({"node": nid, "answer": {"invalid": str(e)[:200]}, "edge": "unsure"})
+            nid = n["routes"]["unsure"]
+            continue
         guard = guard_hit(n, event, ans, edge)
         if guard:   # the source already rated it severe but the model scored it lower: a person decides
             edge, nxt = "unsure", n["routes"]["unsure"]

@@ -2,6 +2,14 @@
   "name": "alert-triage",
   "event": "monitor.alert",
   "start": "resolved",
+  "severe": {
+    "_comment": "a Sev0/Sev1 alert always reaches the PM, whichever path the model's answers took (a future-risk warning included); a resolved alert is only logged",
+    "field": "severity",
+    "pattern": "^Sev[01]$",
+    "exempt": [
+      "log_resolved"
+    ]
+  },
   "nodes": {
     "resolved": {
       "kind": "match",

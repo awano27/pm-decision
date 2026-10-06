@@ -746,7 +746,10 @@ def format_notice(rec):
     ran = [e["action"].get("type", "?") for e in rec.get("executed", [])]
     if ran:
         lines.append("記録した行動: " + ", ".join(ran) + "（現在は記録のみ）")
-    lines.append("返信は不要です")
+    if rec.get("needs_human"):   # the same item also waits in its own numbered post (a draft to approve)
+        lines.append("文面の下書きは、番号付きの投稿で承認を待っています")
+    else:
+        lines.append("返信は不要です")
     return "\n".join(lines)
 
 

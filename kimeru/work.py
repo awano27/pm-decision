@@ -1,5 +1,8 @@
 """Explicit progress tracking for approved cases; approval and execution stay independent."""
 import json
+import os
+import threading
+import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -13,10 +16,74 @@ class WorkError(ValueError):
     pass
 
 
-def _append(path, row):
+def _history(path):
+    """Read every history row or fail closed; a damaged row is never discarded."""
+    source = path
+    if not source.exists():
+        backup = path.with_name(path.name + ".bak")
+        if backup.exists():
+            source = backup
+        else:
+            return []
+    rows = []
+    try:
+        lines = source.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise WorkError(f"work history cannot be read; preserve it and retry ({type(exc).__name__})") from None
+    for number, line in enumerate(lines, 1):
+        try:
+            row = json.loads(line)
+        except (json.JSONDecodeError, TypeError):
+            raise WorkError(f"work history is damaged at line {number}; preserve it for repair") from None
+        if not isinstance(row, dict):
+            raise WorkError(f"work history is damaged at line {number}; preserve it for repair")
+        if "transition_id" in row and (not isinstance(row["transition_id"], str) or not row["transition_id"]):
+            raise WorkError(f"work history is damaged at line {number}; preserve it for repair")
+        rows.append(row)
+    return rows
+
+
+def _write_history(path, rows):
+    """Stage and fsync the full journal, then replace it without moving the old journal away first."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps(row, ensure_ascii=False) + "\n")
+    tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}")
+    text = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)
+    try:
+        with tmp.open("x", encoding="utf-8", newline="") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        fsutil._replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+
+def _recover_pending(ap, path):
+    pending = ap.data.get("work_history_pending", [])
+    rows = _history(path)
+    if not pending:
+        return
+    if not isinstance(pending, list) or any(
+            not isinstance(row, dict) or not isinstance(row.get("transition_id"), str) or not row["transition_id"]
+            for row in pending):
+        raise WorkError("pending work history is damaged; preserve approvals.json for repair")
+    known = {row.get("transition_id") for row in rows if row.get("transition_id")}
+    merged = list(rows)
+    for row in pending:
+        if row["transition_id"] not in known:
+            merged.append(row)
+            known.add(row["transition_id"])
+    try:
+        _write_history(path, merged)
+        ap.data["work_history_pending"] = []
+        ap.save()
+    except OSError as exc:
+        raise WorkError(f"progress is saved, but work history recovery is still pending; retry work set ({type(exc).__name__})") from None
 
 
 def set_state(out, case, state, *, owner=None, due=None, completion_condition=None, now=None):
@@ -33,6 +100,8 @@ def set_state(out, case, state, *, owner=None, due=None, completion_condition=No
         if not got:
             raise WorkError("approvals are busy; retry later")
         ap = notify.Approvals(out)
+        history_path = Path(out) / "work-state.jsonl"
+        _recover_pending(ap, history_path)
         item = ap.data.get("items", {}).get(str(case))
         if not item or item.get("status") != "approved":
             raise WorkError(f"case #{case} is not explicitly approved")
@@ -46,14 +115,21 @@ def set_state(out, case, state, *, owner=None, due=None, completion_condition=No
             entry["due"] = due
         if completion_condition is not None:
             entry["completion_condition"] = completion_condition
+        if entry.get("state") == previous.get("state") and all(
+                entry.get(key) == previous.get(key) for key in ("owner", "due", "completion_condition")):
+            return "unchanged"
         at = (now or datetime.now(timezone.utc)).isoformat(timespec="seconds")
         entry["updated_at"] = at
         item["work"] = entry
-        ap.save()
-        _append(Path(out) / "work-state.jsonl", {"at": at, "case": str(case), "from": previous_state,
-                                                 "to": state, "owner": entry.get("owner"),
-                                                 "due": entry.get("due"),
-                                                 "completion_condition": entry.get("completion_condition")})
+        row = {"transition_id": uuid.uuid4().hex, "at": at, "case": str(case), "from": previous_state,
+               "to": state, "owner": entry.get("owner"), "due": entry.get("due"),
+               "completion_condition": entry.get("completion_condition")}
+        ap.data.setdefault("work_history_pending", []).append(row)
+        try:
+            ap.save()
+        except OSError as exc:
+            raise WorkError(f"progress was not saved; retry work set ({type(exc).__name__})") from None
+        _recover_pending(ap, history_path)
     return "updated"
 
 

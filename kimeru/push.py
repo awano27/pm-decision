@@ -21,6 +21,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -35,6 +36,8 @@ URL_ENV = {"teams_webhook": "KIMERU_PUSH_TEAMS_URL", "webhook": "KIMERU_PUSH_WEB
 FAILS_BEFORE_REST = 3
 REST_BASE = 30 * 60          # seconds; doubles with every further failure, at most 6 hours
 REST_MAX = 6 * 3600
+_push_gates = {}
+_push_gates_guard = threading.Lock()
 
 
 def enabled_routes():
@@ -182,6 +185,17 @@ def _save(out, data):
     fsutil.write_atomic(_state_path(out), json.dumps(data, ensure_ascii=False))
 
 
+def _push_lock_path(out):
+    return Path(out) / "push_state.lock"
+
+
+def _push_gate(out):
+    """Return the process-local gate shared by aliases of one output directory."""
+    key = os.path.normcase(os.path.realpath(os.fspath(out)))
+    with _push_gates_guard:
+        return _push_gates.setdefault(key, threading.Lock())
+
+
 def pending(out):
     """(numbers of pending items that are posted, keys of notices not yet announced anywhere, unposted item numbers)."""
     from . import notify
@@ -195,6 +209,19 @@ def begin_cycle(out, now=None):
     """Called first in a cycle that sends. A route seen for the first time is baselined NOW, before this cycle posts anything: what
     was pending until now is not sent, what this cycle posts is. Routes that are off lose their state (also when run() is not
     called while nothing is enabled), so turning one on again never sends what came while it was off."""
+    gate = _push_gate(out)
+    if not gate.acquire(blocking=False):
+        return "busy; retry later"
+    try:
+        with fsutil.exclusive(_push_lock_path(out)) as got:
+            if not got:
+                return "busy; retry later"
+            return _begin_cycle_locked(out, now)
+    finally:
+        gate.release()
+
+
+def _begin_cycle_locked(out, now=None):
     routes = enabled_routes()
     data = _load(out)
     changed = False
@@ -220,6 +247,20 @@ def run(out, now=None, sender=None):
     bounded by the pending items and never cut short), `notice_n` = how many of the notices (an append-only list) it has
     been told about. A route's first run only records the baseline and sends nothing."""
     routes = enabled_routes()
+    gate = _push_gate(out)
+    if not gate.acquire(blocking=False):
+        return {route: "busy; retry later" for route in routes}
+    try:
+        with fsutil.exclusive(_push_lock_path(out)) as got:
+            if not got:
+                return {route: "busy; retry later" for route in routes}
+            return _run_locked(out, now, sender, routes)
+    finally:
+        gate.release()
+
+
+def _run_locked(out, now=None, sender=None, routes=None):
+    routes = enabled_routes() if routes is None else routes
     data = _load(out)
     if not routes:
         if data["routes"]:

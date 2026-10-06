@@ -251,7 +251,7 @@ def _merge_locked(out, ev, res, notify, source_event=None, source_request=None, 
         preserve = {name: it[name] for name in ("key", "work", "handoff_evidence", "handoff_unknown",
                                                  "measurement", "measurement_history",
                                                  "delivery_unknown", "delivery_unknown_part", "delivery_unknown_at",
-                                                 "delivery_unknown_revision", "delivery_unknown_generation")
+                                                 "delivery_unknown_revision", "delivery_unknown_generation", "delivery_attempt")
                     if name in it}
         if it.get("delivery_unknown") and "delivery_unknown_revision" not in preserve:
             preserve["delivery_unknown_revision"] = revision

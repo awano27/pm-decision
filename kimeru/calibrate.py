@@ -33,7 +33,9 @@ def _matches(node, ans, edge, label):
     if t == "noul":
         return (edge == "yes") == bool(label)
     lo, hi = label
-    return lo <= round(ans.get("score", -99)) <= hi
+    # Keep calibration's label check in sync with eval/run_eval.judge: labels
+    # are inclusive score ranges, and rounding would move a boundary answer.
+    return lo <= ans.get("score", -99) <= hi
 
 
 def labeled_questions(out, graphs):

@@ -66,19 +66,62 @@ def collect(out, now=None, days=2):
         if key not in queued:
             what = rec.get('advice') or rec.get('graph')
             add(f"queue:{key}", "approval", f"確認待ち（未投稿）: {what}", f"Waiting for the PM's approval: {what}", 0)
-    for rec in reversed(_rows(out / "decisions.jsonl")):
-        at = rec.get("at")
-        if at and datetime.fromisoformat(at) < since:
-            continue
+    decisions = _rows(out / "decisions.jsonl")
+    # A decision row is only a proposal snapshot. For a case with a current
+    # approval record, that record's status, revision and plan are authoritative.
+    # Follow-up merges keep the original item key while replacing its record;
+    # merged.jsonl connects the follow-up event id back to that stable key.
+    approvals_by_key = {}
+    for n, item in ap.get("items", {}).items():
+        record = item.get("record") or {}
+        approvals_by_key[item.get("key")] = (n, item)
+        approvals_by_key[f"{record.get('graph')}:{record.get('event_id')}:{record.get('node')}"] = (n, item)
+    merged_aliases = {}
+    for merge in _rows(out / "merged.jsonl"):
+        stable = merge.get("into")
+        current = approvals_by_key.get(stable) if stable else None
+        record = (current[1].get("record") or {}) if current else {}
+        if stable and record.get("graph"):
+            merged_aliases[(record["graph"], str(merge.get("event_id")))] = stable
+
+    def case_for(rec):
+        key = f"{rec.get('graph')}:{rec.get('event_id')}:{rec.get('node')}"
+        found = approvals_by_key.get(key)
+        if found:
+            return found
+        stable = merged_aliases.get((rec.get("graph"), str(rec.get("event_id"))))
+        return approvals_by_key.get(stable) if stable else None
+
+    def add_plan(rec, source_key):
         p = rec.get("plan")
+        at = rec.get("at")
         today = now.astimezone().date()
         for s in (p or {}).get("steps", []):
             if s.get("due_level", 2) <= 1:
-                # "今日" was relative to the decision; re-anchor it so yesterday's "today" shows as overdue
+                # "今日" was relative to the decision; re-anchor it so yesterday's "today" shows as overdue.
                 due = due_date(at, s["due_level"]) if at else None
                 label, level = (due_label(due, today), 0 if due <= today else 1) if due else (s["due"], s["due_level"])
-                add(f"step:{rec.get('event_id')}:{p['playbook']}:{s['id']}", "step",
+                add(f"step:{source_key}:{p['playbook']}:{s['id']}", "step",
                     f"{p['title']}: {s['title']}（{label}）", f"{p['title']}: {s['title']}", level)
+
+    for _, item in ap.get("items", {}).items():
+        record = item.get("record") or {}
+        key = item.get("key") or f"{record.get('graph')}:{record.get('event_id')}:{record.get('node')}"
+        progress = item.get("work") if isinstance(item.get("work"), dict) else {}
+        if item.get("status") == "approved" and progress.get("state") != "done":
+            add_plan(record, key)
+
+    for rec in reversed(decisions):
+        linked = case_for(rec)
+        if linked:
+            # This snapshot is either superseded, or represented by the current
+            # approved record above. Pending/held cases already appear as a
+            # confirmation candidate; rejected and completed cases have no steps.
+            continue
+        at = rec.get("at")
+        if at and datetime.fromisoformat(at) < since:
+            continue
+        add_plan(rec, rec.get("event_id"))
     return items[:MAX_ITEMS]
 
 
@@ -95,11 +138,11 @@ def rank(items, backend, top=3):
     return [{**it, "harm": round(k[1], 2)} for k, it in keyed[:top]]
 
 
-def format_post(ranked, total, pending, date=None):
+def format_post(ranked, total, pending, date=None, empty_message="対応が必要な項目はありません"):
     date = date or datetime.now().strftime("%Y-%m-%d")
     lines = [f"[kimeru brief {date}] 今日の進め方"]
     if not ranked:
-        lines.append("対応が必要な項目はありません")
+        lines.append(empty_message)
     for i, it in enumerate(ranked, 1):
         lines.append(f"{i}. {it['text']}")
     if total > len(ranked):
@@ -139,7 +182,11 @@ def build(out, backend, top=3, now=None, date=None):
     items = collect(out, now=now)
     ranked = rank(items, backend, top)
     pending = sum(1 for i in items if i["kind"] == "approval")
-    text = format_post(ranked, len(items), pending, date)
+    from . import work
+    unfinished = [row for row in work.list_work(out) if row["state"] != "done"]
+    empty_message = ("実行候補はありません。未完了作業の状況は下記を確認してください"
+                     if unfinished else "対応が必要な項目はありません")
+    text = format_post(ranked, len(items), pending, date, empty_message)
     quiet = quiet_reads(out, now=now)
     if quiet:
         text += (f"\n開いて読みましたが、対応は不要でした: {len(quiet)} 件（{'、'.join(quiet[:5])}{' ほか' if len(quiet) > 5 else ''}）"
@@ -149,8 +196,6 @@ def build(out, backend, top=3, now=None, date=None):
         text += f"\n⚠ 開いたチャットを元へ戻せなかった件が {lost} 件あります。Teams で開いているチャットを確認してください"
     # Progress is a local, explicit fact (or Unknown for legacy approvals). It is
     # appended separately and does not create another model/ranking call.
-    from . import work
-    unfinished = [row for row in work.list_work(out) if row["state"] != "done"]
     if unfinished:
         text += "\n\n承認済み・未完了の作業（確認待ちとは別の進捗管理）:"
         for row in unfinished:

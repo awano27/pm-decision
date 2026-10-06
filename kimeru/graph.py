@@ -122,6 +122,12 @@ def validate(g, playbooks=None):
                 raise GraphError(f"{nid}: match needs yes/no routes (plus mixed when mixed_if is set)")
             if not n.get("fields") or not n.get("patterns"):
                 raise GraphError(f"{nid}: match needs fields and patterns")
+            if "exclude_scope" in n and n["exclude_scope"] not in ("field", "sentence"):
+                raise GraphError(f"{nid}: exclude_scope must be 'field' or 'sentence'")
+            for key in ("fields", "patterns", "exclude", "mixed_if"):
+                values = n.get(key, [])
+                if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+                    raise GraphError(f"{nid}: {key} must be a list of strings")
             for pat in n["patterns"] + n.get("exclude", []) + n.get("mixed_if", []):
                 try:
                     re.compile(pat)
@@ -200,13 +206,19 @@ def match_eval(node, event):
     mixed = None
     for f in node["fields"]:
         text = unicodedata.normalize("NFKC", str(event.get(f) or ""))
-        hit = next((p for p in node["patterns"] if re.search(p, text, re.IGNORECASE)), None)
-        if not hit:
-            continue
-        if not any(re.search(x, text, re.IGNORECASE) for x in node.get("exclude", [])):
-            return "yes", hit
-        if any(re.search(x, text, re.IGNORECASE) for x in node.get("mixed_if", [])):
-            mixed = mixed or hit
+        # Exclusions traditionally apply to the whole field. Some safety nets
+        # need narrower scope so an unrelated future/healthy sentence cannot
+        # veto a separate current-outage sentence.
+        candidates = (re.split(r"[.!?。！？；;\r\n]+", text)
+                      if node.get("exclude_scope", "field") == "sentence" else [text])
+        for candidate in candidates:
+            hit = next((p for p in node["patterns"] if re.search(p, candidate, re.IGNORECASE)), None)
+            if not hit:
+                continue
+            if not any(re.search(x, candidate, re.IGNORECASE) for x in node.get("exclude", [])):
+                return "yes", hit
+            if any(re.search(x, candidate, re.IGNORECASE) for x in node.get("mixed_if", [])):
+                mixed = mixed or hit
     return ("mixed", mixed) if mixed else ("no", None)
 
 

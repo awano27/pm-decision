@@ -7,6 +7,7 @@ sent to a person.
 import html
 import json
 import time
+from datetime import datetime
 from pathlib import Path
 from . import trial
 
@@ -98,30 +99,150 @@ def _verified_times(item, timing, reference):
     return posted, approved
 
 
-def _io_note(out):
-    """What actually left the PC: only self-chat posts (with --send); ADO, paging, replies are recorded, not run."""
-    ap = Path(out) / "approvals.json"
-    items = json.loads(ap.read_text(encoding="utf-8")).get("items", {}) if ap.exists() else {}
-    simulated = sum(1 for it in items.values() if it.get("posted") and
-                    _metadata(it.get("record", {}).get("measurement")).get("source") == "demo")
-    posted = sum(1 for it in items.values() if it.get("posted")) - simulated
-    return (f"simulated self-chat postings {simulated} (no Teams write); recorded local posting flags {posted}. "
-            "Posting does not prove phone receipt. External writes are record-only by default; "
-            "approval or this count does not prove an ADO write.")
+def _case_indexes(out, items):
+    """Map decision keys and merged follow-up event ids to their stable case."""
+    by_key = {}
+    for number, item in items.items():
+        record = item.get("record") or {}
+        by_key[item.get("key")] = (number, item)
+        by_key[f"{record.get('graph')}:{record.get('event_id')}:{record.get('node')}"] = (number, item)
+    by_event = {}
+    for merge in _rows(Path(out) / "merged.jsonl"):
+        stable = merge.get("into")
+        if stable in by_key:
+            found = by_key[stable]
+            graph = (found[1].get("record") or {}).get("graph")
+            if graph:
+                by_event[(graph, str(merge.get("event_id")))] = (found, merge.get("revision"))
+    return by_key, by_event
+
+
+def _current_case(r, by_key, by_event):
+    key = f"{r.get('graph')}:{r.get('event_id')}:{r.get('node')}"
+    alias = by_event.get((r.get("graph"), str(r.get("event_id"))))
+    found = (by_key.get(key) or by_key.get(_metadata(r.get("measurement")).get("case_key"))
+             or (alias[0] if alias else None))
+    if not found:
+        return None, False
+    _, item = found
+    record = item.get("record") or {}
+    current_key = f"{record.get('graph')}:{record.get('event_id')}:{record.get('node')}"
+    current_revision = int(item.get("revision") or record.get("revision") or 1)
+    row_revision = r.get("revision")
+    if row_revision is not None:
+        same_revision = str(row_revision) == str(current_revision)
+    elif alias and alias[1] is not None and str(alias[1]) == str(current_revision):
+        same_revision = True  # merged.jsonl ties this event id to the current case revision
+    else:
+        # Reused event keys after a redraft/revision cannot prove which snapshot
+        # the decision row describes, so never attach the newer case's evidence.
+        same_revision = current_revision == 1
+    return found, current_key == key and same_revision
+
+
+def _execution_states(out, items):
+    """Latest state per idempotency key, reconciled with approvals' durable copy."""
+    evidence = {}
+    for row in _rows(Path(out) / "executions.jsonl"):
+        key = row.get("key")
+        if key:
+            evidence.setdefault(str(key), []).append(row)
+    for number, item in items.items():
+        actions = (item.get("record") or {}).get("actions") or []
+        for index, state in (item.get("exec") or {}).items():
+            if not isinstance(state, dict) or not state.get("key"):
+                continue
+            action = actions[int(index)] if str(index).isdigit() and int(index) < len(actions) else {}
+            evidence.setdefault(str(state["key"]), []).append({
+                **state, "id": number, "type": action.get("type"), "target": action.get("id"),
+                "_approval_copy": True,
+            })
+
+    result = {}
+    for key, rows in evidence.items():
+        ledger = [row for row in rows if not row.get("_approval_copy")]
+        ap_rows = [row for row in rows if row.get("_approval_copy")]
+        latest_ledger = ledger[-1] if ledger else None
+        latest_ap = ap_rows[-1] if ap_rows else None
+        if latest_ledger and latest_ap and latest_ledger.get("state") != latest_ap.get("state"):
+            def stamp(row):
+                try:
+                    return datetime.fromisoformat(row["at"]).timestamp()
+                except (KeyError, TypeError, ValueError):
+                    return None
+            lt, at = stamp(latest_ledger), stamp(latest_ap)
+            if lt is None or at is None or lt == at:
+                row = {**latest_ledger, "state": "unknown", "conflict": True}
+            else:
+                row = latest_ledger if lt > at else latest_ap
+        else:
+            row = latest_ledger or latest_ap
+        result[key] = row
+    return result
+
+
+def _delivery_note(out, ap):
+    items = ap.get("items", {})
+    simulated = sum(1 for item in items.values() if item.get("posted") and
+                    _metadata((item.get("record") or {}).get("measurement")).get("source") == "demo")
+    case_done = sum(1 for item in items.values() if item.get("posted")) - simulated
+    case_unknown = sum(1 for item in items.values() if item.get("delivery_unknown"))
+    notices = ap.get("notices", [])
+    notice_unknown = ap.get("notice_delivery_unknown", {}) or {}
+    if isinstance(notice_unknown, list):
+        notice_unknown = {key: True for key in notice_unknown}
+    notice_attempts = ap.get("notice_delivery_attempts", {}) or {}
+    notice_unknown_count = len(set(notice_unknown) | set(notice_attempts))
+    outbox_unknown = bool(ap.get("outbox_delivery_unknown") or ap.get("outbox_delivery_attempt"))
+    state = json.loads((Path(out) / "daily_state.json").read_text(encoding="utf-8")) if (Path(out) / "daily_state.json").exists() else {}
+    brief_unknown = bool(state.get("brief_delivery_unknown"))
+    return (f"自己チャット配信確認: ケース {case_done} 件、notice {len(notices)} 件 ・ "
+            f"配信結果不明: ケース {case_unknown} 件、notice {notice_unknown_count} 件、"
+            f"outbox {'1' if outbox_unknown else '0'} 件、brief {'1' if brief_unknown else '0'} 件 ・ "
+            f"simulated self-chat postings {simulated} (no Teams write); posting does not prove phone receipt")
+
+
+def _execution_label(row):
+    state = row.get("state")
+    labels = {"done": "実行確認済み", "closed": "本人が確認して終了（API実行の確認ではない）",
+              "skipped": "実行対象外・未実行", "failed": "実行失敗", "running": "結果不明（実行中記録）",
+              "unknown": "結果不明"}
+    label = labels.get(state, "結果不明")
+    result = row.get("result") or {}
+    if state == "done" and result.get("comment_id") is not None:
+        label += f"（ADO コメント {result['comment_id']}）"
+    if row.get("conflict"):
+        label = "結果不明（記録が不一致）"
+    return label
+
+
+def _io_note(out, ap, executions):
+    states = {}
+    for row in executions.values():
+        st = row.get("state", "unknown")
+        states[st] = states.get(st, 0) + 1
+    known = ", ".join(f"{_execution_label({'state': st})}: {count}" for st, count in sorted(states.items())) or "実行記録なし"
+    comments = [str((row.get("result") or {}).get("comment_id")) for row in executions.values()
+                if row.get("state") == "done" and (row.get("result") or {}).get("comment_id") is not None]
+    if comments:
+        known += " ・ ADO コメント " + ", ".join(_e(value) for value in comments)
+    return (_delivery_note(out, ap) + " ・ 外部実行記録: " + known + "（記録なしは成功を意味しません） ・ "
+            "External writes are record-only by default; approval or a posting count does not prove an ADO write.")
 
 
 def build(out, graphs, title="kimeru 判断レポート"):
     out = Path(out)
     decisions = _rows(out / "decisions.jsonl")
     ap = json.loads((out / "approvals.json").read_text(encoding="utf-8")) if (out / "approvals.json").exists() else {"items": {}}
-    status = {it["key"]: (n, it["status"]) for n, it in ap["items"].items()}
+    by_key, by_event = _case_indexes(out, ap.get("items", {}))
+    executions = _execution_states(out, ap.get("items", {}))
     kinds = {}
     for lst in graphs.values():
         for g in lst:
             kinds.update({nid: n["kind"] for nid, n in g["nodes"].items()})
 
     def cls(r):
-        if r["outcome"] == "advise":
+        if r.get("needs_human") or r.get("outcome") == "advise":
             return "human"
         if any(kinds.get(s["node"]) == "match" and s["edge"] == "yes" for s in r["path"]):
             return "ok"   # a rule decided it; a later low-confidence step only changes detail
@@ -137,7 +258,7 @@ def build(out, graphs, title="kimeru 判断レポート"):
              (counts["safe"], "確信が低く安全側で決定"), (counts["human"], "人の確認へ")]
     parts = [f"<!doctype html><html lang='ja'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>",
              f"<title>{_e(title)}</title><style>{CSS}</style></head><body><main>",
-             f"<h1>{_e(title)}</h1><p class='sub'>{_e(out)} ・ {_e(_io_note(out))}</p>",
+             f"<h1>{_e(title)}</h1><p class='sub'>{_e(out)} ・ {_e(_io_note(out, ap, executions))}</p>",
              "<div class='tiles'>" + "".join(f"<div class='tile'><b>{v}</b><span>{_e(l)}</span></div>" for v, l in tiles) + "</div>",
              "<div class='legend'><span class='chip rule'>規則</span><span class='chip model'>判断（モデル）</span><span class='chip plan'>進め方</span>"
              "<span class='badge ok'>自動</span><span class='badge safe'>安全側</span><span class='badge human'>人の確認</span></div>"]
@@ -160,17 +281,28 @@ def build(out, graphs, title="kimeru 判断レポート"):
         c = cls(r)
         badge = {"ok": "自動", "safe": "安全側", "human": "人の確認"}[c]
         timing = _metadata(r.get("measurement"))
-        key = timing.get("case_key") or f"{r.get('graph')}:{r.get('event_id')}:{r.get('node')}"
+        found, current = _current_case(r, by_key, by_event)
         ap_note = ""
-        if key in status:
-            num, st = status[key]
-            ap_note = f" ・ 確認 #{_e(num)}: {_e({'approved': '承認', 'rejected': '却下', 'held': '保留', 'pending': '返信待ち'}.get(st, st))}"
+        current_item = None
+        if found:
+            num, item = found
+            if not current:
+                ap_note = f" ・ 履歴: ケース #{_e(num)} の改訂 {_e(item.get('revision', 1))} で置換済み"
+            else:
+                current_item = item
+                st = item.get("status", "Unknown")
+                ap_note = (f" ・ ケース #{_e(num)} / 改訂 {_e(item.get('revision', 1))}: "
+                           f"{_e({'approved': '承認', 'rejected': '却下', 'held': '保留', 'pending': '返信待ち'}.get(st, st))}")
+                if st == "approved":
+                    progress = item.get("work") if isinstance(item.get("work"), dict) else {}
+                    state = progress.get("state") or "Unknown"
+                    ap_note += f" ・ 作業進捗: {_e(state)}"
         parts.append(f"<section class='ev {c}'><div class='head'><span class='src'>{_e(SRC.get(r.get('event_kind'), r.get('event_kind')))}</span>"
                      f"<span class='sum'>{_e(r.get('summary') or r.get('event_id'))}</span></div>")
         parts.append("<div class='path'>" + "".join(_chip(s, kinds) for s in r["path"]) + "</div>")
         generation = timing.get("generation")
         source = "synthetic demo" if timing.get("source") == "demo" else "local/legacy (not business-effect evidence)"
-        matched = next((it for it in ap["items"].values() if it.get("key") == key), {})
+        matched = found[1] if found else {}
         history = matched.get("measurement_history")
         history = history if isinstance(history, list) else []
         observations = [_metadata(matched.get("measurement")), *history]
@@ -187,9 +319,27 @@ def build(out, graphs, title="kimeru 判断レポート"):
             steps = "".join(f"<li>{_e(s['title'])}（{_e(s['due'])}）</li>" for s in r["plan"]["steps"])
             parts.append(f"<div class='plan'>進め方: {_e(r['plan']['title'])}<ol>{steps}</ol></div>")
         acts = r.get("actions") or []
+        exec_rows = []
+        if current_item:
+            current_record = current_item.get("record") or {}
+            for index, action in enumerate(current_record.get("actions") or []):
+                state = (current_item.get("exec") or {}).get(str(index)) or {}
+                exec_key = state.get("key")
+                if not exec_key and current_item.get("key"):
+                    from . import execute
+                    exec_key = execute.idem_key(current_item["key"], index, action)
+                evidence = executions.get(str(exec_key)) if exec_key else None
+                if evidence:
+                    exec_rows.append((action, _execution_label(evidence)))
+                elif action:
+                    label = "実行対象外・未実行" if action.get("exec_skip") else "予定（dry-run／実行記録との対応は未確認）"
+                    exec_rows.append((action, label))
+        elif acts and found and not current:
+            acts = []  # a superseded decision does not inherit its successor's execution state
         verb = "承認後の計画（外部書き込みは既定で記録のみ）" if c == "human" else "記録された計画"
         parts.append(f"<div class='out'><span class='badge {c}'>{badge}</span>{ap_note}"
                      + (f"<ul>{''.join('<li>' + _e(verb) + ' — ' + _e(_action(a)) + '</li>' for a in acts)}</ul>" if acts else "")
+                     + (f"<ul>{''.join('<li>' + _e(label) + ' — ' + _e(_action(action)) + '</li>' for action, label in exec_rows)}</ul>" if exec_rows else "")
                      + (f"<p class='plan'>メモ: {_e(r['advice'])}</p>" if r.get("advice") else "") + "</div></section>")
     parts.append("</main></body></html>")
     return "".join(parts)

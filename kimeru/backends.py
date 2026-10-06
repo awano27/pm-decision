@@ -150,8 +150,16 @@ class JevBackend:
                 raise BackendUnavailable(f"{self.NAME} connection failed at {self.api} ({type(e).__name__})") from None
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Judgment requests must never forward prompt data or credentials on redirect."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
-_DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+_DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+_REMOTE = urllib.request.build_opener(_NoRedirect())
 
 
 def _urlopen(req, timeout):
@@ -160,7 +168,7 @@ def _urlopen(req, timeout):
     host = urllib.parse.urlparse(req.full_url).hostname or ""
     if host in LOOPBACK:
         return _DIRECT.open(req, timeout=timeout)
-    return urllib.request.urlopen(req, timeout=timeout)
+    return _REMOTE.open(req, timeout=timeout)
 
 
 def judge_name(backend):

@@ -59,8 +59,55 @@ def _median(xs):
     return xs[len(xs) // 2] if xs else 0
 
 
+def _normalise_judge_name(name):
+    if not isinstance(name, str) or not name.strip():
+        return "unknown"
+    name = name.strip()
+    if name.casefold() == "unknown":
+        return "unknown"
+    if name.casefold() == "jev":
+        return "Jev"
+    return name
+
+
+def _record_judge_name(row):
+    judge = row.get("judge")
+    if not isinstance(judge, dict):
+        return "unknown"
+    return _normalise_judge_name(judge.get("name"))
+
+
+def _record_model_name(row):
+    judge = row.get("judge")
+    if not isinstance(judge, dict):
+        return None
+    model = judge.get("model")
+    return model.strip() if isinstance(model, str) and model.strip() else None
+
+
+def _summary_judges(value):
+    """Return normalized legacy summary names and whether every name is usable."""
+    if not isinstance(value, (list, tuple, set)):
+        return ["unknown"], False
+    names, valid = set(), True
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            names.add("unknown")
+            valid = False
+            continue
+        name = item.strip()
+        names.add(name)
+        if name.casefold() in ("jev", "unknown"):
+            valid = False
+    return sorted(names), valid and bool(names)
+
+
 def perf_line(rows):
     """One line: what one event cost (calls to the judge, questions, seconds incl. the writer): median and max."""
+    # Every row contributes to the aggregate, so one missing/unknown or Jev
+    # judgment makes the combined performance figure unsafe to display.
+    if any(_record_judge_name(r).casefold() in ("jev", "unknown") for r in rows):
+        return ""
     ps = [r["perf"] for r in rows if r.get("perf")]
     if not ps:
         return ""
@@ -71,7 +118,13 @@ def perf_line(rows):
 
 
 def _judge_of_review(rev, judge_of_key):
-    return rev.get("judge") or judge_of_key.get(rev.get("key")) or "unknown"
+    raw = rev.get("judge")
+    if isinstance(raw, str) and raw.strip():
+        return _normalise_judge_name(raw)
+    if raw is not None and not isinstance(raw, str):
+        return "unknown"
+    # Older review rows may lack a judge; use the linked decision when present.
+    return _normalise_judge_name(judge_of_key.get(rev.get("key")))
 
 
 def bundled_graph_names():
@@ -95,7 +148,7 @@ def collect(out, now=None):
     decisions = _within(decision_rows, "at", since, now)
     dated = _within(approval_rows, "at", since, now)
     undated = sum(1 for r in approval_rows if not r.get("at"))
-    judge_of_key = {review.decision_key(r): review.judge_of(r) for r in decision_rows}
+    judge_of_key = {review.decision_key(r): _record_judge_name(r) for r in decision_rows}
     reviews = _within(review_rows, "at", since, now)
     sources = ((decision_rows, True), (approval_rows, False), (review_rows, True))
     invalid_evidence = sum(_date_issues(rows, "at", now, include_missing=missing)[0] for rows, missing in sources)
@@ -109,8 +162,8 @@ def collect(out, now=None):
     statuses = {}
     for r in dated:
         statuses[r.get("status")] = statuses.get(r.get("status"), 0) + 1
-    judges = sorted({(r.get("judge") or {}).get("name", "unknown") for r in decisions})
-    models = sorted({(r.get("judge") or {}).get("model", "") for r in decisions if (r.get("judge") or {}).get("model")})
+    judges = sorted({_record_judge_name(r) for r in decisions})
+    models = sorted({model for r in decisions if (model := _record_model_name(r))})
     # The agreement rate leaves Jev's decisions out, whatever the period or the output folder: a review names the judge that
     # made the decision; an older one is looked up in this folder's decisions, and when that is not possible (another folder,
     # a decision no longer here) it is not counted, because it cannot be shown not to be Jev's.
@@ -231,6 +284,8 @@ def _graph_labels(per_graph, share):
 
 
 def render(s, share=False):
+    judges, safe_judges = _summary_judges(s.get("judges"))
+    has_jev = any(name.casefold() == "jev" for name in judges)
     lines = [f"kimeru の直近 7 日（{s['since']} から）"]
     n = s["decisions"]
     if not n:
@@ -251,7 +306,7 @@ def render(s, share=False):
         lines.append(f"日時が不正な記録 {s['invalid_evidence']} 件は、期間の集計に入れていません")
     if s.get("future_evidence"):
         lines.append(f"未来の日時の記録 {s['future_evidence']} 件は、期間の集計に入れていません")
-    if s.get("perf") and "Jev" not in s["judges"]:
+    if s.get("perf") and safe_judges and not has_jev:
         lines.append(s["perf"])
     total = s["reviewed_yes"] + s["reviewed_no"]
     left_out = s.get("reviewed_left_out", 0)
@@ -264,14 +319,14 @@ def render(s, share=False):
     elif s.get("reviewed_wrong"):
         lines.append("判断の一致率: 出しません（最終結果が違うという確認は質問単位の一致率に混ぜません）")
         lines.append(f"  最終結果が違うとされた判断: {s['reviewed_wrong']} 件")
-    elif "Jev" in s["judges"] or left_out:
+    elif has_jev or left_out:
         lines.append("判断の一致率: 出しません（数えられる判断がありません。Jev の判断は数えません。Jev の性能の数値は、TypeSafe の利用規約で公開できません）")
     else:
         lines.append("判断の一致率: まだ確かめた判断がありません（kimeru review）")
     if share:
         env = environment()
         lines += ["", "環境:",
-                  f"  - kimeru {env['kimeru']} / 判断モデル: {', '.join(s['judges']) or '記録なし'}"
+                  f"  - kimeru {env['kimeru']} / 判断モデル: {', '.join(judges) or '記録なし'}"
                   + (f"（{', '.join(s['models'])}）" if s["models"] else ""),
                   f"  - writer: {env['writer']}",
                   f"  - OS: {env['os']} / Python {env['python']}"

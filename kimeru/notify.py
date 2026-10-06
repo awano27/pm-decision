@@ -476,9 +476,7 @@ def retry_delivery(out, kind, target, confirm_not_sent=False):
             num = str(target)
             item = ap.data.get("items", {}).get(num)
             if item and item.get("delivery_unknown"):
-                for name in ("delivery_unknown", "delivery_unknown_part", "delivery_unknown_at",
-                             "delivery_unknown_revision"):
-                    item.pop(name, None)
+                _clear_case_attempt(item)
                 changed = True
         elif kind == "notice":
             uncertain = ap.data.get("notice_delivery_unknown", {})
@@ -487,10 +485,12 @@ def retry_delivery(out, kind, target, confirm_not_sent=False):
             if str(target) in uncertain:
                 uncertain.pop(str(target), None)
                 ap.data["notice_delivery_unknown"] = uncertain
+                ap.data.setdefault("notice_delivery_attempts", {}).pop(str(target), None)
                 changed = True
         elif kind == "outbox" and str(target) == "outbox" and ap.data.get("outbox_delivery_unknown"):
             ap.data.pop("outbox_delivery_unknown", None)
             ap.data.pop("outbox_delivery_unknown_at", None)
+            ap.data.pop("outbox_delivery_attempt", None)
             changed = True
         elif kind == "brief" and str(target) == "brief":
             state_path = out / "daily_state.json"
@@ -520,16 +520,17 @@ def delivery_show(out, kind, target):
         item = ap.data.get("items", {}).get(str(target))
         if not item or not item.get("delivery_unknown"):
             return None
-        record = item.get("record") or {}
-        if item.get("delivery_unknown_part") == "copilot_request":
-            from . import fulltext
-            full = fulltext.load(out, item["key"]) or {}
-            return f"[kimeru #{target} Copilot 用]\n{full.get('request') or record.get('copilot_request') or ''}"
-        from . import fulltext
-        return format_post(target, record, fulltext.load(out, item["key"]))
+        attempt = item.get("delivery_attempt")
+        if isinstance(attempt, dict) and isinstance(attempt.get("body"), str):
+            return attempt["body"]
+        revision = item.get("delivery_unknown_revision", item.get("revision", 1))
+        part = item.get("delivery_unknown_part", "post")
+        return f"[kimeru #{target} {part} / revision {revision}]\n[attempted body unavailable in legacy delivery state]"
     if kind == "outbox" and str(target) == "outbox" and ap.data.get("outbox_delivery_unknown"):
-        box = ap.data.get("outbox") or []
-        return box[0] if box else None
+        attempt = ap.data.get("outbox_delivery_attempt")
+        if isinstance(attempt, dict) and isinstance(attempt.get("body"), str):
+            return attempt["body"]
+        return "[outbox / attempted revision unavailable]\n[attempted body unavailable in legacy delivery state]"
     if kind == "notice":
         uncertain = ap.data.get("notice_delivery_unknown", {})
         if isinstance(uncertain, list):
@@ -537,17 +538,20 @@ def delivery_show(out, kind, target):
         key = str(target)
         if key not in uncertain:
             return None
-        path = out / "notices.jsonl"
-        if path.exists():
-            for line in path.read_text(encoding="utf-8").splitlines():
-                if line.strip():
-                    record = json.loads(line)
-                    if _key(record) == key:
-                        return format_notice(record)
-        return None
+        attempt = (ap.data.get("notice_delivery_attempts") or {}).get(key)
+        if isinstance(attempt, dict) and isinstance(attempt.get("body"), str):
+            return attempt["body"]
+        return f"[notice {key} / attempted revision unavailable]\n[attempted body unavailable in legacy delivery state]"
     if kind == "brief" and str(target) == "brief":
         state = fsutil.read_json(out / "daily_state.json", {})
-        return (state.get("brief_delivery_unknown") or {}).get("text")
+        pending = state.get("brief_delivery_unknown")
+        if not isinstance(pending, dict):
+            return None
+        if isinstance(pending.get("body"), str):
+            return pending["body"]
+        if "body" not in pending and isinstance(pending.get("text"), str):
+            return pending["text"]
+        return "[brief / attempted revision unavailable]\n[attempted body unavailable in legacy delivery state]"
     return None
 
 
@@ -566,6 +570,11 @@ def deliver_brief(out, bridge, text, send, date):
             return {"status": "delivery_unknown"}
         if state.get("brief_date") == date:
             return {"status": "already_delivered"}
+        at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        state["brief_delivery_unknown"] = {"date": date, "at": at, "revision": date,
+                                           "part": "brief", "identity": date, "body": text, "text": text}
+        fsutil.write_atomic(state_path, json.dumps(state, ensure_ascii=False))
+        state_path.with_name(state_path.name + ".bak").unlink(missing_ok=True)
         try:
             result = bridge.post(text, True)
             error_data = None
@@ -579,11 +588,12 @@ def deliver_brief(out, bridge, text, send, date):
             state_path.with_name(state_path.name + ".bak").unlink(missing_ok=True)
             return {"status": "delivered"}
         if _delivery_unknown(error_data if error_data is not None else result, True):
-            state["brief_delivery_unknown"] = {
-                "date": date, "at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "text": text}
             fsutil.write_atomic(state_path, json.dumps(state, ensure_ascii=False))
             state_path.with_name(state_path.name + ".bak").unlink(missing_ok=True)
             return {"status": "delivery_unknown"}
+        state.pop("brief_delivery_unknown", None)
+        fsutil.write_atomic(state_path, json.dumps(state, ensure_ascii=False))
+        state_path.with_name(state_path.name + ".bak").unlink(missing_ok=True)
         return {"status": "not_sent"}
 
 
@@ -614,8 +624,7 @@ def confirm_delivery(out, kind, target, confirm_delivered=False):
                         item["request_posted"] = True
                 # An older revision may have been delivered, but it cannot mark the
                 # current revised proposal as posted or approved.
-                for name in ("delivery_unknown", "delivery_unknown_part", "delivery_unknown_at", "delivery_unknown_revision", "delivery_unknown_generation"):
-                    item.pop(name, None)
+                _clear_case_attempt(item)
                 changed = True
         elif kind == "notice":
             uncertain = ap.data.get("notice_delivery_unknown", {})
@@ -624,25 +633,39 @@ def confirm_delivery(out, kind, target, confirm_delivered=False):
             if str(target) in uncertain:
                 uncertain.pop(str(target), None)
                 ap.data["notice_delivery_unknown"] = uncertain
+                ap.data.setdefault("notice_delivery_attempts", {}).pop(str(target), None)
                 if str(target) not in ap.data.get("notices", []):
                     ap.data.setdefault("notices", []).append(str(target))
                 changed = True
         elif kind == "outbox" and str(target) == "outbox" and ap.data.get("outbox_delivery_unknown"):
             box = list(ap.data.get("outbox") or [])
+            attempt = ap.data.get("outbox_delivery_attempt")
+            if isinstance(attempt, dict):
+                if not isinstance(attempt.get("body"), str) or not box or box[0] != attempt["body"]:
+                    return {"status": "attempt_mismatch"}
             if box:
                 handoff = re.match(r"^\[kimeru 送信用 #(\d+)\]", str(box[0]))
                 if handoff:
                     item = ap.data.get("items", {}).get(handoff.group(1))
                     if item:
                         prior = item.get("handoff_unknown") or {}
+                        if isinstance(attempt, dict) and (
+                                not isinstance(attempt.get("revision"), int)
+                                or str(attempt.get("identity")) != handoff.group(1)):
+                            return {"status": "attempt_mismatch"}
+                        evidence_revision = (attempt.get("revision") if isinstance(attempt, dict)
+                                             else prior.get("revision", item.get("revision", 1)))
                         item.setdefault("handoff_evidence", []).append({
                             "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                            "revision": prior.get("revision", item.get("revision", 1)),
+                            "revision": evidence_revision,
+                            "identity": (attempt.get("identity") if isinstance(attempt, dict)
+                                         else item.get("key")),
                             "source": "user_confirmation"})
                         item.pop("handoff_unknown", None)
             ap.data["outbox"] = box[1:]
             ap.data.pop("outbox_delivery_unknown", None)
             ap.data.pop("outbox_delivery_unknown_at", None)
+            ap.data.pop("outbox_delivery_attempt", None)
             changed = True
         elif kind == "brief" and str(target) == "brief":
             state_path = out / "daily_state.json"
@@ -777,20 +800,33 @@ def _notify_notices_locked(out, bridge, send):
         if key in done or key in uncertain:
             continue
         fsutil.refresh(lock_path(out))
+        body = format_notice(rec)
+        if send:
+            attempt = _attempt_record("notice", key, "notice", body, rec.get("revision"), key)
+            ap.data["notice_delivery_attempts"] = ap.data.get("notice_delivery_attempts") or {}
+            ap.data["notice_delivery_attempts"][key] = attempt
+            ap.data["notice_delivery_unknown"][key] = attempt["at"]
+            ap.save()
         try:
-            r = bridge.post(format_notice(rec), send) or {}
+            r = bridge.post(body, send) or {}
         except Exception as e:
-            if send and _delivery_unknown(getattr(e, "data", None), True):
-                ap.data["notice_delivery_unknown"][key] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            if send and not _delivery_unknown(getattr(e, "data", None), True):
+                ap.data["notice_delivery_unknown"].pop(key, None)
+                ap.data.setdefault("notice_delivery_attempts", {}).pop(key, None)
                 ap.save()
             raise
         if send and not _delivered(r, True):
             if _delivery_unknown(r, True):
-                ap.data["notice_delivery_unknown"][key] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                ap.save()
+            else:
+                ap.data["notice_delivery_unknown"].pop(key, None)
+                ap.data.setdefault("notice_delivery_attempts", {}).pop(key, None)
                 ap.save()
             raise RuntimeError(f"notice {key} was not posted with verified readback")
         if send:
             ap.data["notices"].append(key); done.add(key)
+            ap.data["notice_delivery_unknown"].pop(key, None)
+            ap.data.setdefault("notice_delivery_attempts", {}).pop(key, None)
             ap.save()
         posted.append(key)
     return posted
@@ -831,20 +867,26 @@ def _notify_locked(out, bridge, send, real):
             execute.freeze(it["record"], real)
             ap.save()
             fsutil.refresh(lock_path(out))
+            body = format_post(n, it["record"], fulltext.load(out, it["key"]))
+            if send:
+                attempt = _attempt_record("case", n, "post", body, it.get("revision", 1), it["key"])
+                it.update({"delivery_unknown": True, "delivery_unknown_part": "post",
+                           "delivery_unknown_at": attempt["at"], "delivery_unknown_revision": it.get("revision", 1),
+                           "delivery_unknown_generation": measurement_for(it).get("generation"),
+                           "delivery_attempt": attempt})
+                ap.save()
             try:
-                r = bridge.post(format_post(n, it["record"], fulltext.load(out, it["key"])), send) or {}
+                r = bridge.post(body, send) or {}
             except Exception as e:
-                if send and _delivery_unknown(getattr(e, "data", None), True):
-                    it["delivery_unknown"], it["delivery_unknown_part"] = True, "post"
-                    it["delivery_unknown_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-                    it["delivery_unknown_generation"] = measurement_for(it).get("generation")
+                if send and not _delivery_unknown(getattr(e, "data", None), True):
+                    _clear_case_attempt(it)
                     ap.save()
                 raise
             if send and not _delivered(r, True):
                 if _delivery_unknown(r, True):
-                    it["delivery_unknown"], it["delivery_unknown_part"] = True, "post"
-                    it["delivery_unknown_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-                    it["delivery_unknown_generation"] = measurement_for(it).get("generation")
+                    ap.save()
+                else:
+                    _clear_case_attempt(it)
                     ap.save()
                 raise RuntimeError(f"#{n} was not posted with verified readback")
             if send:
@@ -853,27 +895,36 @@ def _notify_locked(out, bridge, send, real):
                 if not timing.get("posted_at"):
                     timing["posted_at"] = measurement_now()
                     timing["posting_source"] = "bridge_readback"
+                _clear_case_attempt(it)
                 ap.save()  # a failure on a later item must not forget what was already sent
             posted.append(int(n))
         if req and not it.get("request_posted"):   # its own message: one long-press copies just this
             req = (fulltext.load(out, it["key"]) or {}).get("request") or req   # the request with the whole text is kept apart from the records
             fsutil.refresh(lock_path(out))
+            body = f"[kimeru #{n} Copilot 用]" + chr(10) + req
+            if send:
+                attempt = _attempt_record("case", n, "copilot_request", body, it.get("revision", 1), it["key"])
+                it.update({"delivery_unknown": True, "delivery_unknown_part": "copilot_request",
+                           "delivery_unknown_at": attempt["at"], "delivery_unknown_revision": it.get("revision", 1),
+                           "delivery_attempt": attempt})
+                ap.save()
             try:
-                r2 = bridge.post(f"[kimeru #{n} Copilot 用]" + chr(10) + req, send) or {}
+                r2 = bridge.post(body, send) or {}
             except Exception as e:
-                if send and _delivery_unknown(getattr(e, "data", None), True):
-                    it["delivery_unknown"], it["delivery_unknown_part"] = True, "copilot_request"
-                    it["delivery_unknown_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                if send and not _delivery_unknown(getattr(e, "data", None), True):
+                    _clear_case_attempt(it)
                     ap.save()
                 raise
             if send and not _delivered(r2, True):
                 if _delivery_unknown(r2, True):
-                    it["delivery_unknown"], it["delivery_unknown_part"] = True, "copilot_request"
-                    it["delivery_unknown_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                    ap.save()
+                else:
+                    _clear_case_attempt(it)
                     ap.save()
                 raise RuntimeError(f"#{n} Copilot request was not posted with verified readback")
             if send:
                 it["request_posted"] = True
+                _clear_case_attempt(it)
                 ap.save()
     ap.save()
     return posted
@@ -1081,6 +1132,19 @@ def _delivery_unknown(r, send):
     return True
 
 
+def _attempt_record(kind, target, part, body, revision=None, identity=None):
+    """Immutable evidence of the exact one-message send protected by the caller's state lock."""
+    return {"kind": kind, "target": str(target), "part": part, "revision": revision,
+            "identity": str(identity if identity is not None else target),
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "body": body}
+
+
+def _clear_case_attempt(item):
+    for name in ("delivery_unknown", "delivery_unknown_part", "delivery_unknown_at",
+                 "delivery_unknown_revision", "delivery_unknown_generation", "delivery_attempt"):
+        item.pop(name, None)
+
+
 def flush_outbox(ap, bridge, send):
     """Post what waits in the outbox (results, texts ready to copy), once, all together. Only with send=True. What was not
     delivered stays for the next cycle, in order; after the first one that cannot be posted the rest is not tried (Teams is not
@@ -1093,6 +1157,15 @@ def flush_outbox(ap, bridge, send):
         return False
     for k, text in enumerate(box):
         fsutil.refresh(ap.path.with_name("approvals.lock"))
+        handoff = re.match(r"^\[kimeru 送信用 #(\d+)\]", str(text))
+        handoff_item = ap.data.get("items", {}).get(handoff.group(1)) if handoff else None
+        revision = handoff_item.get("revision", 1) if handoff_item else None
+        identity = handoff.group(1) if handoff else hashlib.sha256(str(text).encode("utf-8")).hexdigest()
+        attempt = _attempt_record("outbox", "outbox", "outbox", text, revision, identity)
+        ap.data["outbox_delivery_unknown"] = True
+        ap.data["outbox_delivery_unknown_at"] = attempt["at"]
+        ap.data["outbox_delivery_attempt"] = attempt
+        ap.save()
         try:
             result = bridge.post(text, True)
             ok = _delivered(result, True)
@@ -1104,18 +1177,18 @@ def flush_outbox(ap, bridge, send):
         if not ok:
             ap.data["outbox"] = box[k:]
             if unknown:
-                ap.data["outbox_delivery_unknown"] = True
-                ap.data["outbox_delivery_unknown_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-                handoff = re.match(r"^\[kimeru 送信用 #(\d+)\]", str(text))
                 if handoff and handoff.group(1) in ap.data.get("items", {}):
                     item = ap.data["items"][handoff.group(1)]
                     item.setdefault("handoff_unknown_history", []).append({
                         "at": ap.data["outbox_delivery_unknown_at"], "revision": item.get("revision", 1)})
                     item["handoff_unknown"] = {"at": ap.data["outbox_delivery_unknown_at"],
                                                "revision": item.get("revision", 1)}
+            else:
+                ap.data.pop("outbox_delivery_unknown", None)
+                ap.data.pop("outbox_delivery_unknown_at", None)
+                ap.data.pop("outbox_delivery_attempt", None)
             ap.save()
             return False
-        handoff = re.match(r"^\[kimeru 送信用 #(\d+)\]", str(text))
         if handoff and handoff.group(1) in ap.data.get("items", {}):
             item = ap.data["items"][handoff.group(1)]
             readback = result.get("readback") if isinstance(result, dict) else {}
@@ -1124,8 +1197,11 @@ def flush_outbox(ap, bridge, send):
                 "revision": item.get("revision", 1), "message_id": readback.get("message_id", ""),
                 "source": "bridge_readback"})
             item.pop("handoff_unknown", None)
-    ap.data["outbox"] = []
-    ap.save()
+        ap.data["outbox"] = box[k + 1:]
+        ap.data.pop("outbox_delivery_unknown", None)
+        ap.data.pop("outbox_delivery_unknown_at", None)
+        ap.data.pop("outbox_delivery_attempt", None)
+        ap.save()
     return True
 
 

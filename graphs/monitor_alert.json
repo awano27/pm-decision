@@ -363,6 +363,7 @@
         "description",
         "rule"
       ],
+      "exclude_scope": "sentence",
       "patterns": [
         "(customers?|users?)[^.;]{0,40}(cannot|can't|unable to|are unable to)[^.;]{0,20}(pay|check ?out|sign in|log ?in|access|use the service)",
         "(支払|決済|購入|ログイン|サインイン|ログオン)[^。]{0,10}(できない|できません|不可|通らない|失敗)",

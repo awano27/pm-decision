@@ -2,9 +2,11 @@
 import argparse
 import hashlib
 import json
+import os
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from uuid import uuid4
 
 from . import fsutil, notify
 
@@ -53,6 +55,61 @@ def _unique_object(pairs):
 def _paths(out, number):
     folder = Path(out) / "requirements"
     return folder, folder / f"{number}.json", folder / f"{number}.md", folder / "approvals.json"
+
+
+def _generation_path(folder, number):
+    return folder / f"{number}.generation.json"
+
+
+def _generation_marker(path, number):
+    """Read and validate the optional publication marker; old artifact pairs have none."""
+    if not path.exists():
+        return None
+    try:
+        marker = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_object)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        raise ValueError("requirements generation marker is unreadable or has duplicate keys") from None
+    if (not isinstance(marker, dict) or set(marker) != {"schema_version", "case", "generation", "phase"}
+            or type(marker.get("schema_version")) is not int or marker["schema_version"] != 1
+            or type(marker.get("case")) is not int or marker["case"] != number
+            or not isinstance(marker.get("generation"), str) or len(marker["generation"]) != 32
+            or any(char not in "0123456789abcdef" for char in marker["generation"])
+            or marker.get("phase") not in ("pending", "complete")):
+        raise ValueError("requirements generation marker has an invalid schema or case number")
+    return marker
+
+
+def _require_complete_generation(path, number):
+    marker = _generation_marker(path, number)
+    if marker is not None and marker["phase"] != "complete":
+        raise LookupError(f"case {number} の要件成果物は未完了の世代です。再生成するには requirements build {number} --force を実行してください")
+
+
+def _write_generation_marker(path, number, generation, phase):
+    """Durably replace the small marker without ever removing the current marker first."""
+    payload = json.dumps({"schema_version": 1, "case": number, "generation": generation, "phase": phase},
+                         ensure_ascii=False, indent=2) + "\n"
+    tmp = path.with_name(f".{path.name}.{generation}.{phase}.tmp")
+    try:
+        with tmp.open("w", encoding="utf-8", newline="\n") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        fsutil._replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
+def _write_staged(path, text):
+    fsutil.write_atomic(path, text)
+
+
+def _publish_staged(staged_path, destination):
+    # Keep the established .bak behavior while atomically publishing from a fully staged file.
+    fsutil.write_atomic(destination, staged_path.read_text(encoding="utf-8"))
 
 
 def _case(out, number):
@@ -187,6 +244,7 @@ def dispatch(argv, out, print_fn=print):
         return int(exc.code)
 
     folder, json_path, md_path, manifest_path = _paths(out, args.case)
+    generation_path = _generation_path(folder, args.case)
     try:
         if args.command == "build":
             answers = _answers(args.answers)  # validate before touching any outputs
@@ -202,19 +260,35 @@ def dispatch(argv, out, print_fn=print):
                 if item is None:
                     print_fn(f"失敗: case {args.case} はありません")
                     return 1
+                if not args.force and generation_path.exists():
+                    marker = _generation_marker(generation_path, args.case)
+                    if marker is not None and marker["phase"] == "pending":
+                        print_fn(f"失敗: case {args.case} の要件成果物の公開が未完了です。修復には requirements build {args.case} --force を実行してください")
+                        return 1
                 if not args.force and (json_path.exists() or md_path.exists()):
                     print_fn("失敗: 既存の成果物があります。上書きするには --force を指定してください")
                     return 1
                 doc = _artifact_from_item(out, args.case, item, answers)
                 rendered = _markdown(doc)
                 folder.mkdir(parents=True, exist_ok=True)
-                fsutil.write_atomic(json_path, json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
-                fsutil.write_atomic(md_path, rendered)
+                generation = uuid4().hex
+                staged_json = folder / f".{args.case}.{generation}.json.stage"
+                staged_md = folder / f".{args.case}.{generation}.md.stage"
+                try:
+                    _write_staged(staged_json, json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+                    _write_staged(staged_md, rendered)
+                    _write_generation_marker(generation_path, args.case, generation, "pending")
+                    _publish_staged(staged_json, json_path)
+                    _publish_staged(staged_md, md_path)
+                    _write_generation_marker(generation_path, args.case, generation, "complete")
+                finally:
+                    for staged in (staged_json, staged_md):
+                        try:
+                            staged.unlink()
+                        except FileNotFoundError:
+                            pass
             print_fn(f"要件ドラフトを保存しました: {md_path} と {json_path}")
             return 0
-        if not json_path.is_file() or not md_path.is_file():
-            print_fn(f"失敗: case {args.case} の要件成果物がありません。先に requirements build {args.case} を実行してください")
-            return 1
         if _case(out, args.case) is None:
             print_fn(f"失敗: case {args.case} はありません")
             return 1
@@ -222,6 +296,7 @@ def dispatch(argv, out, print_fn=print):
             if not locked:
                 print_fn("失敗: requirements 成果物が使用中です。再試行してください")
                 return 1
+            _require_complete_generation(generation_path, args.case)
             if not json_path.is_file() or not md_path.is_file():
                 print_fn(f"失敗: case {args.case} の要件成果物がありません")
                 return 1

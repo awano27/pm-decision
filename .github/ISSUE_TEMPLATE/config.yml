@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: セキュリティ・誤送信の報告の仕方
+    url: https://github.com/awano27/pm-decision/blob/main/SECURITY.md
+    about: 実際の本文・社名・ID・トークンは書かず、架空のデータで再現手順を書いてください

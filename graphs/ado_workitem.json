@@ -1,0 +1,217 @@
+{
+  "name": "workitem-intake",
+  "event": "ado.workitem.created",
+  "start": "critical_bug",
+  "nodes": {
+    "ready": {
+      "kind": "judge",
+      "question": {
+        "type": "noul",
+        "instructions": "Does the work item state acceptance criteria, an expected result, or steps to reproduce a problem?",
+        "hints": [
+          "acceptance",
+          "受け入れ",
+          "再現",
+          "repro",
+          "期待",
+          "expected"
+        ]
+      },
+      "routes": {
+        "yes": "priority",
+        "no": "request_info",
+        "unsure": "priority"
+      }
+    },
+    "request_info": {
+      "kind": "decide",
+      "actions": [
+        {
+          "type": "ado.comment",
+          "id": "{event.id}",
+          "text": "着手に必要な情報が不足しています。受け入れ条件（Bugは再現手順と期待結果）を追記してください。— kimeru"
+        },
+        {
+          "type": "ado.update",
+          "id": "{event.id}",
+          "fields": {
+            "System.Tags": "kimeru;needs-info"
+          }
+        }
+      ]
+    },
+    "priority": {
+      "kind": "judge",
+      "question": {
+        "type": "score",
+        "instructions": "How severe and urgent is this work item for the product?",
+        "criteria": [
+          "Cosmetic, internal or nice to have; no deadline",
+          "Affects customers or a known deadline, but is not blocking anyone today",
+          "Customers, production or an upcoming release are blocked or broken right now"
+        ],
+        "hints": {
+          "2": [
+            "本番",
+            "production",
+            "全ユーザー",
+            "blocker",
+            "ログインできない"
+          ],
+          "1": [
+            "顧客",
+            "リリース",
+            "改善",
+            "improve"
+          ]
+        }
+      },
+      "_comment": "ordinal: adjacent-level splits are expected (min_conf low); splits across non-adjacent levels go to a human",
+      "min_conf": 0.3,
+      "routes": {
+        "bands": [
+          [
+            0.75,
+            "set_p3"
+          ],
+          [
+            1.6,
+            "set_p2"
+          ],
+          [
+            3,
+            "set_p1"
+          ]
+        ],
+        "unsure": "triage_pm"
+      },
+      "adjacent_only": true
+    },
+    "set_p1": {
+      "kind": "decide",
+      "actions": [
+        {
+          "type": "ado.update",
+          "id": "{event.id}",
+          "fields": {
+            "Microsoft.VSTS.Common.Priority": 1
+          }
+        }
+      ],
+      "advice": "P1 を今スプリントに入れるか判断: #{event.id} {event.title}",
+      "notify": true
+    },
+    "set_p2": {
+      "kind": "decide",
+      "actions": [
+        {
+          "type": "ado.update",
+          "id": "{event.id}",
+          "fields": {
+            "Microsoft.VSTS.Common.Priority": 2
+          }
+        }
+      ]
+    },
+    "set_p3": {
+      "kind": "decide",
+      "actions": [
+        {
+          "type": "ado.update",
+          "id": "{event.id}",
+          "fields": {
+            "Microsoft.VSTS.Common.Priority": 3
+          }
+        }
+      ]
+    },
+    "triage_pm": {
+      "kind": "advise",
+      "queue": true,
+      "advice": "優先度を判定できないチケット #{event.id} {event.title}",
+      "actions": [
+        {
+          "type": "ado.update",
+          "id": "{event.id}",
+          "fields": {
+            "Microsoft.VSTS.Common.Priority": 2,
+            "System.Tags": "kimeru;triaged"
+          }
+        }
+      ]
+    },
+    "critical_bug": {
+      "kind": "match",
+      "_comment": "safety net: a work item that states customers/production are broken right now is P1 whatever the model scores Exclude vetoes only within the same field; test-env wording next to a production cue goes to a person (mixed).",
+      "fields": [
+        "title",
+        "description",
+        "repro_steps"
+      ],
+      "patterns": [
+        "(本番|全ユーザー|全顧客|多数の顧客|顧客から)[^。]{0,40}(できない|できません|不可|クラッシュ|落ちる|送られない|届かない|0 ?円|表示されない|エラー)",
+        "(ログイン|サインイン|決済|支払|購入)[^。]{0,10}(できない|できません|不可|通らない)",
+        "(crash(es|ed)?|cannot (log ?in|sign in|pay|check ?out)|all users|every user|outage)",
+        "(クラッシュ|強制終了|起動しない|起動できない)",
+        "(多数|大量|複数)の(顧客|ユーザー|お客様)から(の)?(問い合わせ|報告|苦情|クレーム)"
+      ],
+      "routes": {
+        "yes": "set_p1_critical",
+        "no": "has_ac",
+        "mixed": "triage_pm"
+      },
+      "exclude": [
+        "(テスト|検証|開発|ステージング)環境",
+        "(test|staging|dev) (env|environment)",
+        "ローカル(環境|で)"
+      ],
+      "mixed_if": [
+        "本番|全ユーザー|全顧客|多数の(顧客|ユーザー)|production|prod |all users|every user|customers?"
+      ]
+    },
+    "set_p1_critical": {
+      "kind": "decide",
+      "actions": [
+        {
+          "type": "ado.update",
+          "id": "{event.id}",
+          "fields": {
+            "Microsoft.VSTS.Common.Priority": 1
+          }
+        }
+      ],
+      "advice": "顧客影響の大きいチケットを P1 にしました（規則による判定）。今スプリントで対応するか判断: #{event.id} {event.title}",
+      "notify": true
+    },
+    "has_ac": {
+      "kind": "match",
+      "_comment": "structured field: acceptance criteria filled in -> ready (only the 'yes' side is a rule)",
+      "fields": [
+        "acceptance_criteria"
+      ],
+      "patterns": [
+        "\\S"
+      ],
+      "routes": {
+        "yes": "priority",
+        "no": "has_repro"
+      }
+    },
+    "has_repro": {
+      "kind": "match",
+      "_comment": "explicit reproduction steps or expected result -> ready; anything else is asked to the model",
+      "fields": [
+        "description",
+        "repro_steps"
+      ],
+      "patterns": [
+        "再現|期待(する|される)?(結果|値|動作)?|実際(の結果)?[:：]",
+        "steps to reproduce|expected( result| behaviou?r)?|actual( result)?\\s*:"
+      ],
+      "routes": {
+        "yes": "priority",
+        "no": "ready"
+      }
+    }
+  }
+}

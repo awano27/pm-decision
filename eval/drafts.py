@@ -1,0 +1,87 @@
+"""Draft quality check for the writer (writer.py) on fixture events of every kind.
+
+  python eval/drafts.py --backend kev --writer copilot [--n 20] [--kinds teams.chat,monitor.alert] [--out drafts.jsonl]
+
+For each event: judge with the backend, draft every follow-up text with the writer, then check:
+  invented   dates / numbers / @names / #ids in a draft that are not in the material
+  long       a reply / comment over 200 characters, a post over 300
+  failed     writer error or no JSON (template kept)
+Reading the drafts is still the real review: open the --out file.
+The coefficients `kimeru calibrate --apply` wrote to the state folder are not read, unless you pass --user-thresholds.
+"""
+import argparse
+import json
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from kimeru import profiles, graph, plan, writer  # noqa: E402
+from kimeru.backends import JevBackend, KevBackend, StubBackend  # noqa: E402
+
+LIMIT = {"teams.reply": 200, "ado.comment": 200, "teams.post": 300, "ado.create": 400}
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--backend", choices=["stub", "jev", "kev"], default="kev")
+    ap.add_argument("--writer", default="copilot")
+    ap.add_argument("--n", type=int, default=20)
+    ap.add_argument("--kinds", default="teams.chat,monitor.alert,ado.workitem.created,meeting.item")
+    ap.add_argument("--fixtures", default="fixtures.jsonl")
+    ap.add_argument("--topic", help="a real meeting name or mail subject the writer may know: asks about it in the "
+                                    "chat text (never printed or saved); the run reports how many sources came back")
+    ap.add_argument("--out")
+    ap.add_argument("--user-thresholds", action="store_true",
+                    help="also read the coefficients `kimeru calibrate --apply` wrote (default: not read)")
+    a = ap.parse_args()
+    be = {"kev": KevBackend, "jev": JevBackend}.get(a.backend, StubBackend)()
+    w = writer.get_writer(a.writer)
+    pbs = plan.load_playbooks(ROOT / "playbooks")
+    graphs = {k: v[0] for k, v in graph.load_dir(ROOT / "graphs", pbs).items()}
+    kinds = a.kinds.split(",")
+    fx = [json.loads(l) for l in (ROOT / "eval" / a.fixtures).read_text(encoding="utf-8").splitlines() if l.strip()]
+    per_kind = max(1, a.n // len(kinds))
+    fx = [x for k in kinds for x in [f for f in fx if f["event"]["kind"] == k][:per_kind]]
+    if a.topic:
+        for x in fx:
+            if x["event"]["kind"] == "teams.chat":
+                x["event"]["text"] = f"「{a.topic}」の件、その後どうなっていますか。関連するメールや会議の内容を踏まえて、返信をお願いします。"
+    rows, secs = [], []
+    for x in fx:
+        ev = x["event"]
+        res = graph.run(graphs[ev["kind"]], ev, be, playbooks=pbs)
+        if not writer.targets(res):
+            continue
+        t0 = time.time()
+        drafted = writer.apply(res, ev, w)
+        secs.append(time.time() - t0)
+        held = [d for d in drafted if not d.get("drafted_by")]   # template kept: refused, missing or fallback
+        drafted = [d for d in drafted if d.get("drafted_by")]
+        items = [{"type": d["type"], "title": d.get("title"), "text": d[writer.FIELD[d["type"]]],
+                  "template": d.get("template_text"), "unverified": d.get("unverified", []),
+                  "long": len(d[writer.FIELD[d["type"]]]) > LIMIT[d["type"]]} for d in drafted]
+        rows.append({"id": x["id"], "kind": ev["kind"], "node": res["node"], "error": res.get("writer_error"),
+                     "targets": len(writer.targets(res)), "drafted": items, "held": len(held), "sec": round(secs[-1], 1),
+                     "sources": len(res.get("copilot_sources", [])), "sources_key": bool(res.get("copilot_sources_key"))})
+        flags = sum(bool(i["unverified"]) for i in items)
+        print(f"{x['id']:12} {res['node']:18} {secs[-1]:5.1f}s drafted {len(items)}/{len(writer.targets(res))}"
+              f"{'  invented=' + str(flags) if flags else ''}{'  held=' + str(len(held)) if held else ''}"
+              f"{'  ERROR ' + res['writer_error'][:2400] if res.get('writer_error') else ''}",
+              flush=True)
+    if a.out:
+        Path(a.out).write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+    if not rows:
+        print("no event produced text to draft")
+        return
+    items = [i for r in rows for i in r["drafted"]]
+    secs.sort()
+    print(f"\nevents={len(rows)} texts={sum(r['targets'] for r in rows)} drafted={len(items)} "
+          f"held={sum(r['held'] for r in rows)} sources={sum(r['sources'] for r in rows)} sources_key={sum(r['sources_key'] for r in rows)} failed_events={sum(1 for r in rows if r['error'])} invented={sum(bool(i['unverified']) for i in items)} "
+          f"long={sum(i['long'] for i in items)} median={secs[len(secs) // 2]:.1f}s max={secs[-1]:.1f}s")
+
+
+if __name__ == "__main__":
+    with profiles.ignoring_overrides("--user-thresholds" not in sys.argv):   # a number printed here must not depend on what one PC has tuned
+        main()

@@ -1,0 +1,380 @@
+{
+  "name": "alert-triage",
+  "event": "monitor.alert",
+  "start": "resolved",
+  "nodes": {
+    "resolved": {
+      "kind": "match",
+      "_comment": "structured field (Azure Monitor monitorCondition): decided by rule, never by a model. Kev left a real 'Resolved' alert unsure.",
+      "fields": [
+        "condition"
+      ],
+      "patterns": [
+        "^resolved$"
+      ],
+      "routes": {
+        "yes": "log_resolved",
+        "no": "critical_outage"
+      }
+    },
+    "impact": {
+      "kind": "judge",
+      "question": {
+        "type": "score",
+        "instructions": "Given the alert `rule`, `severity`, `description` and `context`, how large is the customer impact?",
+        "criteria": [
+          "Nobody is affected (no users, no systems in use)",
+          "Only internal staff or internal systems are affected; customers are not",
+          "Customers can still use the service but it is degraded or slow",
+          "Customers cannot use the service or a core function (pay, sign in, check out)"
+        ],
+        "hints": {
+          "1": [
+            "batch",
+            "internal",
+            "社内"
+          ],
+          "2": [
+            "latency",
+            "遅延",
+            "5xx",
+            "error rate"
+          ],
+          "3": [
+            "down",
+            "unavailable",
+            "停止",
+            "sev0"
+          ]
+        }
+      },
+      "min_conf": 0.45,
+      "routes": {
+        "bands": [
+          [
+            0.5,
+            "noise_check"
+          ],
+          [
+            1.5,
+            "task_internal"
+          ],
+          [
+            2.5,
+            "bug_p1"
+          ],
+          [
+            4,
+            "plan_incident"
+          ]
+        ],
+        "unsure": "page_advice"
+      },
+      "guards": [
+        {
+          "field": "severity",
+          "pattern": "^Sev[01]$",
+          "below": 2.5
+        }
+      ],
+      "_comment": "Guard: a Sev0/Sev1 alert the model rates below an outage goes to a person (the alert author already called it severe; found as a severe miss on held-out alert-c01)."
+    },
+    "noise_check": {
+      "kind": "judge",
+      "question": {
+        "type": "noul",
+        "instructions": "Does the alert look like a flapping or threshold-noise alert rather than a real fault?",
+        "hints": [
+          "flapping",
+          "threshold",
+          "閾値"
+        ]
+      },
+      "routes": {
+        "yes": "tune_rule",
+        "no": "task_internal",
+        "unsure": "task_internal"
+      }
+    },
+    "page": {
+      "kind": "decide",
+      "actions": [
+        {
+          "type": "oncall.page",
+          "summary": "{event.rule}: {event.description}"
+        },
+        {
+          "type": "teams.post",
+          "channel": "incident",
+          "text": "[障害] {event.rule} ({event.severity}) {event.description}"
+        },
+        {
+          "type": "ado.create",
+          "work_item_type": "Bug",
+          "title": "[Incident] {event.rule}",
+          "priority": "1",
+          "tags": "kimeru;incident"
+        }
+      ],
+      "advice": "顧客影響大。関係者への一次連絡を PM から出すこと",
+      "notify": true
+    },
+    "bug_p1": {
+      "kind": "decide",
+      "actions": [
+        {
+          "type": "ado.create",
+          "work_item_type": "Bug",
+          "title": "[Alert] {event.rule}",
+          "priority": "1",
+          "description": "{event.description}",
+          "tags": "kimeru;alert"
+        }
+      ],
+      "notify": true
+    },
+    "task_internal": {
+      "kind": "decide",
+      "actions": [
+        {
+          "type": "ado.create",
+          "work_item_type": "Task",
+          "title": "[Alert] {event.rule}",
+          "priority": "3",
+          "tags": "kimeru;alert"
+        }
+      ]
+    },
+    "tune_rule": {
+      "kind": "advise",
+      "queue": false,
+      "advice": "ノイズの可能性: ルール {event.rule} の閾値見直しを次回定例で提案"
+    },
+    "log_resolved": {
+      "kind": "decide",
+      "actions": [
+        {
+          "type": "log.only"
+        }
+      ]
+    },
+    "page_advice": {
+      "kind": "advise",
+      "queue": true,
+      "advice": "影響度が判定できないアラート {event.rule} ({event.severity}): 5分以内に人が確認",
+      "actions": [
+        {
+          "type": "oncall.page",
+          "summary": "{event.rule}: {event.description}"
+        },
+        {
+          "type": "ado.create",
+          "work_item_type": "Bug",
+          "title": "[Alert] {event.rule}",
+          "priority": "1",
+          "tags": "kimeru;alert"
+        }
+      ]
+    },
+    "plan_incident": {
+      "kind": "plan",
+      "playbooks": [
+        "incident"
+      ],
+      "routes": {
+        "ok": "page_planned",
+        "none": "page",
+        "unsure": "page"
+      }
+    },
+    "page_planned": {
+      "kind": "decide",
+      "actions": [
+        {
+          "type": "oncall.page",
+          "summary": "{event.rule}: {event.description}"
+        },
+        {
+          "type": "teams.post",
+          "channel": "incident",
+          "text": "[障害] {event.rule} ({event.severity}) {event.description}"
+        },
+        {
+          "type": "ado.create",
+          "work_item_type": "Bug",
+          "title": "[Incident] {event.rule}",
+          "priority": "1",
+          "tags": "kimeru;incident"
+        }
+      ],
+      "advice": "{plan.title}: {plan.summary}",
+      "per_step": [
+        {
+          "type": "ado.create",
+          "work_item_type": "Task",
+          "title": "[Incident] {step.title}",
+          "due": "{step.due}",
+          "tags": "kimeru;incident;plan"
+        }
+      ],
+      "notify": true
+    },
+    "future_risk": {
+      "kind": "judge",
+      "question": {
+        "type": "noul",
+        "instructions": "Does the alert warn about a problem expected to happen in the future, rather than a problem happening now?",
+        "hints": [
+          "expires",
+          "expiry",
+          "期限切れ",
+          "will be full",
+          "forecast",
+          "予測",
+          "見込み"
+        ]
+      },
+      "routes": {
+        "yes": "horizon",
+        "no": "impact",
+        "unsure": "impact"
+      }
+    },
+    "horizon": {
+      "kind": "judge",
+      "question": {
+        "type": "score",
+        "instructions": "When is the problem described in the alert expected to happen?",
+        "criteria": [
+          "Within the next 24 hours",
+          "Within the next 7 days",
+          "More than 7 days from now"
+        ],
+        "hints": {
+          "0": [
+            "hours",
+            "時間",
+            "today"
+          ],
+          "1": [
+            "days",
+            "日以内",
+            "this week"
+          ],
+          "2": [
+            "weeks",
+            "months",
+            "週間",
+            "か月"
+          ]
+        }
+      },
+      "routes": {
+        "bands": [
+          [
+            0.5,
+            "prevent_now"
+          ],
+          [
+            1.5,
+            "prevent_week"
+          ],
+          [
+            3,
+            "prevent_backlog"
+          ]
+        ],
+        "unsure": "prevent_advice"
+      }
+    },
+    "prevent_now": {
+      "kind": "decide",
+      "actions": [
+        {
+          "type": "ado.create",
+          "work_item_type": "Task",
+          "title": "[予防] {event.rule}",
+          "priority": "1",
+          "description": "{event.description}",
+          "tags": "kimeru;alert;preventive"
+        },
+        {
+          "type": "teams.post",
+          "channel": "incident",
+          "text": "[予防・24時間以内] {event.rule}: {event.description}"
+        }
+      ],
+      "advice": "24時間以内に起きる見込みの問題: {event.rule}。今日中に担当を決めること",
+      "notify": true
+    },
+    "prevent_week": {
+      "kind": "decide",
+      "actions": [
+        {
+          "type": "ado.create",
+          "work_item_type": "Task",
+          "title": "[予防] {event.rule}",
+          "priority": "2",
+          "description": "{event.description}",
+          "tags": "kimeru;alert;preventive"
+        }
+      ]
+    },
+    "prevent_backlog": {
+      "kind": "decide",
+      "actions": [
+        {
+          "type": "ado.create",
+          "work_item_type": "Task",
+          "title": "[予防] {event.rule}",
+          "priority": "3",
+          "description": "{event.description}",
+          "tags": "kimeru;alert;preventive"
+        }
+      ]
+    },
+    "prevent_advice": {
+      "kind": "advise",
+      "queue": true,
+      "advice": "将来のリスクと判定したが時期が不明なアラート {event.rule}: 対応時期を決めて",
+      "actions": [
+        {
+          "type": "ado.create",
+          "work_item_type": "Task",
+          "title": "[予防] {event.rule}",
+          "priority": "2",
+          "description": "{event.description}",
+          "tags": "kimeru;alert;preventive"
+        }
+      ]
+    },
+    "critical_outage": {
+      "kind": "match",
+      "_comment": "safety net: an explicit statement that customers cannot use a core function always pages, whatever the model scores",
+      "fields": [
+        "description",
+        "rule"
+      ],
+      "patterns": [
+        "(customers?|users?)[^.;]{0,40}(cannot|can't|unable to|are unable to)[^.;]{0,20}(pay|check ?out|sign in|log ?in|access|use the service)",
+        "(支払|決済|購入|ログイン|サインイン|ログオン)[^。]{0,10}(できない|できません|不可|通らない|失敗)",
+        "(all|every) regions? (?:are )?(?:currently )?(?:down|unavailable|failing|failed|returning (?:5xx|errors?))",
+        "全(リージョン|ユーザー|拠点)[^。]{0,12}現在[^。]{0,12}(停止|利用できない|障害|失敗|エラー)",
+        "(完全|全面)?停止中|全停止|サービス停止|service (?:is )?(?:currently )?down|service unavailable|(?:currently experiencing an )?outage (?:is )?(?:currently )?(?:active|ongoing)"
+      ],
+      "exclude": [
+        "(障害|エラー|停止|失敗)(?:なく|がない|はない|ではない|が発生していません|が発生していない|していません|していない)|正常|問題なく|利用できます|利用可能",
+        "明日|明後日|来週|来月|今後|将来|可能性|見込み|予測|予定|tomorrow|next (?:day|week|month)|will (?:be|happen|occur)|expected|forecast|might|may|could|possible|possibility|planned|future"
+      ],
+      "mixed_if": [
+        "全(リージョン|ユーザー|拠点)[^。]{0,12}現在[^。]{0,12}(?:障害|停止|エラー)(?:が発生しています|が発生している|が続いています|が続いている|中)",
+        "(all|every) regions? (?:are )?(?:currently )?(?:down|unavailable|failing|failed|returning (?:5xx|errors?))"
+      ],
+      "routes": {
+        "yes": "plan_incident",
+        "no": "future_risk",
+        "mixed": "page_advice"
+      }
+    }
+  }
+}

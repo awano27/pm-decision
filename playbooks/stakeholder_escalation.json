@@ -1,0 +1,44 @@
+{
+  "id": "stakeholder_escalation",
+  "title": "ステークホルダーからの要求・苦情への対応",
+  "when": "Respond to pressure, complaint or escalation from a customer, executive or other stakeholder",
+  "hints": [
+    "クレーム",
+    "苦情",
+    "至急対応",
+    "経営",
+    "部長",
+    "顧客から",
+    "escalation",
+    "不満"
+  ],
+  "steps": [
+    {
+      "id": "facts",
+      "title": "事実関係を整理",
+      "desc": "Gather the facts behind the complaint"
+    },
+    {
+      "id": "ack",
+      "title": "受領と対応方針を一次回答",
+      "desc": "Acknowledge and give a first response with next steps"
+    },
+    {
+      "id": "internal",
+      "title": "社内の関係者と方針をすり合わせ",
+      "desc": "Align internally with the people involved",
+      "check": "Does resolving this need agreement from people outside the PM's own team?",
+      "hints": [
+        "営業",
+        "経営",
+        "法務",
+        "他部署"
+      ]
+    },
+    {
+      "id": "resolve",
+      "title": "対応策を決めて回答",
+      "desc": "Decide the resolution and reply"
+    }
+  ]
+}

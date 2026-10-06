@@ -1,0 +1,48 @@
+name: 動作環境の報告
+description: 自分の環境で、画面操作や通知が動いたかを報告する
+title: "[環境] "
+labels: ["environment"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **実際のメッセージの本文、社名、人名、ID、URL、トークン、パスを書かないでください。** 公開の場所です。
+        下の欄には、`kimeru config show --share`、`kimeru digest --week --share`（どちらも、数値と環境だけを出す）などの出力を貼ってください。
+  - type: input
+    id: teams
+    attributes:
+      label: Teams の版
+      description: Teams の「設定 > Teams について」に出る版
+    validations:
+      required: true
+  - type: textarea
+    id: share
+    attributes:
+      label: "config show --share の出力（python -m kimeru config show --share）"
+      description: 版、OS、Python、画面の倍率、効いている設定が出ます。パス・組織・サブスクリプションは出ません。貼る前に、目で確かめてください。
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: dpi
+    attributes:
+      label: 画面の倍率と、表示の言語
+      description: 例「150%、日本語」
+    validations:
+      required: true
+  - type: textarea
+    id: checks
+    attributes:
+      label: 試験の結果（run-check.cmd の結果シート）
+      description: T3・T9・T16・T19 などの行。`T18-diag` の行は、本文を含みませんが、貼る前に見てください。
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: copilot
+    attributes:
+      label: Teams の Copilot（m365-auto）
+      options:
+        - 使っていない
+        - 貼り付けテスト（T19）が通った
+        - 貼り付けテストで止まった

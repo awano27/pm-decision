@@ -1,0 +1,19 @@
+{
+ "id": "1727000000102",
+ "createdDateTime": "2026-09-24T05:20:00Z",
+ "chatId": "19:req2@thread.v2",
+ "from": {
+  "user": {
+   "displayName": "Ogawa"
+  }
+ },
+ "body": {
+  "contentType": "html",
+  "content": "<p>ログイン画面の SSO 対応、どこまでやるかまだ固まっていなくて。要件を整理してもらえると助かります</p>"
+ },
+ "mentions": [
+  {
+   "id": 0
+  }
+ ]
+}

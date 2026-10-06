@@ -1,0 +1,40 @@
+{
+  "id": "risk_mitigation",
+  "title": "リスク対応計画",
+  "when": "Plan a response to a newly raised risk, blocker or concern that has not happened yet",
+  "hints": [
+    "リスク",
+    "懸念",
+    "遅れそう",
+    "心配",
+    "risk",
+    "可能性"
+  ],
+  "steps": [
+    {
+      "id": "assess",
+      "title": "発生確率と影響を評価",
+      "desc": "Assess likelihood and impact of the risk"
+    },
+    {
+      "id": "owner",
+      "title": "リスクオーナーを決める",
+      "desc": "Assign a risk owner"
+    },
+    {
+      "id": "mitigation",
+      "title": "低減策を決める",
+      "desc": "Decide a mitigation action"
+    },
+    {
+      "id": "trigger",
+      "title": "発動条件（いつ判断し直すか）を決める",
+      "desc": "Define the trigger or date to re-evaluate"
+    },
+    {
+      "id": "register",
+      "title": "リスク台帳に登録",
+      "desc": "Record it in the risk register"
+    }
+  ]
+}

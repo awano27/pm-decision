@@ -1,0 +1,48 @@
+{
+  "id": "release_readiness",
+  "title": "リリース可否の判定",
+  "when": "Decide whether a release is ready to ship (go/no-go)",
+  "hints": [
+    "リリース判定",
+    "go/no-go",
+    "出荷",
+    "デプロイ",
+    "リリースして",
+    "ship"
+  ],
+  "steps": [
+    {
+      "id": "quality",
+      "title": "未解決バグと品質基準を確認",
+      "desc": "Check open bugs against the quality bar"
+    },
+    {
+      "id": "signoff",
+      "title": "QA・関係部署の承認を集める",
+      "desc": "Collect sign-off from QA and other stakeholders"
+    },
+    {
+      "id": "rollback",
+      "title": "ロールバック手順を確認",
+      "desc": "Confirm the rollback plan",
+      "check": "Does the release change production systems in a risky way (data migration, payment, auth)?",
+      "hints": [
+        "移行",
+        "migration",
+        "決済",
+        "認証",
+        "DB"
+      ]
+    },
+    {
+      "id": "decide",
+      "title": "Go/No-Go を決定",
+      "desc": "Make the go/no-go decision"
+    },
+    {
+      "id": "announce",
+      "title": "リリース告知",
+      "desc": "Announce the release or its postponement"
+    }
+  ]
+}

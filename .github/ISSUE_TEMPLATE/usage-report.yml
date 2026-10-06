@@ -1,0 +1,48 @@
+name: 利用結果の報告
+description: 1 週間使った結果を、数値だけで報告する
+title: "[利用結果] "
+labels: ["report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **実際のメッセージの本文、社名、人名、ID、URL、トークン、パスを書かないでください。** 公開の場所です。
+        下の欄には、`kimeru digest --week --share`（数値と環境だけを出す）などの出力を貼ってください。
+  - type: textarea
+    id: share
+    attributes:
+      label: kimeru digest --week --share の出力
+      description: 数値と環境だけが出ます（本文・件名・人名・ID・パスは出ません）。1 行目に kimeru の版と commit が出ます
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: first_success
+    attributes:
+      label: 初回成功までの分数と、人に聞いた回数（任意）
+      description: 例「45 分、0 回」。本物の判断（Kev か Jev）で 1 件が自分とのチャットに届くまで
+  - type: textarea
+    id: stumbles
+    attributes:
+      label: つまずいた README の見出し名（任意）
+      description: 例「しくみ」「止める・消す」。内容ではなく、見出しの名前だけ
+  - type: textarea
+    id: trial_share
+    attributes:
+      label: kimeru trial report --share の出力（任意）
+      description: 集計だけが出ます（個別の case・本文・名前は出ません）
+      render: text
+  - type: dropdown
+    id: consent
+    attributes:
+      label: この集計を docs/evaluation.md に載せてよいですか
+      options:
+        - はい（集計だけを載せてよい）
+        - いいえ（作者が読むだけ）
+    validations:
+      required: true
+  - type: textarea
+    id: felt
+    attributes:
+      label: 使ってみて（任意。具体的なメッセージの内容は書かない）
+      description: 例「返信の下書きは短くしてから使うことが多かった」「要件の依頼が人の確認に回ることが多かった」

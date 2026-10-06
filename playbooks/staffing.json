@@ -1,0 +1,44 @@
+{
+  "id": "staffing",
+  "title": "人員・体制の調整",
+  "when": "Resolve a people, capacity, absence or skill problem on the team",
+  "hints": [
+    "休み",
+    "欠勤",
+    "退職",
+    "人が足りない",
+    "リソース",
+    "アサイン",
+    "体制",
+    "capacity"
+  ],
+  "steps": [
+    {
+      "id": "impact",
+      "title": "影響するタスクと期限を洗い出す",
+      "desc": "List the tasks and deadlines affected"
+    },
+    {
+      "id": "reassign",
+      "title": "代替担当を決める",
+      "desc": "Choose who takes over the affected work"
+    },
+    {
+      "id": "escalate",
+      "title": "上長・他チームへ応援を依頼",
+      "desc": "Ask management or other teams for help",
+      "check": "Is the capacity gap too large for the team to absorb internally?",
+      "hints": [
+        "長期",
+        "退職",
+        "複数",
+        "大幅"
+      ]
+    },
+    {
+      "id": "replan",
+      "title": "スプリント計画を見直す",
+      "desc": "Adjust the sprint plan"
+    }
+  ]
+}

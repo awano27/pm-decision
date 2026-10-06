@@ -1,0 +1,48 @@
+{
+  "id": "scope_change",
+  "title": "スコープ変更の判断",
+  "when": "Decide whether to add, cut or change scope or requirements of planned work",
+  "hints": [
+    "追加",
+    "仕様変更",
+    "スコープ",
+    "要望",
+    "削る",
+    "scope",
+    "feature request"
+  ],
+  "steps": [
+    {
+      "id": "value",
+      "title": "変更の価値と依頼元を確認",
+      "desc": "Clarify the value of the change and who requested it"
+    },
+    {
+      "id": "estimate",
+      "title": "開発チームに工数見積りを依頼",
+      "desc": "Ask the team for an effort estimate"
+    },
+    {
+      "id": "tradeoff",
+      "title": "代わりに外す項目を検討",
+      "desc": "Identify what would be dropped or delayed to make room",
+      "check": "Is the current plan or sprint already full or at risk?",
+      "hints": [
+        "逼迫",
+        "遅れ",
+        "full",
+        "余裕がない"
+      ]
+    },
+    {
+      "id": "decide",
+      "title": "採否を決めてバックログに反映",
+      "desc": "Decide and update the backlog"
+    },
+    {
+      "id": "notify",
+      "title": "依頼元へ結果を回答",
+      "desc": "Reply to the requester with the decision"
+    }
+  ]
+}

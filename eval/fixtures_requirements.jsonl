@@ -1,0 +1,10 @@
+{"id": "req-1", "event": {"kind": "teams.chat", "id": "r1", "author": "Nakamura", "mentions_me": true, "text": "予約リマインド通知の要件を検討してもらえますか。営業が大手の顧客に提案したくて、来月の顧客説明までに叩き台がほしいです"}, "expect": {"intent": "requirements", "plan_requirements": "requirements_review"}}
+{"id": "req-2", "event": {"kind": "teams.chat", "id": "r2", "author": "Ogawa", "mentions_me": true, "text": "ログイン画面の SSO 対応、どこまでやるかまだ固まっていなくて。要件を整理してもらえると助かります"}, "expect": {"intent": "requirements", "plan_requirements": "requirements_review"}}
+{"id": "req-3", "event": {"kind": "teams.chat", "id": "r3", "author": "Tanaka", "mentions_me": true, "text": "新しい請求書 CSV 出力機能の仕様の叩き台を作ってもらえますか。来週の顧客打ち合わせで見せたいです"}, "expect": {"intent": "requirements", "plan_requirements": "requirements_review"}}
+{"id": "req-4", "event": {"kind": "teams.chat", "id": "r4", "author": "Hayashi", "mentions_me": true, "text": "モバイルアプリに通知設定画面を追加したいです。要件をまとめてもらえませんか"}, "expect": {"intent": "requirements", "plan_requirements": "requirements_review"}}
+{"id": "req-5", "event": {"kind": "teams.chat", "id": "r5", "author": "Kondo", "mentions_me": true, "text": "管理者向けの権限管理、どんな機能が必要か洗い出してほしいです。要件の検討をお願いします"}, "expect": {"intent": "requirements", "plan_requirements": "requirements_review"}}
+{"id": "req-6", "event": {"kind": "teams.chat", "id": "r6", "author": "Saito", "mentions_me": true, "text": "顧客から多言語対応してほしいと言われました。要件の検討をお願いします"}, "expect": {"intent": "requirements", "plan_requirements": "requirements_review"}}
+{"id": "req-7", "event": {"kind": "teams.chat", "id": "r7", "author": "Mori", "mentions_me": true, "text": "その新機能、今スプリントに入れてよいか判断お願いします"}, "expect": {"intent": "decision"}}
+{"id": "req-8", "event": {"kind": "teams.chat", "id": "r8", "author": "Ueda", "mentions_me": true, "text": "要件定義の進捗はどうなっていますか"}, "expect": {"intent": "status"}}
+{"id": "req-9", "event": {"kind": "teams.chat", "id": "r9", "author": "Endo", "mentions_me": true, "text": "要件定義書を共有します。ご確認ください"}, "expect": {"intent": "fyi"}}
+{"id": "req-10", "event": {"kind": "teams.chat", "id": "r10", "author": "Oka", "mentions_me": true, "text": "仕様変更したリリースを来週にずらしてよいか承認をお願いします"}, "expect": {"intent": "decision"}}

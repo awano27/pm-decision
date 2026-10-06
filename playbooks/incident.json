@@ -1,0 +1,58 @@
+{
+  "id": "incident",
+  "title": "障害対応の取りまとめ",
+  "when": "Coordinate the response to an outage, failure or production error",
+  "hints": [
+    "障害",
+    "エラー",
+    "落ちて",
+    "down",
+    "incident",
+    "5xx",
+    "停止",
+    "動かない"
+  ],
+  "steps": [
+    {
+      "id": "owner",
+      "title": "対応責任者（インシデントコマンダー）を指名",
+      "desc": "Assign an incident owner"
+    },
+    {
+      "id": "impact",
+      "title": "顧客影響の範囲を確認",
+      "desc": "Confirm the scope of customer impact"
+    },
+    {
+      "id": "comms",
+      "title": "社内外への一次連絡",
+      "desc": "Send the first status update to stakeholders",
+      "check": "Are customers or people outside the engineering team likely affected?",
+      "hints": [
+        "顧客",
+        "customer",
+        "checkout",
+        "決済",
+        "本番"
+      ]
+    },
+    {
+      "id": "mitigate",
+      "title": "暫定対処（ロールバック等）の判断",
+      "desc": "Decide on a mitigation such as rollback or feature flag"
+    },
+    {
+      "id": "postmortem",
+      "title": "振り返り（ポストモーテム）を予定",
+      "desc": "Schedule a postmortem",
+      "check": "Is the failure serious enough that a postmortem should be held?",
+      "hints": [
+        "sev1",
+        "sev0",
+        "停止",
+        "down",
+        "顧客"
+      ]
+    }
+  ]
+}

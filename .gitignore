@@ -1,0 +1,13 @@
+.env
+.env.*
+out/
+inbox/
+__pycache__/
+*.pyc
+kimeru-check-result.txt
+kimeru-update-check-result.txt
+kimeru-auto-check-result.txt
+probe-*.txt
+.python/
+kimeru-recap-structure.txt
+demo/

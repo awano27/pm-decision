@@ -50,6 +50,14 @@ class TestAutoMode(unittest.TestCase):
         self.assertNotIn("Invoke-WebRequest", text)
         self.assertNotIn("Start-Process", text)
 
+    def test_files_left_by_an_older_version_are_named(self):
+        release = (ROOT / "tools" / "release.ps1").read_text(encoding="utf-8-sig")
+        self.assertIn(r"ls-files | Set-Content -Path (Join-Path $pack 'kimeru\FILES')", release)
+        text = AUTO.decode("utf-8-sig")
+        self.assertIn("Join-Path $root 'FILES'", text)
+        self.assertIn("stale  NG", text)
+        self.assertNotIn("Remove-Item", text)   # named, never deleted
+
     def test_the_result_files_are_not_committed(self):
         ignored = (ROOT / ".gitignore").read_text(encoding="utf-8")
         for f in ("kimeru-check-result.txt", "kimeru-update-check-result.txt", "kimeru-auto-check-result.txt"):

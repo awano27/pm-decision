@@ -39,6 +39,25 @@ foreach ($f in @($update, $check)) {
   if (Test-Path $f) { $sheet += Get-Content $f -Encoding UTF8; $sheet += '' }
   else { $sheet += "（$(Split-Path -Leaf $f) ができていません）"; $sheet += '' }
 }
+# files an older version left behind (the update zip is extracted over the old folder, which keeps deleted files)
+$listed = Join-Path $root 'FILES'
+if (Test-Path $listed) {
+  $known = @{}
+  Get-Content $listed -Encoding UTF8 | ForEach-Object { $known[$_.Trim()] = $true }
+  $stale = @(foreach ($d in 'docs', 'tests', 'kimeru', 'tools', 'graphs', 'playbooks', 'eval', 'examples', '.github') {
+    $p = Join-Path $root $d
+    if (Test-Path $p) {
+      Get-ChildItem -Path $p -Recurse -File | Where-Object { $_.FullName -notlike '*\__pycache__\*' } | ForEach-Object {
+        $r = $_.FullName.Substring($root.Length + 1).Replace('\', '/')
+        if (-not $known.ContainsKey($r)) { $r }
+      }
+    }
+  })
+  if ($stale.Count) {
+    $line = "stale  NG 前の版のファイルが $($stale.Count) 件残っています（テストが落ちる原因になります。消してから zip を展開し直してください）: " + ($stale -join ', ')
+  } else { $line = 'stale  OK 前の版のファイルは残っていません' }
+} else { $line = 'stale  SKIP FILES がありません（更新 zip 以外から入れた場合）' }
+$sheet = @($sheet[0], $line, '') + $sheet[2..($sheet.Count - 1)]
 $ng = @($sheet | Where-Object { $_ -match '^\S+\s+NG' }).Count
 $sheet[0] += "  NG=$ng"
 $sheet += $manual

@@ -20,6 +20,9 @@ $src = Join-Path $env:TEMP 'kimeru-update-src.zip'
 git -C $root archive --format=zip -o $src HEAD
 Expand-Archive -Path $src -DestinationPath (Join-Path $pack 'kimeru') -Force
 Remove-Item -Force $src
+# the file list of this version: check-auto.ps1 names the files an older version left behind (extracting over the old
+# folder keeps files this version deleted)
+git -C $root -c core.quotepath=off ls-files | Set-Content -Path (Join-Path $pack 'kimeru\FILES') -Encoding UTF8
 $ver = "kimeru $(git -C $root rev-parse --short HEAD) built $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
 Set-Content -Path (Join-Path $pack 'kimeru\VERSION') -Value $ver -Encoding ASCII
 if (Test-Path $Zip) { Remove-Item -Force $Zip }

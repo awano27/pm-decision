@@ -319,6 +319,7 @@ python -m kimeru config unset backend   # install のときに保存した判断
 | 自分とのチャットへ投稿できたか分からない件 | `python -m kimeru delivery list`、確かめてから `delivery retry` か `delivery confirm` |
 | 発表の場で判断モデルが使えない | 前日に `demo --record <ファイル>` で記録しておき、当日は `demo --replay <ファイル>` |
 | Teams のチャット一覧が 0 件と読まれる | Teams の左側の「チャット」タブを開き、一覧が見えている状態にしてから実行する |
+| 毎日 `--once` を手で動かさず、時間を限って自動運転を試したい | `.\setup-managed.cmd trial`（既定 8 時間で自動的に止まり、結果ファイル `kimeru-autorun-result.txt` ができる。途中で止めるのは `.\setup-managed.cmd remove`。[手順](docs/managed-pc-check.md#毎日動く状態にする確認が-ok-だったら)） |
 | 管理された PC で動くか確かめたい | `run-auto-check.cmd` をダブルクリック（何も送らない・質問しない。結果は OK/NG と件数だけ）。送信を伴う確認は `run-check.cmd`（[手順](docs/managed-pc-check.md)） |
 
 ### 最初の試行: 1 つの ADO プロジェクトで情報不足を確認

@@ -585,8 +585,13 @@ def _main(argv=None):
     p_d.add_argument("--subscription", default=config.value("subscription") or None)
     p_d.add_argument("--brief-hour", type=int, default=_brief_hour())
     p_s = sub.add_parser("schedule", help="register/remove `daily --once --send` every N minutes (Task Scheduler, no admin)")
-    p_s.add_argument("action", choices=["install", "remove", "status"])
+    p_s.add_argument("action", choices=["install", "remove", "status", "trial-start", "report"])
     p_s.add_argument("--minutes", type=int, default=5)
+    p_s.add_argument("--hours", type=float, default=8, help="trial-start: how long the trial runs")
+    p_s.add_argument("--sample", action="store_true", help="trial-start: drop one fictional ADO work item that lacks information")
+    p_s.add_argument("--since", default=None, help="report: start of the period (ISO local time; default: the trial window)")
+    p_s.add_argument("--end-trial", choices=["timer", "manual"], default=None, help="report: record first that the trial is over, and how it ended")
+    p_s.add_argument("--write", default=None, help="report: also write the sheet to this file (UTF-8 with BOM)")
     p_s.add_argument("--extra", default="", help="extra args for daily, e.g. \"--subscription s\"")
     p_s.add_argument("--ado-org", default=config.value("ado_org"))
     p_s.add_argument("--ado-project", default=config.value("ado_project"))
@@ -639,13 +644,13 @@ def _main(argv=None):
     if a.out is None:   # the demo gets a folder of its own, so it never meets the records of run / daily / schedule
         a.out = str(Path("out") / "demo") if a.cmd == "demo" else "out"
     out = Path(a.out)
-    if a.cmd not in READ_ONLY and not (a.cmd == "schedule" and a.action in ("remove", "status")):
+    if a.cmd not in READ_ONLY and not (a.cmd == "schedule" and a.action in ("remove", "status", "report")):
         from . import demo as _demo
         try:   # a command that writes real records here: this folder is no longer the demo's to clear
             (out / _demo.MARK).unlink(missing_ok=True)
         except OSError:
             pass
-    exempt = (a.cmd in ("config", "delivery") or (a.cmd == "schedule" and a.action in ("remove", "status"))
+    exempt = (a.cmd in ("config", "delivery") or (a.cmd == "schedule" and a.action in ("remove", "status", "report"))
               or (a.cmd == "demo" and a.replay))   # these must work when the file is broken or a value is wrong
     file_ok = exempt and not (a.cmd == "config" and a.action != "path")   # `config show/set/unset` need a readable file
     if broken is not None and not file_ok:
@@ -1009,12 +1014,40 @@ SCHEDULE_SENDS_NOTE = ("note: このタスクは自分とのチャットへ実�
                        "止めるときは python -m kimeru schedule remove")
 
 
+def _trial_command(a, out):
+    """`schedule trial-start` (record the window, optional fictional item) and `schedule report` (the result sheet). The task itself
+    is registered by tools/setup-managed.ps1; nothing here touches the Task Scheduler."""
+    from . import autorun
+    if a.action == "trial-start":
+        ado = bool(getattr(a, "ado_org", "") and getattr(a, "ado_project", ""))
+        rec = autorun.start_trial(out, hours=a.hours, minutes=a.minutes, ado=ado, sample=a.sample,
+                                  org=getattr(a, "ado_org", "") or "", project=getattr(a, "ado_project", "") or "",
+                                  inbox=out / "inbox")
+        print("end=" + rec["end"])
+        for line in autorun.start_notes(rec):
+            print(line)
+        return 0
+    if a.end_trial:
+        autorun.mark_ended(out, a.end_trial)
+    since = None
+    if a.since:
+        since = autorun._local(a.since)
+        if since is None:
+            print(f"kimeru: --since is not a time: {a.since}", file=sys.stderr)
+            return 2
+    for line in autorun.write_report(out, dest=a.write, since=since):
+        print(line)
+    return 0
+
+
 def schedule(a, state_out=None):
     """Windows Task Scheduler entry that runs one daily cycle every N minutes as the
     current user (no admin). The task calls a tiny hidden VBS runner in the data folder,
     so no console window flashes and the /TR command stays short whatever the repo path."""
     import subprocess
     _safe_streams()   # the notes below are Japanese: a cp1252 pipe (Task Scheduler, CI) must not crash on them
+    if a.action in ("trial-start", "report"):
+        return _trial_command(a, Path(a.out))
     if a.action == "remove":
         rc = subprocess.run(["schtasks", "/Delete", "/TN", TASK, "/F"]).returncode
         out = Path(a.out).resolve()

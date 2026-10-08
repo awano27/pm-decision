@@ -190,11 +190,13 @@ class TestAdoComment(Base):
         bridge = self.decide_and_post()
         shown = bridge.posts[0]
         template = next(a for a in GRAPHS["ado.workitem.created"][0]["nodes"]["request_info"]["actions"] if a["type"] == "ado.comment")["text"]
-        self.assertIn(template + execute.SIGNATURE, shown)           # the approval post shows the full text, signature line included
+        signed = execute.comment_text({"text": template})
+        self.assertEqual(signed.count("kimeru"), 1)                  # one signature line: the fixed sentence's own sign-off is dropped
+        self.assertIn(signed, shown)           # the approval post shows the full text, signature line included
         self.approve(bridge)
         body = self.calls[0][3]
         self.assertEqual(set(body), {"text"})                        # no drafted_by / template_text / unverified ...
-        self.assertEqual(body["text"], template + execute.SIGNATURE)  # word for word, plus the one signature line
+        self.assertEqual(body["text"], signed)  # word for word, plus the one signature line
 
     def test_the_signature_can_be_switched_off(self):
         self.enable(KIMERU_EXECUTE_SIGNATURE="0")

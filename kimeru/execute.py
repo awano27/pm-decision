@@ -41,6 +41,8 @@ from . import config, fsutil, pull
 
 SUPPORTED = ("ado.comment",)
 SIGNATURE = "\n\n（kimeru が下書きし、本人が承認した文面です）"
+SIGNATURE_FIXED = "\n\n（kimeru の定型文を、本人が承認した文面です）"   # the graph's own sentence: nothing was drafted
+_OWN_SIGN_OFF = re.compile(r"\s*(?:—|--?)\s*kimeru\s*$")
 SEND_READY = ("teams.reply", "teams.post")
 FIELD = {"teams.reply": "text", "teams.post": "text", "ado.comment": "text"}
 
@@ -81,7 +83,11 @@ def _clean(text):
 
 def comment_text(action):
     text = str(action.get("text", ""))
-    return text + (SIGNATURE if signature_on() else "")
+    if not signature_on():
+        return text
+    if action.get("drafted_by"):
+        return text + SIGNATURE
+    return _OWN_SIGN_OFF.sub("", text) + SIGNATURE_FIXED   # a fixed sentence signs itself: one signature line, not two
 
 
 def current_target():

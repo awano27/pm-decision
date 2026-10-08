@@ -211,6 +211,28 @@ class PowerShellBridge:
         return self._run("-Action", "readchat", "-ChatId", chat_id, "-Count", str(count), *(["-Preview", preview] if preview else []))
 
 
+def ado_lines(rec):
+    """Which work item an ADO post or notice is about: id, type, title, creator and a link to it (the link only when the
+    record says where the item was pulled from). Nothing for any other kind of event."""
+    if not str(rec.get("event_kind") or "").startswith("ado."):
+        return []
+    from urllib.parse import quote
+    from . import execute, graph
+    ev = rec.get("event") or {}
+    head = f"対象: #{rec.get('event_id')}"
+    if ev.get("type"):
+        head += f" [{ev['type']}]"
+    if ev.get("title"):
+        head += " " + graph.one_line(str(ev["title"]))
+    lines = [head]
+    if ev.get("created_by"):
+        lines.append(f"起票者: {ev['created_by']}")
+    org, project = execute.origin_of(rec)
+    if org and project and rec.get("event_id"):
+        lines.append(f"リンク: https://dev.azure.com/{quote(org, safe='')}/{quote(project, safe='')}/_workitems/edit/{quote(str(rec['event_id']), safe='')}")
+    return lines
+
+
 def format_post(n, rec, full=None):
     """`full` is the full text kept while the item waits (fulltext.load): the post then shows it and the earlier messages."""
     from . import execute
@@ -236,7 +258,7 @@ def format_post(n, rec, full=None):
              f"判断: {advice}", "次の一手: " + (next_action or no_memo),
              "不足情報: " + (" / ".join(str(v) for v in missing) if missing else ("メモに記載なし" if memo else no_memo)),
              "OK の効果: " + ("; ".join(dict.fromkeys(effects)) if effects else "記録のみ"),
-             f"{ev} #{rec.get('event_id')}"]
+             f"{ev} #{rec.get('event_id')}"] + ado_lines(rec)
     rf = rec.get("read_full") or {}
     if rf.get("state") == "preview_only":
         lines.append("⚠ プレビューだけで判断しました（" + str(rf.get("why", ""))[:100] + "）。元のメッセージを Teams で確認してください")
@@ -286,6 +308,9 @@ def format_post(n, rec, full=None):
             lines.append(f"⚠ {writer_mod.writer_label(rec)} の{writer_mod.LABEL.get(a['type'], a['type'])}は使えないため定型文です（{a['writer_warning']}）")
     for a in waiting[:1]:
         lines.append("定型文: " + str(a.get(writer_mod.FIELD[a["type"]]) or ""))
+    for a in rec.get("actions", []):   # a fixed comment of the graph: no writer drafted it, and it is not written (OK records only)
+        if a.get("type") == "ado.comment" and not a.get("drafted_by") and not a.get("held_for") and not a.get("exec_text")                 and not a.get("exec_skip") and a.get("text"):
+            lines.append("コメント案（定型文）: " + str(a["text"]))
     if rec.get("copilot_request"):
         lines.append(f"↓ 次の投稿を Microsoft 365 Copilot に貼ってください。返ってきた 1 件目の文面は、改行を入れずに 1 行で「下書き {n} 〈文面〉」と返信すると、この投稿に取り込みます")
     tasks = [a for a in drafts if a["type"] == "ado.create"]
@@ -764,6 +789,7 @@ def format_notice(rec):
     lines = [f"[kimeru 通知] 自動で決定しました（{rec.get('graph')}）"]
     if rec.get("summary"):
         lines.append(f"元: {str(rec['summary'])[:200]}")
+    lines.extend(ado_lines(rec))
     if rec.get("advice"):
         lines.append(f"内容: {rec['advice']}")
     ran = [e["action"].get("type", "?") for e in rec.get("executed", [])]
@@ -771,6 +797,8 @@ def format_notice(rec):
         lines.append("記録した行動: " + ", ".join(ran) + "（現在は記録のみ）")
     if rec.get("needs_human"):   # the same item also waits in its own numbered post (a draft to approve)
         lines.append("文面の下書きは、番号付きの投稿で承認を待っています")
+    elif str(rec.get("event_kind") or "").startswith("ado.") and rec.get("advice"):
+        lines.append("判断は ADO 側で進めてください。この通知に返信しても何も起きません")   # the advice asks for a decision
     else:
         lines.append("返信は不要です")
     return "\n".join(lines)

@@ -479,7 +479,7 @@ class TestApprovalsBeforeExecutionWasSwitchedOn(Safety):
         again = bridge.posts[-1]
         self.assertIn("そのまま書きます", again)
         self.assertIn("contoso-not-real", again)                       # the target is in the post
-        self.assertIn(execute.SIGNATURE.strip(), again)                # and the signature line
+        self.assertIn(execute.SIGNATURE_FIXED.strip(), again)                # and the signature line
         bridge.replies.clear()
         self.cycle(bridge, reply="OK 1")                               # answered again
         self.assertEqual(len(self.posts_of("POST")), 1)
@@ -496,7 +496,7 @@ class TestTheTextIsFixedWhenPosted(Safety):
             self.cycle(bridge, reply="OK 1")
         body = self.posts_of("POST")[0][3]["text"]
         self.assertIn(body, shown)                                     # exactly what the post showed
-        self.assertTrue(body.endswith(execute.SIGNATURE))              # the signature line stayed
+        self.assertTrue(body.endswith(execute.SIGNATURE_FIXED))              # the signature line stayed
 
     def test_the_text_is_saved_with_the_post(self):
         self.enable()

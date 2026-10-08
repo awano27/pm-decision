@@ -30,6 +30,8 @@
     },
     "request_info": {
       "kind": "decide",
+      "queue": true,
+      "advice": "情報が足りない起票 #{event.id}: 追記を依頼するコメントを書いてよいか",
       "actions": [
         {
           "type": "ado.comment",

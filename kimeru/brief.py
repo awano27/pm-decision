@@ -177,6 +177,56 @@ def not_put_back(out, now=None, days=1):
     return sum(1 for _, rf in _opened_rows(out, now, days) if rf.get("returned") is False)
 
 
+ADO_LIST_MAX = 5   # work items named in the brief; the rest are counted
+
+
+def _ado_outcome(rec):
+    """"P2" for a decision that set priority 2, else the node's name."""
+    for a in rec.get("actions") or []:
+        n = (a.get("fields") or {}).get("Microsoft.VSTS.Common.Priority")
+        if n:
+            return f"P{n}"
+    return str(rec.get("node") or "?")
+
+
+def ado_auto(out, now=None, days=1):
+    """Work items the graph decided by itself in the last `days` day(s), with nothing for the PM to answer (no confirmation, no
+    notice): [{id, type, title, outcome}], one per work item (the latest judgment), newest first. A decision that waits in a
+    numbered post, or was notified, is shown there and not here."""
+    now = now or datetime.now(timezone.utc)
+    since = now - timedelta(days=days)
+    seen, found = set(), []
+    for rec in reversed(_rows(Path(out) / "decisions.jsonl")):
+        if rec.get("event_kind") != "ado.workitem.created" or rec.get("outcome") != "decide":
+            continue
+        if rec.get("needs_human") or rec.get("notify") or not rec.get("at") or datetime.fromisoformat(rec["at"]) < since:
+            continue
+        if rec.get("event_id") in seen:
+            continue
+        seen.add(rec.get("event_id"))
+        ev = rec.get("event") or {}
+        found.append({"id": rec.get("event_id"), "type": ev.get("type"), "title": ev.get("title"), "outcome": _ado_outcome(rec)})
+    return found
+
+
+def ado_section(out, now=None, days=1):
+    """The brief's lines for `ado_auto`: counts per outcome, a few "#id [type] title → P2" lines, then "ほか N 件". "" when none."""
+    rows = ado_auto(out, now=now, days=days)
+    if not rows:
+        return ""
+    from . import graph
+    counts = {}
+    for r in rows:
+        counts[r["outcome"]] = counts.get(r["outcome"], 0) + 1
+    lines = [f"ADO の自動判断（直近 24 時間）: {len(rows)} 件（" + " / ".join(f"{k} {v} 件" for k, v in sorted(counts.items())) + "）"]
+    for r in rows[:ADO_LIST_MAX]:
+        lines.append(f"・#{r['id']}" + (f" [{r['type']}]" if r.get("type") else "")
+                     + (" " + graph.one_line(str(r["title"])) if r.get("title") else "") + f" → {r['outcome']}")
+    if len(rows) > ADO_LIST_MAX:
+        lines.append(f"ほか {len(rows) - ADO_LIST_MAX} 件")
+    return "\n".join(lines)
+
+
 def build(out, backend, top=3, now=None, date=None):
     """now: aware datetime for the collection window; date: "YYYY-MM-DD" shown in the header."""
     items = collect(out, now=now)
@@ -194,6 +244,9 @@ def build(out, backend, top=3, now=None, date=None):
     lost = not_put_back(out, now=now)
     if lost:
         text += f"\n⚠ 開いたチャットを元へ戻せなかった件が {lost} 件あります。Teams で開いているチャットを確認してください"
+    ado = ado_section(out, now=now)
+    if ado:
+        text += "\n" + ado
     # Progress is a local, explicit fact (or Unknown for legacy approvals). It is
     # appended separately and does not create another model/ranking call.
     if unfinished:

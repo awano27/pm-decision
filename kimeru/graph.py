@@ -17,7 +17,8 @@ Node kinds
   plan    {"playbooks": "*" | [ids], "routes": {"ok", "none", "unsure"}}   (see plan.py)
             picks a playbook and orders its steps; the result is available to
             later nodes as {plan.title} {plan.summary} {plan.first}
-  decide  {"actions": [...], "advice": "optional note to PM"}   -> auto-executed (dry-run in MVP)
+  decide  {"actions": [...], "advice": "optional note to PM", "queue": true|false}   -> auto-executed (dry-run in MVP);
+            queue=true also waits for the PM in a numbered post (an information request to the author, for one)
   advise  {"advice": "...", "queue": true|false}                  -> PM reads; queue=true needs a human
           terminals may add "per_step": [action templates] rendered once per plan step
           with {step.title} {step.due} {step.id}
@@ -347,10 +348,11 @@ def run(g, event, backend, state=None, playbooks=None, batch=None):
             out = {"outcome": n["kind"], "node": nid,
                    "advice": render(n.get("advice"), ctx),
                    "actions": acts,
-                   "needs_human": n["kind"] == "advise" and n.get("queue", False),
+                   "needs_human": n["kind"] in ("advise", "decide") and bool(n.get("queue", False)),
                    "notify": n["kind"] == "decide" and bool(n.get("notify"))}
             severe = severe_hit(g, nid, event)
-            if severe and not (out["notify"] or out["needs_human"]):
+            reached = out["notify"] if n["kind"] == "decide" else out["needs_human"]   # a queued decide still needs its notice
+            if severe and not reached:
                 out["severe_guard"] = severe
                 out["notify" if n["kind"] == "decide" else "needs_human"] = True
             if plan:

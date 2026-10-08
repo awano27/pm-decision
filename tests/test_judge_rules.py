@@ -3,6 +3,7 @@ try:   # isolation from the real state folder, whichever way the tests are start
 except ImportError:
     import isolate  # noqa: F401
 
+import json
 import unittest
 from pathlib import Path
 
@@ -238,6 +239,20 @@ class TestLongFieldsAreCut(unittest.TestCase):
         self.assertLessEqual(len(events.state_of(ev)["description"]), 1200)
         self.assertEqual(events.state_of(ev)["acceptance_criteria"], "x")
 
+
+
+class TestRecoveryInAnotherSentence(unittest.TestCase):
+    """An outage report followed by a recovery note in another sentence goes to a person, not to paging."""
+    NODE = json.loads((ROOT / "graphs" / "teams_chat.json").read_text(encoding="utf-8"))["nodes"]["critical_incident"]
+
+    def test_recovery_anywhere_in_the_message_is_mixed(self):
+        for text in ("本番で決済が通りません。復旧しました。", "本番で決済が通りません。先ほど復旧しました",
+                     "Production is down. It is resolved now."):
+            self.assertEqual(graph.match_eval(self.NODE, {"text": text})[0], "mixed", text)
+
+    def test_without_a_recovery_it_stays_an_incident(self):
+        for text in ("本番で決済が通りません。誰か見られますか？", "Production is down. Let me know if you need anything."):
+            self.assertEqual(graph.match_eval(self.NODE, {"text": text})[0], "yes", text)
 
 if __name__ == "__main__":
     unittest.main()

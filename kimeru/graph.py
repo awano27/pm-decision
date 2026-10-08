@@ -119,8 +119,8 @@ def validate(g, playbooks=None):
                     raise GraphError(f"{nid}: route to unknown node {t}")
         elif k == "match":
             r = n.get("routes") or {}
-            if set(r) != ({"yes", "no", "mixed"} if n.get("mixed_if") else {"yes", "no"}):
-                raise GraphError(f"{nid}: match needs yes/no routes (plus mixed when mixed_if is set)")
+            if set(r) != ({"yes", "no", "mixed"} if n.get("mixed_if") or n.get("mixed_field") else {"yes", "no"}):
+                raise GraphError(f"{nid}: match needs yes/no routes (plus mixed when mixed_if or mixed_field is set)")
             if not n.get("fields") or not n.get("patterns"):
                 raise GraphError(f"{nid}: match needs fields and patterns")
             if "exclude_scope" in n and n["exclude_scope"] not in ("field", "sentence"):
@@ -128,11 +128,11 @@ def validate(g, playbooks=None):
             when = n.get("when", {})
             if not isinstance(when, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in when.items()):
                 raise GraphError(f"{nid}: when must map a field name to a pattern")
-            for key in ("fields", "patterns", "exclude", "exclude_sentence", "mixed_if"):
+            for key in ("fields", "patterns", "exclude", "exclude_sentence", "mixed_if", "mixed_field"):
                 values = n.get(key, [])
                 if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
                     raise GraphError(f"{nid}: {key} must be a list of strings")
-            for pat in n["patterns"] + n.get("exclude", []) + n.get("exclude_sentence", []) + n.get("mixed_if", []) + list(when.values()):
+            for pat in n["patterns"] + n.get("exclude", []) + n.get("exclude_sentence", []) + n.get("mixed_if", []) + n.get("mixed_field", []) + list(when.values()):
                 try:
                     re.compile(pat)
                 except re.error as e:
@@ -217,7 +217,9 @@ def match_eval(node, event):
     (an improvement request, a FAQ, a postmortem that merely names a failure); such a veto
     routes "no" (the model decides), never "mixed". With "exclude_scope": "sentence" the
     patterns, "exclude" and "mixed_if" are all evaluated one sentence at a time, and a
-    sentence keeps its closing ? so a question can be excluded. "when" ({field: pattern}) makes the
+    sentence keeps its closing ? so a question can be excluded. "mixed_field" patterns are checked on
+    the whole field once a hit stands: a recovery note in another sentence (本番で決済が通りません。復旧しました)
+    routes "mixed" so a person looks, instead of paging for an outage that is already over. "when" ({field: pattern}) makes the
     node apply only to events whose fields match; any other event is "no"."""
     import unicodedata
     for f, pat in (node.get("when") or {}).items():   # eligibility: every listed field must match, else "no" (Epic/Task are not critical bugs)
@@ -246,6 +248,8 @@ def match_eval(node, event):
                     if any(re.search(x, candidate[lo:hi], re.IGNORECASE) for x in sent_ex):
                         continue
                 if not vetoed:
+                    if any(re.search(x, text, re.IGNORECASE) for x in node.get("mixed_field", [])):
+                        return "mixed", hit
                     return "yes", hit
                 if any(re.search(x, candidate, re.IGNORECASE) for x in node.get("mixed_if", [])):
                     mixed = mixed or hit

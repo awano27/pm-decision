@@ -211,6 +211,7 @@ python -m kimeru config path
 正規表現で判定（NFKC 正規化・大文字小文字無視）。`exclude` は同じ欄の一致だけを取り消し、同じ欄に `mixed_if` もあれば `mixed`（人へ）。
 
 - `"exclude_scope": "sentence"` を付けると、`patterns`・`exclude`・`mixed_if` を 1 文ずつ判定します（文は `.` `!` `?` `。` `！` `？` `;` `；` 改行で終わり、終わりの記号は文に残るので、疑問文を `[?？]` で除外できます）。別の文の質問・予定・「if」が、いま起きている障害の文を取り消しません。Teams の `critical_incident`、アラートの `critical_outage` が使います
+- `"mixed_field"` は、一致が残ったあとに欄全体で判定します。当たれば `mixed`（人へ）。Teams の `critical_incident` は、別の文の復旧の連絡（「…通りません。復旧しました。」）をこれで人に回します
 - `exclude_sentence` は、一致した文に当たったときだけその一致を取り消し、行き先は `no`（モデルに任せる）です。`mixed` にはなりません。ADO の `critical_bug` が、改善・設計・手順書・FAQ・振り返り・要望の文が故障の言葉を含むだけの起票を、P1 にしないために使います
 - `when`（`{欄: 正規表現}`）は、規則が当たる対象を絞ります。欄が合わない事象は `no` です。ADO の `critical_bug` は `when` で種別を見て、Bug / Issue / Incident / Defect など故障を表す種別、または種別が無い起票だけを対象にします。Epic・Feature・Task・Test Case・User Story などは規則では P1 にせず、準備の確認へ進みます
 - `critical_bug` は、題名・説明・再現手順・`Severity`（`Microsoft.VSTS.Common.Severity`。`pull ado` が取り込みます）を見ます。`1 - Critical` は規則で P1 です。動詞は「できない」「クラッシュする」のように言い切りの形に限り、英語は単語境界で判定します（「クラッシュレポート」「Crashlytics」「強制終了ボタン」は当たりません）。モデルに任せるのは、データ不整合、脆弱性の報告、範囲や「いま」が書かれていない「画面が真っ白」などです

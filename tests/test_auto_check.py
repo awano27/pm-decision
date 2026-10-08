@@ -4,6 +4,10 @@ try:   # isolation from the real state folder, whichever way the tests are start
     from . import isolate  # noqa: F401
 except ImportError:
     import isolate  # noqa: F401
+try:
+    from . import hidden_words
+except ImportError:
+    import hidden_words
 
 import re
 import subprocess
@@ -65,9 +69,6 @@ class TestAutoMode(unittest.TestCase):
 
 
 class TestNoEnvironmentDetails(unittest.TestCase):
-    WORDS = ("会社 PC", "会社PC", "開発部", "26225", "別テナントの組織", "社内ルール", "社内ポリシー", "非公開の流入データ",
-             "会議チャット 2 件", "事故", "リモートデスクトップ", "管理者同意は要りません", "テナント管理者の同意", "個人 PC で確認済み",
-             "条件付きアクセス", "別のテナントにある場合", "作者の 2 台", "特定の職場")
 
     def test_public_documents_do_not_name_the_tested_environment(self):
         try:
@@ -81,9 +82,7 @@ class TestNoEnvironmentDetails(unittest.TestCase):
             if not p.is_file():
                 continue
             text = p.read_text(encoding="utf-8-sig", errors="replace")
-            for w in self.WORDS:
-                if w in text:
-                    bad.append(f"{f}: {w}")
+            bad += [f"{f}: {d}" for d in hidden_words.found(text)]
         self.assertEqual(bad, [])
 
 

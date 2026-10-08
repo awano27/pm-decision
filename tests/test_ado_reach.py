@@ -4,6 +4,10 @@ try:   # isolation from the real state folder, whichever way the tests are start
     from . import isolate  # noqa: F401
 except ImportError:
     import isolate  # noqa: F401
+try:
+    from . import hidden_words
+except ImportError:
+    import hidden_words
 
 import json
 import tempfile
@@ -16,8 +20,6 @@ from kimeru.backends import ReplayBackend, StubBackend
 
 ROOT = Path(__file__).resolve().parent.parent
 G = {"ado.workitem.created": [graph.load(ROOT / "graphs/ado_workitem.json")]}
-BANNED = ("会社 PC", "会社PC", "開発部", "26225", "事故", "リモートデスクトップ", "社内ルール", "社内ポリシー",
-          "条件付きアクセス", "特定の職場")
 
 
 def workitem(id_, typ="Bug", title="t", ac="", prio=2, by="山田 太郎", origin=("contoso-not-real", "Proj A")):
@@ -85,7 +87,7 @@ class TestInfoRequestIsQueued(Base):
             self.assertIn(needle, post)
         self.assertIn("記録のみ", post)                              # OK N writes nothing unless ado.comment is switched on
         self.assertNotIn("判断の詳細は以下を確認してください", post)
-        self.assertFalse([b for b in BANNED if b in post])
+        self.assertEqual(hidden_words.found(post), [])
 
     def test_no_link_without_an_origin(self):
         self.run_one(workitem(502, "Task", "出所なし", origin=None), answers(ready=0.1))
@@ -137,7 +139,7 @@ class TestAutomaticDecisionsInTheBrief(Base):
         self.assertEqual(sum(1 for l in text.splitlines() if l.startswith("・#")), 5)
         self.assertIn("ほか 3 件", text)
         self.assertRegex(text, r"#6\d\d \[(Bug|Task)\] .+ → P[23]")
-        self.assertFalse([b for b in BANNED if b in text])
+        self.assertEqual(hidden_words.found(text), [])
 
     def test_items_waiting_for_the_pm_are_not_listed_twice(self):
         self.run_one(workitem(630, "Task", "情報なし"), answers(ready=0.1))
@@ -166,7 +168,7 @@ class TestNotice(Base):
             self.assertIn(needle, text)
         self.assertIn("判断", text)
         self.assertNotIn("返信は不要です", text)                     # the advice asks for a decision
-        self.assertFalse([b for b in BANNED if b in text])
+        self.assertEqual(hidden_words.found(text), [])
 
     def test_the_teams_notice_is_unchanged(self):
         rec = {"graph": "g", "event_kind": "teams.chat", "event_id": "1", "summary": "a: b", "advice": "x", "executed": []}

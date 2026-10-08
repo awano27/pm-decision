@@ -302,7 +302,7 @@ class TestJudgeSees(unittest.TestCase):
 
     def test_work_item(self):
         ev = events.normalize({"eventType": "workitem.created", "resource": WI})[0]
-        self.assertEqual(set(events.state_of(ev)), {"kind", "source", "id", "ts", "type", "title", "area", "created_by", "priority",
+        self.assertEqual(set(events.state_of(ev)), {"kind", "source", "id", "ts", "type", "title", "area", "created_by", "priority", "severity",
                                                     "description", "repro_steps", "acceptance_criteria"})
         self.assertEqual(ev["description"], "別途記録する説明: 現行画面では対象期間を選べない")
         self.assertEqual(ev["repro_steps"], "再現: ログイン → 500")

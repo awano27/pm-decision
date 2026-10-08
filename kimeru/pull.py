@@ -30,7 +30,7 @@ ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"   # Azure DevOps
 ARM_RESOURCE = "https://management.azure.com/"
 ADO_FIELDS = ["System.Id", "System.WorkItemType", "System.Title", "System.AreaPath", "System.CreatedBy",
               "System.CreatedDate", "System.Description", "Microsoft.VSTS.TCM.ReproSteps",
-              "Microsoft.VSTS.Common.AcceptanceCriteria", "Microsoft.VSTS.Common.Priority"]
+              "Microsoft.VSTS.Common.AcceptanceCriteria", "Microsoft.VSTS.Common.Priority", "Microsoft.VSTS.Common.Severity"]
 
 
 AZ_FALLBACKS = (str(Path(__file__).resolve().parents[2] / "az" / "bin" / "az.cmd"),   # one-folder layout: az next to kimeru

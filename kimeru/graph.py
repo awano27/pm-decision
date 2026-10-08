@@ -125,11 +125,14 @@ def validate(g, playbooks=None):
                 raise GraphError(f"{nid}: match needs fields and patterns")
             if "exclude_scope" in n and n["exclude_scope"] not in ("field", "sentence"):
                 raise GraphError(f"{nid}: exclude_scope must be 'field' or 'sentence'")
-            for key in ("fields", "patterns", "exclude", "mixed_if"):
+            when = n.get("when", {})
+            if not isinstance(when, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in when.items()):
+                raise GraphError(f"{nid}: when must map a field name to a pattern")
+            for key in ("fields", "patterns", "exclude", "exclude_sentence", "mixed_if"):
                 values = n.get(key, [])
                 if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
                     raise GraphError(f"{nid}: {key} must be a list of strings")
-            for pat in n["patterns"] + n.get("exclude", []) + n.get("mixed_if", []):
+            for pat in n["patterns"] + n.get("exclude", []) + n.get("exclude_sentence", []) + n.get("mixed_if", []) + list(when.values()):
                 try:
                     re.compile(pat)
                 except re.error as e:
@@ -198,28 +201,55 @@ def _split_non_adjacent(probs, at):
     return len(heavy) >= 2 and heavy[-1] - heavy[0] > 1
 
 
+def _sentence_bounds(text, start, end):
+    """The sentence(s) of `text` that a match at [start, end) lies in, as (from, to). A sentence ends at . ! ? 。 ！ ？ ; ； or a line break."""
+    left = max((m.end() for m in re.finditer(r"[.!?。！？；;\r\n]", text[:start])), default=0)
+    m = re.search(r"[.!?。！？；;\r\n]", text[end:])
+    return left, (len(text) if not m else end + m.end())
+
+
 def match_eval(node, event):
     """("yes" | "mixed" | "no", pattern). Optional "exclude" patterns veto a hit only in the
     same field (a crash reported only in a test environment); a test-environment note in
     another field does not cancel a production report. A vetoed hit whose field also
-    matches "mixed_if" (e.g. 本番) routes "mixed" so a person looks at it."""
+    matches "mixed_if" (e.g. 本番) routes "mixed" so a person looks at it.
+    "exclude_sentence" patterns veto a hit only when they match the sentence the hit is in
+    (an improvement request, a FAQ, a postmortem that merely names a failure); such a veto
+    routes "no" (the model decides), never "mixed". With "exclude_scope": "sentence" the
+    patterns, "exclude" and "mixed_if" are all evaluated one sentence at a time, and a
+    sentence keeps its closing ? so a question can be excluded. "when" ({field: pattern}) makes the
+    node apply only to events whose fields match; any other event is "no"."""
     import unicodedata
+    for f, pat in (node.get("when") or {}).items():   # eligibility: every listed field must match, else "no" (Epic/Task are not critical bugs)
+        if not re.search(pat, unicodedata.normalize("NFKC", str(event.get(f) or "")), re.IGNORECASE):
+            return "no", None
     mixed = None
+    sent_ex = node.get("exclude_sentence", [])
     for f in node["fields"]:
         text = unicodedata.normalize("NFKC", str(event.get(f) or ""))
         # Exclusions traditionally apply to the whole field. Some safety nets
         # need narrower scope so an unrelated future/healthy sentence cannot
         # veto a separate current-outage sentence.
-        candidates = (re.split(r"[.!?。！？；;\r\n]+", text)
+        candidates = (re.split(r"(?<=[.!?。！？；;\r\n])", text)
                       if node.get("exclude_scope", "field") == "sentence" else [text])
         for candidate in candidates:
-            hit = next((p for p in node["patterns"] if re.search(p, candidate, re.IGNORECASE)), None)
-            if not hit:
+            if sent_ex:
+                hits = [(p, m.start(), m.end()) for p in node["patterns"] for m in re.finditer(p, candidate, re.IGNORECASE)]
+            else:
+                hits = [(p, 0, 0) for p in node["patterns"] if re.search(p, candidate, re.IGNORECASE)][:1]
+            if not hits:
                 continue
-            if not any(re.search(x, candidate, re.IGNORECASE) for x in node.get("exclude", [])):
-                return "yes", hit
-            if any(re.search(x, candidate, re.IGNORECASE) for x in node.get("mixed_if", [])):
-                mixed = mixed or hit
+            vetoed = any(re.search(x, candidate, re.IGNORECASE) for x in node.get("exclude", []))
+            for hit, start, end in hits:
+                if sent_ex and not vetoed:
+                    lo, hi = _sentence_bounds(candidate, start, end)
+                    if any(re.search(x, candidate[lo:hi], re.IGNORECASE) for x in sent_ex):
+                        continue
+                if not vetoed:
+                    return "yes", hit
+                if any(re.search(x, candidate, re.IGNORECASE) for x in node.get("mixed_if", [])):
+                    mixed = mixed or hit
+                break
     return ("mixed", mixed) if mixed else ("no", None)
 
 

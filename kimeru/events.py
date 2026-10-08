@@ -12,9 +12,63 @@ from datetime import datetime
 KINDS = ("teams.chat", "monitor.alert", "ado.workitem.created", "meeting.item")
 
 
+_BLOCK_END = re.compile(r"<br\s*/?>|</(?:p|div|li|tr|ul|ol|table|blockquote|pre|h[1-6])\s*>", re.I)
+_INVISIBLE = dict.fromkeys(map(ord, "​‌‍⁠﻿­"))
+
+
+def _number_items(m):
+    n = 0
+
+    def number(_):
+        nonlocal n
+        n += 1
+        return f"{n}. "
+    return re.sub(r"<li\b[^>]*>", number, m.group(1), flags=re.I)
+
+
 def _strip_html(s):
-    s = re.sub(r"<br\s*/?>|</p>", "\n", s or "", flags=re.I)
-    return html.unescape(re.sub(r"<[^>]+>", "", s)).strip()
+    """HTML (a Teams message, an Azure DevOps rich-text field) -> plain text, one line per block: block ends become
+    line breaks, <style>/<script>/comments (Word paste) are dropped, entities are unescaped, zero-width
+    characters and non-breaking spaces are removed."""
+    s = re.sub(r"<!--.*?-->", "", s or "", flags=re.S)
+    s = re.sub(r"<(style|script)\b[^>]*>.*?</\1\s*>", "", s, flags=re.S | re.I)
+    s = re.sub(r"<ol\b[^>]*>(.*?)</ol\s*>", _number_items, s, flags=re.S | re.I)   # an ordered list keeps its numbers
+    s = _BLOCK_END.sub("\n", s)
+    s = re.sub(r"</t[dh]\s*>", " ", s, flags=re.I)
+    s = html.unescape(re.sub(r"<[^>]+>", "", s))
+    s = s.translate(_INVISIBLE).replace(" ", " ")
+    lines = [ln.strip() for ln in s.splitlines()]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
+# Headings of a work-item template ("再現手順:", "Expected:", "Given:" ...). A heading with nothing under it is not content.
+_HEADING = re.compile(
+    r"^(?:[-*・•]\s*)?(?:再現手順|再現方法|再現条件|再現ステップ|期待結果|期待される結果|期待する結果|期待動作|期待される動作|期待値|"
+    r"実際の結果|実際の動作|実際|実結果|受け入れ条件|受入条件|受入基準|受け入れ基準|前提条件|前提|手順|条件|"
+    r"given|when|then|and|steps? to reproduce|repro(?:duction)? steps|steps|expected(?: result| behaviou?r)?|"
+    r"actual(?: result| behaviou?r)?|acceptance criteria)\s*[:：]?$", re.I)
+_EMPTY_ITEM = re.compile(r"^(?:[-*・•]|\d+[.)．])?\s*$")
+
+
+def _drop_template(text):
+    """Remove the empty scaffold of a work-item template. A heading with a non-heading line under it is kept and
+    joined to it ("期待結果: ログインできる"); a heading with nothing under it, and empty list items, are dropped,
+    so an unfilled template counts as empty."""
+    lines = [ln for ln in (text or "").splitlines() if ln.strip() and not _EMPTY_ITEM.match(ln.strip())]
+    out, i = [], 0
+    while i < len(lines):
+        ln = lines[i].strip()
+        if _HEADING.match(ln):
+            nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
+            if nxt and not _HEADING.match(nxt):
+                out.append(ln.rstrip(":：").strip() + ": " + nxt)
+                i += 2
+                continue
+            i += 1
+            continue
+        out.append(ln)
+        i += 1
+    return "\n".join(out)
 
 
 def _id(*parts):
@@ -66,9 +120,10 @@ def ado_workitem_created(p):
         "area": f.get("System.AreaPath"),
         "created_by": (f.get("System.CreatedBy") or {}).get("displayName") if isinstance(f.get("System.CreatedBy"), dict) else f.get("System.CreatedBy"),
         "priority": f.get("Microsoft.VSTS.Common.Priority"),
-        "description": _strip_html(f.get("System.Description") or ""),
-        "repro_steps": _strip_html(f.get("Microsoft.VSTS.TCM.ReproSteps") or ""),
-        "acceptance_criteria": _strip_html(f.get("Microsoft.VSTS.Common.AcceptanceCriteria") or ""),
+        "severity": f.get("Microsoft.VSTS.Common.Severity"),
+        "description": _drop_template(_strip_html(f.get("System.Description") or "")),
+        "repro_steps": _drop_template(_strip_html(f.get("Microsoft.VSTS.TCM.ReproSteps") or "")),
+        "acceptance_criteria": _drop_template(_strip_html(f.get("Microsoft.VSTS.Common.AcceptanceCriteria") or "")),
         # where `pull ado` took it from ({"org", "project"}); a service-hook payload has none: nothing is written back to it
         "origin": p.get("kimeru_origin") if isinstance(p.get("kimeru_origin"), dict) else None,
     }]
@@ -179,6 +234,7 @@ def state_of(event):
     except ValueError:
         cap = 1200
     s = {k: v for k, v in event.items() if k not in JUDGE_HIDDEN}
-    if isinstance(s.get("text"), str) and len(s["text"]) > cap:
-        s["text"] = s["text"][:cap]
+    for k in ("text", "description", "repro_steps", "acceptance_criteria"):   # the long ADO fields are cut like a chat text
+        if isinstance(s.get(k), str) and len(s[k]) > cap:
+            s[k] = s[k][:cap]
     return s

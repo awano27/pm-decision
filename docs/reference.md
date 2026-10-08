@@ -210,6 +210,13 @@ python -m kimeru config path
 
 正規表現で判定（NFKC 正規化・大文字小文字無視）。`exclude` は同じ欄の一致だけを取り消し、同じ欄に `mixed_if` もあれば `mixed`（人へ）。
 
+- `"exclude_scope": "sentence"` を付けると、`patterns`・`exclude`・`mixed_if` を 1 文ずつ判定します（文は `.` `!` `?` `。` `！` `？` `;` `；` 改行で終わり、終わりの記号は文に残るので、疑問文を `[?？]` で除外できます）。別の文の質問・予定・「if」が、いま起きている障害の文を取り消しません。Teams の `critical_incident`、アラートの `critical_outage` が使います
+- `exclude_sentence` は、一致した文に当たったときだけその一致を取り消し、行き先は `no`（モデルに任せる）です。`mixed` にはなりません。ADO の `critical_bug` が、改善・設計・手順書・FAQ・振り返り・要望の文が故障の言葉を含むだけの起票を、P1 にしないために使います
+- `when`（`{欄: 正規表現}`）は、規則が当たる対象を絞ります。欄が合わない事象は `no` です。ADO の `critical_bug` は `when` で種別を見て、Bug / Issue / Incident / Defect など故障を表す種別、または種別が無い起票だけを対象にします。Epic・Feature・Task・Test Case・User Story などは規則では P1 にせず、準備の確認へ進みます
+- `critical_bug` は、題名・説明・再現手順・`Severity`（`Microsoft.VSTS.Common.Severity`。`pull ado` が取り込みます）を見ます。`1 - Critical` は規則で P1 です。動詞は「できない」「クラッシュする」のように言い切りの形に限り、英語は単語境界で判定します（「クラッシュレポート」「Crashlytics」「強制終了ボタン」は当たりません）。モデルに任せるのは、データ不整合、脆弱性の報告、範囲や「いま」が書かれていない「画面が真っ白」などです
+- 準備の確認（`has_ac` / `has_repro`）の前に、ADO の HTML を整えます。`</div>` `</p>` `</li>` `<br>` は改行、`<ol>` は番号付き、`<style>` `<script>` コメント（Word の貼り付け）は捨て、実体参照を戻し、ゼロ幅の文字を取ります。そのうえで、見出しだけの行（再現手順: 期待結果: 実際の結果: 受け入れ条件: Given / When / Then 前提条件: 手順: Steps to reproduce: Expected: Actual: Acceptance criteria:）と空の箇条書きを消すので、書かれていないテンプレートは空として扱われます。見出しの下に中身があれば「期待結果: 中身」の形で残ります。`has_repro` は、「再現手順: …」、番号付きの手順（1. と 2.）、「期待結果: …」、期待と実際の対だけを準備ができているとみなし、「再現性は不明」「期待しています」だけでは当たりません
+- 判断モデルへ渡す ADO の説明・再現手順・受け入れ条件も `judge_text_max` で切ります（規則と writer は全文を見ます）
+
 ### plan ノード
 
 `playbooks/*.json` の型を選び、手順ごとの要否・最初の一手・期限（今日 / 今週 / 次スプリント以降）を 1 回のバッチで聞く。終端の `per_step` で手順ごとのアクションを作れる。

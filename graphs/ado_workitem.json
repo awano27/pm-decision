@@ -156,18 +156,39 @@
     },
     "critical_bug": {
       "kind": "match",
-      "_comment": "safety net: a work item that states customers/production are broken right now is P1 whatever the model scores Exclude vetoes only within the same field; test-env wording next to a production cue goes to a person (mixed).",
+      "_comment": "safety net: a work item that states customers/production are broken right now is P1 whatever the model scores, as is Severity '1 - Critical'. Verbs are anchored (できない/クラッシュする/...) and English words need a word boundary, so a noun like クラッシュレポート or Crashlytics does not hit. exclude_sentence: an improvement / design / docs / FAQ / postmortem / request sentence that merely names a failure is left to the model (no). exclude (field scope): test-env wording next to a production cue goes to a person (mixed). Left to the model on purpose: data inconsistency, security vulnerability reports, a bare '画面が真っ白' (no scope or no 'now'). \"when\": only a Bug / Issue / Incident-like item, or one with no type, is eligible; Epic, Feature, Task, Test Case, User Story ... are left to the readiness check and the model.",
       "fields": [
         "title",
         "description",
-        "repro_steps"
+        "repro_steps",
+        "severity"
       ],
+      "when": {
+        "type": "^\\s*$|bug|issue|incident|defect|problem|障害|不具合|バグ|欠陥|インシデント"
+      },
       "patterns": [
-        "(本番|全ユーザー|全顧客|多数の顧客|顧客から)[^。]{0,40}(できない|できません|不可|クラッシュ|落ちる|送られない|届かない|0 ?円|表示されない|エラー)",
-        "(ログイン|サインイン|決済|支払|購入)[^。]{0,10}(できない|できません|不可|通らない)",
-        "(crash(es|ed)?|cannot (log ?in|sign in|pay|check ?out)|all users|every user|outage)",
-        "(クラッシュ|強制終了|起動しない|起動できない)",
-        "(多数|大量|複数)の(顧客|ユーザー|お客様)から(の)?(問い合わせ|報告|苦情|クレーム)"
+        "^1 - critical$",
+        "(本番|全ユーザー|全顧客|全員|多数の顧客|顧客)[^。\\n]{0,40}(できない|できません|できなく|不可|クラッシュ(する|し|が)|落ち(る|て|た|ます)|送られない|届かない|0 ?円|表示されない|ログアウトされる|失敗(する|します|して|が多発|が続)|エラー(が(出|発生|多発|頻発|続)|になる|画面|を返)|タイムアウト(が|を)?(多発|頻発|続|急増|発生)|フリーズ(する|し)|つながらない|繋がらない|消え(た|て|る)|消失|二重|重複して(計上|請求))",
+        "(ログイン|サインイン|ログオン|決済|支払い?|購入|注文|チェックアウト)[^。\\n]{0,10}(できない|できません|できなく|不可|通らない|通りません|失敗(する|します|している|し続け|が多発|が続)|進まない|(確定|完了)(されない|できない|しない)|エラー画面)",
+        "(サイト|サービス|システム|API|本番)[^。\\n]{0,8}(が|は)(真っ白|ダウン|停止している|停止しました|落ちている|落ちた)",
+        "(API|サーバー?|サイト|本番)[^。\\n]{0,20}\\b50[0-4]\\b[^。\\n]{0,10}(返す|返し|エラー|多発)",
+        "\\b50[0-4]\\b[^。\\n]{0,15}(多発|頻発|急増|連発|続い)",
+        "(請求|課金|決済|引き落と|支払い?)[^。\\n]{0,10}(二重|重複|過大|誤)[^。\\n]{0,6}(計上|請求|課金|引き落と)",
+        "(個人情報|機密情報|顧客情報)[^。\\n]{0,20}(他人|他のユーザー|他の顧客|第三者|誰でも)[^。\\n]{0,10}(表示|見え|閲覧|公開|漏|流出)",
+        "(個人情報|顧客情報)[^。\\n]{0,10}(漏えい|漏洩|流出)(し|が|した|して)",
+        "(クラッシュ|強制終了)(する|します|した|して|し続け|が発生|が多発|が頻発|が続|を繰り返)",
+        "(アプリ|サービス|サーバー?|システム|画面)[^。\\n]{0,6}起動(しない|できない|しません|できません|しなく)",
+        "(多数|大量|複数)の(顧客|ユーザー|お客様)から(の)?(問い合わせ|報告|苦情|クレーム)",
+        "\\bcrash(es|ed|ing)?\\b",
+        "\\b(users?|customers?|everyone) (can['’]?t|cannot|can not|are unable to|unable to) (log ?in|sign ?in|pay|check ?out|access)",
+        "\\bcannot (log ?in|sign in|pay|check ?out)",
+        "\\b(production|prod|checkout|log ?in|payments?|the site|the service|the app|the api) (is|are|was|went) (down|broken|failing|unavailable|not working)",
+        "\\b(is|are) (broken|down|failing|not working) for (everyone|all|every|most)",
+        "\\b(all|every) (users?|customers?)\\b[^.\\n]{0,25}\\b(can['’]?t|cannot|unable|fail(s|ed|ing)?|errors?|broken|down|affected|impacted)\\b",
+        "\\b(affects?|impacts?|affecting|impacting) (all|every) (users?|customers?)",
+        "\\b5\\d\\d errors?\\b[^.\\n]{0,30}\\b(all|every)\\b",
+        "\\b(all|every) (requests?|api calls?)\\b[^.\\n]{0,30}\\b(fail|return|5\\d\\d|error)",
+        "\\b(production|prod|full|total|major|ongoing|active|current|site|service) outage\\b"
       ],
       "routes": {
         "yes": "set_p1_critical",
@@ -178,6 +199,13 @@
         "(テスト|検証|開発|ステージング)環境",
         "(test|staging|dev) (env|environment)",
         "ローカル(環境|で)"
+      ],
+      "exclude_sentence": [
+        "(追加|導入|更新|整備|作成|改善|実装|設計|見直し)(?!できな|でき(ませ)?ん|しても|に失敗|が失敗|されない|しない|できず)",
+        "手順書|マニュアル|ドキュメント|\\bFAQ\\b|ヘルプ|リンク|文言|案内文|ハンドリング|対策|レポート収集|ログ収集",
+        "振り返り|ポストモーテム|post-?mortem|retrospective|investigate why|last (quarter|month|year|week)|前四半期|先季",
+        "要望|リクエスト|したい|してほしい|ほしい|してください|feature request|\\bdocs?\\b|documentation|runbook|help ?link|\\bcrash (report|analytics|reporting|handler)|^\\s*(add|create|implement|update|improve|introduce|document|write|design|plan|investigate|research)\\b",
+        "場合|際(は|の|に)|[時とき]の(?!問題|不具合|障害)"
       ],
       "mixed_if": [
         "本番|全ユーザー|全顧客|多数の(顧客|ユーザー)|production|prod |all users|every user|customers?"
@@ -213,14 +241,17 @@
     },
     "has_repro": {
       "kind": "match",
-      "_comment": "explicit reproduction steps or expected result -> ready; anything else is asked to the model",
+      "_comment": "explicit reproduction steps or an expected result with content -> ready; a bare word (再現性は不明 / 期待しています) or an empty template is not (events.normalize already dropped heading-only lines); anything else is asked to the model",
       "fields": [
         "description",
         "repro_steps"
       ],
       "patterns": [
-        "再現|期待(する|される)?(結果|値|動作)?|実際(の結果)?[:：]",
-        "steps to reproduce|expected( result| behaviou?r)?|actual( result)?\\s*:"
+        "(再現(手順|方法|条件|ステップ)|steps? to reproduce|repro(duction)? steps)\\s*[:：]\\s*\\S",
+        "(?<![0-9])1[.)．]\\s*[^\\s0-9].*?(\\n|\\s)\\s*2[.)．]\\s*\\S",
+        "(期待(される|する)?(結果|動作|値)|expected( result| behaviou?r))\\s*[:：]\\s*\\S",
+        "(期待|expected)\\s*[:：]\\s*\\S[\\s\\S]*(実際(の結果|の動作)?|actual( result| behaviou?r)?)\\s*[:：]\\s*\\S",
+        "(実際(の結果|の動作)?|actual( result| behaviou?r)?)\\s*[:：]\\s*\\S[\\s\\S]*(期待|expected)\\s*[:：]\\s*\\S"
       ],
       "routes": {
         "yes": "priority",

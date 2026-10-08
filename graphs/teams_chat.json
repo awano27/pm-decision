@@ -5,10 +5,11 @@
   "nodes": {
     "critical_incident": {
       "kind": "match",
-      "_comment": "safety net: a chat that reports production or customers broken right now is an incident whatever the model answers. Questions, plans, tests and negations are left to the model (exclude); a recovery note goes to a person (mixed)",
+      "_comment": "safety net: a chat that reports production or customers broken right now is an incident whatever the model answers. Judged one sentence at a time (exclude_scope sentence): a question, plan, test or negation in the SAME sentence as the report goes to the model (exclude), but a follow-up in another sentence (誰か見られますか？ / 次の報告は30分後の予定 / Let me know if ...) does not cancel it; a recovery note goes to a person (mixed)",
       "fields": [
         "text"
       ],
+      "exclude_scope": "sentence",
       "patterns": [
         "(本番|全ユーザー|全顧客|多数の(顧客|ユーザー|お客様)|顧客)[^。？?]{0,30}(できなく(なって|なりました)|できません|できない状態|通らなく|通りません|落ちて(い|ま)|止まって(い|ま)|停止して(い|ま)|ダウンして|つながりません|繋がりません|つながらなく|繋がらなく|エラーが(出て|発生して)(い|ま))",
         "(本番|全ユーザー|全顧客|顧客|お客様|ユーザー)[^。？?]{0,30}(できない|通らない|つながらない|繋がらない|表示されない|届かない)(と|という|との)[^。？?]{0,15}(連絡|報告|問い合わせ|声|クレーム|苦情)",

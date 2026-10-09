@@ -12,6 +12,7 @@
   python -m kimeru pull teams [--inbox inbox]      # Teams chat list on screen: 1:1 + mentions
   python -m kimeru --backend kev daily [--once] [--send]   # the whole day's loop
   python -m kimeru --backend kev schedule install [--minutes 5]   # every N min, no admin
+  python -m kimeru diagnose [--write FILE] [--no-probe]   # unknown deliveries, judgment paths, cycle errors (numbers only)
 """
 import argparse
 import copy
@@ -637,10 +638,25 @@ def _main(argv=None):
     helps = {"onboarding": "first-week setup checklist (docs/trial-week.md)",
              "trial": "record and report the one-week trial (before/after minutes; docs/trial-week.md)",
              "requirements": "build / approve / status of a local requirements draft (docs/requirements.md)"}
-    for name in ("onboarding", "trial", "requirements"):
+    helps["diagnose"] = "one sheet on unknown deliveries, judgment paths and cycle errors (numbers only; sends nothing)"
+    for name in ("onboarding", "trial", "requirements", "diagnose"):
         passthrough = sub.add_parser(name, help=helps[name])
         passthrough.add_argument("args", nargs=argparse.REMAINDER)
+    diag_args = None   # `diagnose` takes its own options (argparse.REMAINDER does not take a first word that starts with --)
+    i = 0
+    while i < len(argv_list):   # the command is the first word that is not a global option or its value
+        if argv_list[i] in ("--graphs", "--playbooks", "--out", "--backend", "--model"):
+            i += 2
+            continue
+        if argv_list[i].startswith("-"):
+            i += 1
+            continue
+        if argv_list[i] == "diagnose":
+            argv_list, diag_args = argv_list[:i + 1], argv_list[i + 1:]
+        break
     a = ap.parse_args(argv_list)
+    if diag_args is not None:
+        a.args = diag_args
     if a.out is None:   # the demo gets a folder of its own, so it never meets the records of run / daily / schedule
         a.out = str(Path("out") / "demo") if a.cmd == "demo" else "out"
     out = Path(a.out)
@@ -650,7 +666,7 @@ def _main(argv=None):
             (out / _demo.MARK).unlink(missing_ok=True)
         except OSError:
             pass
-    exempt = (a.cmd in ("config", "delivery") or (a.cmd == "schedule" and a.action in ("remove", "status", "report"))
+    exempt = (a.cmd in ("config", "delivery", "diagnose") or (a.cmd == "schedule" and a.action in ("remove", "status", "report"))
               or (a.cmd == "demo" and a.replay))   # these must work when the file is broken or a value is wrong
     file_ok = exempt and not (a.cmd == "config" and a.action != "path")   # `config show/set/unset` need a readable file
     if broken is not None and not file_ok:
@@ -663,6 +679,10 @@ def _main(argv=None):
                 print(f"kimeru: {b}", file=sys.stderr)
             print("kimeru: fix it with `kimeru config set <setting> <value>` (or unset the environment variable)", file=sys.stderr)
             return 2
+
+    if a.cmd == "diagnose":
+        from . import diagnose
+        return diagnose.dispatch(a.args, Path(a.out))
 
     if a.cmd in ("onboarding", "trial", "requirements"):
         from . import onboarding, requirements, trial
@@ -1008,7 +1028,7 @@ def config_cmd(a):
 
 TASK = "kimeru-daily"
 # commands that never write records into --out (the demo manages its own mark)
-READ_ONLY = ("demo", "validate", "config", "report", "digest", "push", "--help")
+READ_ONLY = ("demo", "validate", "config", "report", "digest", "push", "diagnose", "--help")
 SCHEDULE_SENDS_NOTE = ("note: このタスクは自分とのチャットへ実際に投稿します（daily --once --send）。"
                        "貼り付けだけにしたいときは手動で daily --once を使ってください。"
                        "止めるときは python -m kimeru schedule remove")

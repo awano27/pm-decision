@@ -205,6 +205,10 @@ class PowerShellBridge:
     def chats(self):
         return self._run("-Action", "chats").get("chats", [])
 
+    def probe(self):
+        """Read only (`kimeru diagnose`): the self-chat messages as the send readback reads them. The texts stay in memory."""
+        return self._run("-Action", "probe")
+
     def readchat(self, chat_id, count=5, preview=None):
         """Open one chat, read its last messages (read only) and go back to the chat that was open. Slow (a few seconds).
         `preview`: the start of the chat's list preview; a layout that reports no selection is checked against it."""

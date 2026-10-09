@@ -25,6 +25,7 @@ python -m kimeru review | digest --week [--share] | calibrate   # 下の節を�
 python -m kimeru work list|set ... / delivery list|retry|confirm ...   # 下の「手動の進捗と曖昧な配信の確認」
 python -m kimeru onboarding ... / trial ... / requirements ...         # 1 週間の試し方（trial-week.md）と要件ドラフト（下の節）
 python -m kimeru config show|set|unset|path [--share]                  # 設定（下の「設定ファイル」）
+python -m kimeru diagnose [--write <ファイル>] [--no-probe] [--drive]   # 配信結果不明・判断の経路・サイクルの失敗を数だけで 1 枚に（run-diagnose.cmd。何も送らない）
 ```
 
 #### 手動の進捗と曖昧な配信の確認

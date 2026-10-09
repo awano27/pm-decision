@@ -16,6 +16,8 @@
   learn                -> while the self chat is open, remember your display name (read from the
                           window title) in %LOCALAPPDATA%\kimeru\self-name.txt so `open` can find
                           the self chat in lists whose items carry no "(自分)" marker. Local only.
+  probe                -> read only, for `kimeru diagnose`: the self-chat messages as the send readback reads them
+                          (Get-ChatMessages), with fragment counts and on-screen sizes. Python keeps numbers only.
   read                 -> JSON {posts:[...], replies:[...]} extracted from the self chat only:
                           posts   = ids N of "[kimeru #N]" posts (no other text)
                           replies = "OK 3" / "NG 3" / "保留 3" style lines
@@ -26,7 +28,7 @@
   Personal Teams shows "(あなた)"; work accounts may show "(自分)". Override with -SelfMarker.
 #>
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('status', 'open', 'post', 'send', 'read', 'diag', 'learn', 'chats', 'readchat', 'test-messages', 'test-compare', 'test-readback', 'test-container', 'test-failure', 'test-send-once')][string]$Action,
+  [Parameter(Mandatory = $true)][ValidateSet('status', 'open', 'post', 'send', 'read', 'diag', 'learn', 'chats', 'readchat', 'test-messages', 'test-compare', 'test-readback', 'test-container', 'test-failure', 'test-send-once', 'probe')][string]$Action,
   [string]$Text = '',
   [string]$ChatId = '',      # readchat: the chat to open (its id from `chats`)
   [int]$Count = 5,           # readchat: how many of the last messages to read
@@ -505,6 +507,11 @@ function Select-Chat($w, $id, $title) {
 }
 function Get-ChatMessages($w, $count) {
   # read only: the texts of the last messages in the pane to the right of the chat list (ids first, then names by position)
+  $got = Get-ChatMessageRows $w
+  [pscustomobject]@{ how = $got.how; messages = @(Collapse-MessageRows $got.rows $Count) }
+}
+function Get-ChatMessageRows($w) {
+  # read only: every UIA node of the message pane that Get-ChatMessages turns into messages (one message may have several)
   $wr = $w.Current.BoundingRectangle
   $listRight = 0
   foreach ($it in (Get-ChatItems $w)) { $r = $it.Current.BoundingRectangle; if ($r.Width -gt 0 -and $r.Right -gt $listRight -and $r.Right -lt ($wr.X + $wr.Width * 0.5)) { $listRight = $r.Right } }
@@ -515,13 +522,12 @@ function Get-ChatMessages($w, $count) {
     if ($r.Width -le 0 -or $r.Height -le 0 -or $r.X -lt ($listRight - 2)) { continue }
     $n = ([string]$e.Current.Name).Trim()
     if ($n.Length -lt 1) { continue }
-    if ([string]$e.Current.AutomationId -match '^(message-body|content-|body-)') { $byId += [pscustomobject]@{ y = $r.Y; text = $n; container_id = (Get-MessageContainerIdentity $e) } }
+    if ([string]$e.Current.AutomationId -match '^(message-body|content-|body-)') { $byId += [pscustomobject]@{ y = $r.Y; h = $r.Height; text = $n; container_id = (Get-MessageContainerIdentity $e) } }
     elseif ($n.Length -ge 4 -and $r.Y -gt ($wr.Y + $wr.Height * 0.12) -and $r.Y -lt ($wr.Y + $wr.Height * 0.88) -and
-            $e.Current.ControlType -in @($CT::ListItem, $CT::Group, $CT::Text)) { $byName += [pscustomobject]@{ y = $r.Y; text = $n; container_id = (Get-MessageContainerIdentity $e) } }
+            $e.Current.ControlType -in @($CT::ListItem, $CT::Group, $CT::Text)) { $byName += [pscustomobject]@{ y = $r.Y; h = $r.Height; text = $n; container_id = (Get-MessageContainerIdentity $e) } }
   }
   $how = if ($byId.Count) { 'ids' } else { 'names' }
-  $rows = if ($byId.Count) { $byId } else { $byName }
-  [pscustomobject]@{ how = $how; messages = @(Collapse-MessageRows $rows $Count) }
+  [pscustomobject]@{ how = $how; rows = @(if ($byId.Count) { $byId } else { $byName }) }
 }
 
 function Find-PostedReadback([string]$text, $priorIds, [int]$priorCount, $priorAllIds) {
@@ -690,6 +696,7 @@ if ($Action -eq 'test-container') {
   Out-Json @{ identity = (Select-MessageContainerId $snapshot.ancestors ([string]$snapshot.fallback)) }; exit 0
 }
 if ($Action -in 'open', 'post', 'send', 'read', 'readchat') { Enter-UiLock $(if ($Action -eq 'readchat') { 60000 } else { 180000 }) }
+if ($Action -eq 'probe') { Enter-UiLock 180000 }   # the read the approvals step makes: one Teams operation at a time
 if ($Action -in 'post', 'send') { Wait-UserIdle 3 60 }   # writing moves the screen: not while the person works. readchat does not wait: it checks and postpones
 $w = Get-TeamsWindow
 if ($Action -eq 'diag') {
@@ -891,6 +898,31 @@ if (-not $w) { Fail 'Teams window not found' }
 $w = Open-SelfChat $w
 Ensure-Learned $w
 if ($Action -eq 'open') { Out-Json @{ ok = $true; selfChatOpen = $true }; exit 0 }
+if ($Action -eq 'probe') {
+  # read only (nothing is typed, pasted or sent): the messages exactly as the send readback compares them (the first node of each
+  # message, normalized), plus how many nodes each message has, all of them joined, and its place on the screen. The texts go to
+  # `kimeru diagnose` through this pipe only; it keeps lengths and yes/no answers and prints no text.
+  $got = Get-ChatMessageRows $w
+  $wr = $w.Current.BoundingRectangle
+  $groups = [ordered]@{}
+  foreach ($row in @($got.rows | Sort-Object { [double]$_.y })) {
+    $id = [string]$row.container_id
+    if (-not $id) { continue }
+    if (-not $groups.Contains($id)) { $groups[$id] = New-Object System.Collections.Generic.List[object] }
+    $groups[$id].Add($row)
+  }
+  $msgs = @(foreach ($id in $groups.Keys) {
+    $g = $groups[$id]
+    $top = [double]$g[0].y; $bottom = [double]$g[0].y + [double]$g[0].h
+    foreach ($row in $g) { $bottom = [math]::Max($bottom, [double]$row.y + [double]$row.h) }
+    [ordered]@{ text = (Normalize-MeaningfulText ([string]$g[0].text)); raw_lines = @(([string]$g[0].text) -split "`n").Count
+                fragments = $g.Count; joined = (Normalize-MeaningfulText ((@($g | ForEach-Object { [string]$_.text })) -join ' '))
+                top = [math]::Round(($top - $wr.Y) / [math]::Max(1, $wr.Height), 2); height = [math]::Round(($bottom - $top) / [math]::Max(1, $wr.Height), 2) }
+  })
+  Out-Json ([ordered]@{ ok = $true; how = $got.how; rows = @($got.rows).Count; selfTitle = [bool](Test-SelfTitleStrict $w)
+                        messages = @($msgs | Select-Object -Last 100) })
+  exit 0
+}
 
 function Get-Box($w) {
   $b = Find-All $w $CT::Edit | Where-Object { $_.Current.AutomationId -like 'new-message-*' } | Select-Object -First 1

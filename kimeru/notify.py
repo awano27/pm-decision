@@ -599,7 +599,7 @@ def delivery_pending(out):
         return rows
 
 
-def retry_delivery(out, kind, target, confirm_not_sent=False):
+def retry_delivery(out, kind, target, confirm_not_sent=False, source=None):
     """Release one ambiguous delivery only after an explicit claim that it was not sent.
 
     This changes no posted/delivered state and does not send anything. The normal
@@ -648,7 +648,7 @@ def retry_delivery(out, kind, target, confirm_not_sent=False):
         log = out / "delivery-recovery.log.jsonl"
         log.parent.mkdir(parents=True, exist_ok=True)
         with log.open("a", encoding="utf-8") as f:
-            f.write(json.dumps({"at": at, "kind": kind, "target": str(target), "action": "confirmed_not_sent"},
+            f.write(json.dumps({"at": at, "kind": kind, "target": str(target), "action": "confirmed_not_sent", **({"source": source} if source else {})},
                                ensure_ascii=False) + "\n")
         return {"status": "released", "kind": kind, "target": str(target)}
 
@@ -738,7 +738,7 @@ def deliver_brief(out, bridge, text, send, date):
         return {"status": "not_sent"}
 
 
-def confirm_delivery(out, kind, target, confirm_delivered=False):
+def confirm_delivery(out, kind, target, confirm_delivered=False, source="user_confirmation"):
     """Resolve an ambiguous result from the user's explicit delivery confirmation."""
     if confirm_delivered is not True:
         return {"status": "confirmation_required"}
@@ -758,7 +758,7 @@ def confirm_delivery(out, kind, target, confirm_delivered=False):
                         item["posted"], item["toasted"] = True, False
                         timing = measurement_for(item)
                         if item.get("delivery_unknown_generation") == timing.get("generation"):
-                            timing["posting_source"] = "user_confirmation"
+                            timing["posting_source"] = source
                             timing["posting_confirmed_at"] = measurement_now()
                             timing.pop("posted_at", None)  # the original send time is unknown
                     elif part == "copilot_request":
@@ -827,9 +827,78 @@ def confirm_delivery(out, kind, target, confirm_delivered=False):
         log.parent.mkdir(parents=True, exist_ok=True)
         with log.open("a", encoding="utf-8") as f:
             f.write(json.dumps({"at": at, "kind": kind, "target": str(target),
-                                "action": "confirmed_delivered", "source": "user_confirmation"},
+                                "action": "confirmed_delivered", "source": source},
                                ensure_ascii=False) + "\n")
         return {"status": "confirmed", "kind": kind, "target": str(target)}
+
+
+def close_delivery(out, kind, target, source="reconcile"):
+    """Close an old ambiguous delivery that was NOT seen in the chat, without sending it again and without approving anything.
+
+    A case stays pending and counts as posted, so it is not sent now and shows in the morning brief (a reply `OK N` still works);
+    a notice or an outbox message is dropped; a brief is released so that a new one can go out. Nothing is marked delivered."""
+    out = Path(out)
+    with fsutil.exclusive(lock_path(out)) as got:
+        if not got:
+            return {"status": "busy"}
+        ap = Approvals(out)
+        changed = False
+        if kind == "case":
+            item = ap.data.get("items", {}).get(str(target))
+            if item and item.get("delivery_unknown"):
+                part = item.get("delivery_unknown_part", "post")
+                same = item.get("delivery_unknown_revision", item.get("revision", 1)) == item.get("revision", 1)
+                if same and part == "post":
+                    item["posted"], item["toasted"] = True, True   # not announced on the PC: nothing new was posted
+                    timing = measurement_for(item)
+                    timing["posting_source"] = "closed_not_delivered"
+                    timing.pop("posted_at", None)
+                elif same and part == "copilot_request":
+                    item["request_posted"] = True
+                item["delivery_closed"] = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "part": part}
+                _clear_case_attempt(item)
+                changed = True
+        elif kind == "notice":
+            uncertain = ap.data.get("notice_delivery_unknown", {})
+            if isinstance(uncertain, list):
+                uncertain = {key: None for key in uncertain}
+            key = str(target)
+            if key in uncertain:
+                uncertain.pop(key, None)
+                ap.data["notice_delivery_unknown"] = uncertain
+                ap.data.setdefault("notice_delivery_attempts", {}).pop(key, None)
+                if key not in ap.data.get("notices", []):
+                    ap.data.setdefault("notices", []).append(key)
+                if key not in ap.data.get("notices_toasted", []):
+                    ap.data.setdefault("notices_toasted", []).append(key)
+                changed = True
+        elif kind == "outbox" and str(target) == "outbox" and ap.data.get("outbox_delivery_unknown"):
+            box = list(ap.data.get("outbox") or [])
+            attempt = ap.data.get("outbox_delivery_attempt")
+            if isinstance(attempt, dict) and isinstance(attempt.get("body"), str) and (not box or box[0] != attempt["body"]):
+                return {"status": "attempt_mismatch"}
+            ap.data["outbox"] = box[1:]
+            for name in ("outbox_delivery_unknown", "outbox_delivery_unknown_at", "outbox_delivery_attempt"):
+                ap.data.pop(name, None)
+            changed = True
+        elif kind == "brief" and str(target) == "brief":
+            state_path = out / "daily_state.json"
+            state = fsutil.read_json(state_path, {})
+            if state.pop("brief_delivery_unknown", None) is not None:
+                fsutil.write_atomic(state_path, json.dumps(state, ensure_ascii=False))
+                state_path.with_name(state_path.name + ".bak").unlink(missing_ok=True)
+                changed = True
+        if not changed:
+            return {"status": "not_pending"}
+        if not (kind == "brief" and str(target) == "brief"):
+            ap.save()
+        at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        log = out / "delivery-recovery.log.jsonl"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"at": at, "kind": kind, "target": str(target), "action": "closed_not_delivered",
+                                "source": source}, ensure_ascii=False) + "\n")
+        return {"status": "closed", "kind": kind, "target": str(target)}
 
 
 def _mark_toasted_locked(out, nums, notice_keys, unposted=None):

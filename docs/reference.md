@@ -22,7 +22,7 @@ python -m kimeru approvals                         # 自分とのチャットの
 python -m kimeru report [--html <ファイル>]        # --out の判断を 1 枚の HTML に（既定 <out>/report.html）
 python -m kimeru retry                             # inbox/done/*.error を inbox へ戻す（原因を直してから）
 python -m kimeru review | digest --week [--share] | calibrate   # 下の節を参照
-python -m kimeru work list|set ... / delivery list|retry|confirm ...   # 下の「手動の進捗と曖昧な配信の確認」
+python -m kimeru work list|set ... / delivery list|retry|confirm|reconcile ...   # 下の「手動の進捗と曖昧な配信の確認」
 python -m kimeru onboarding ... / trial ... / requirements ...         # 1 週間の試し方（trial-week.md）と要件ドラフト（下の節）
 python -m kimeru config show|set|unset|path [--share]                  # 設定（下の「設定ファイル」）
 python -m kimeru diagnose [--write <ファイル>] [--no-probe] [--drive]   # 配信結果不明・判断の経路・サイクルの失敗を数だけで 1 枚に（run-diagnose.cmd。何も送らない）
@@ -45,6 +45,15 @@ python -m kimeru --out <出力先> delivery show KIND TARGET
 python -m kimeru --out <出力先> delivery retry KIND TARGET --confirm-not-sent
 python -m kimeru --out <出力先> delivery confirm KIND TARGET --confirm-delivered
 ```
+
+配信結果が不明の件が多いときは、1 件ずつ確かめずに `delivery reconcile`（`run-fix-deliveries.cmd` をダブルクリックでも同じ）を使います。質問せず、何も送りません。自分とのチャットを 1 回だけ読み（`diagnose` と同じ読み取り専用の読み方）、送ろうとした本文が見えるかを、送信時の読み返しと同じ規則（空白を無視・手前の短い飾りと後ろの短い時刻を許す・URL の前のリンクの読み上げ名を除く・`[kimeru` で始まること）で調べます。
+
+- 見えた: `confirm` と同じ（確認済み）。
+- 見えない: `retry` と同じ（次のサイクルで送り直す）。ただし 24 時間より古い件は送り直さず閉じる。case は確認待ちのまま投稿済み扱いにし（承認にはしない）、朝のまとめに出る。通知と outbox の古い件は捨てる。
+- 朝のまとめ: 見えなければ保留を解き、新しい朝のまとめが出る（昨日のものは送り直さない）。
+- 送ろうとした本文の記録が無い件は、新しければそのまま、古ければ閉じる。
+
+出力は種類・番号・判定だけで、本文・題名は出ません。`kimeru-fix-deliveries-result.txt`（git 管理外）に書き、Google ドライブに `kimeru-release` フォルダがあればそこへもコピーします。approvals.lock を他の実行が使っているとき、Teams を読めないときは、何も変えずに止まります。記録は `delivery-recovery.log.jsonl` に `source: reconcile` で残ります。
 
 `retry` は「送られていない」と確認した場合だけ `--confirm-not-sent` を付けます。これは自動再試行の保留を解除するだけで、その場で送信しません。`confirm` は、期待された本文全体が自分とのチャットに表示されたという本人の申告を `user_confirmation` として記録し、保留を解除します。画面の読み戻しによる確認とは区別され、case の承認、作業の完了、ADO 実行を意味しません。どちらも確認フラグを省けば状態を変更しません。古い改訂の不明結果を確認しても、新しい改訂を投稿済みにはしません。配信の確認記録はその時の申告または読み戻しの証拠として残し、実際の相手側の処理完了とは区別してください。
 

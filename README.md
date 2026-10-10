@@ -295,7 +295,7 @@ python -m kimeru config unset backend   # install のときに保存した判断
 | 「判断グラフ／進め方の型のフォルダが見つかりません」 | clone したフォルダで `python -m kimeru` を実行する（pip での導入は未対応） |
 | 「デモ以外の記録があります…消さずに止めました」 | デモは別の `--out` で動かす（既定は `out\demo`）。その記録を移してよければ `--fresh` |
 | 取り込みに失敗した件（`inbox\done\*.error`） | 原因を直してから `python -m kimeru retry` |
-| 自分とのチャットへ投稿できたか分からない件 | `python -m kimeru delivery list`、確かめてから `delivery retry` か `delivery confirm` |
+| 自分とのチャットへ投稿できたか分からない件 | `run-fix-deliveries.cmd` をダブルクリック（質問しない。自分とのチャットを 1 回読み、届いていた件は確認済みに、見当たらない件は次のサイクルで送り直し、24 時間より古い件は送り直さず閉じる。結果は件数と番号だけで `kimeru-fix-deliveries-result.txt` に出る）。1 件ずつ見るなら `python -m kimeru delivery list`、確かめてから `delivery retry` か `delivery confirm` |
 | 投稿が「配信結果不明」になる・すべて PM へ回る理由を調べたい | `run-diagnose.cmd` をダブルクリック（質問しない・何も送らない。結果は数と節点の名前だけで、`kimeru-diagnose-result.txt` とクリップボード、Google ドライブの `kimeru-release` へ） |
 | 発表の場で判断モデルが使えない | 前日に `demo --record <ファイル>` で記録しておき、当日は `demo --replay <ファイル>` |
 | Teams のチャット一覧が 0 件と読まれる | Teams の左側の「チャット」タブを開き、一覧が見えている状態にしてから実行する |

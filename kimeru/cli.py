@@ -625,6 +625,9 @@ def _main(argv=None):
     p_delivery = sub.add_parser("delivery", help="inspect and explicitly resolve an ambiguous self-chat delivery")
     delivery_sub = p_delivery.add_subparsers(dest="delivery_action", required=True, parser_class=_Parser)
     delivery_sub.add_parser("list", help="list ambiguous deliveries without showing their bodies")
+    p_reconcile = delivery_sub.add_parser("reconcile", help="settle every ambiguous delivery from one read of the self chat (no questions)")
+    p_reconcile.add_argument("--write")
+    p_reconcile.add_argument("--drive", action="store_true")
     for action in ("show", "retry", "confirm"):
         p_delivery_action = delivery_sub.add_parser(action)
         p_delivery_action.add_argument("kind", choices=["case", "notice", "outbox", "brief"])
@@ -716,6 +719,9 @@ def _main(argv=None):
 
     if a.cmd == "delivery":
         from . import notify as nt
+        if a.delivery_action == "reconcile":
+            from . import reconcile
+            return reconcile.dispatch([*(["--write", a.write] if a.write else []), *(["--drive"] if a.drive else [])], out)
         if a.delivery_action == "list":
             rows = nt.delivery_pending(out)
             if getattr(rows, "busy", False):

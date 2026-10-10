@@ -200,8 +200,11 @@ function Test-PostedTextMatch([string]$sent, [string]$visible) {
   # a posted message as the message list reads it back. Newer Teams builds wrap the text for screen readers:
   # "<your name> 送信済み <the text> 今日の 10:33." (or "Sent ... Today at 10:33."). The text we sent must be there whole,
   # starting with its "[kimeru" marker, with at most a short label before it and a short time after it
-  $a = Normalize-MeaningfulText $sent
-  $b = Normalize-MeaningfulText $visible
+  # whitespace is dropped altogether: the message list joins the lines of a post without a separator
+  $a = (Normalize-MeaningfulText $sent) -replace ' ', ''
+  $b = (Normalize-MeaningfulText $visible) -replace ' ', ''
+  # a URL is shown as a link, and the label of a link is read before it: "リンクhttps://..." / "Linkhttps://..."
+  $b = $b -replace '(?i)(リンク|Link)(?=https?://)', ''
   if ($a -ceq $b) { return $true }
   if (-not $a.StartsWith('[kimeru') -or $a.Length -lt 8) { return $false }
   $i = $b.IndexOf($a, [StringComparison]::Ordinal)

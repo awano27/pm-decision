@@ -63,8 +63,14 @@ class TestReadbackOfWrappedMessages(unittest.TestCase):
     def test_the_label_and_the_time_around_the_text_are_accepted(self):
         for visible in ("山田 太郎 送信済み " + self.SENT + " 今日の 10:33.",
                         "Taro Yamada Sent " + self.SENT + " Today at 10:33 AM.",
-                        self.SENT):
+                        self.SENT,
+                        "山田 太郎 送信済み " + self.SENT.replace(chr(10), "") + " 今日の 10:33."):   # lines joined without a separator
             self.assertEqual(readback(self.SENT, self.rows(visible)), {"matched": True, "message_id": "new-1"}, visible[:20])
+
+    def test_the_label_read_before_a_link_is_ignored(self):
+        sent = "[kimeru #9] 対象: #12\nリンク: https://dev.azure.com/org/p/_workitems/edit/12\n返信: OK 9"
+        visible = "山田 太郎 送信済み [kimeru #9] 対象: #12 リンク: リンクhttps://dev.azure.com/org/p/_workitems/edit/12 返信: OK 9 今日の 10:33."
+        self.assertEqual(readback(sent, self.rows(visible)), {"matched": True, "message_id": "new-1"})
 
     def test_a_different_or_partial_text_is_not(self):
         for visible in ("山田 太郎 送信済み [kimeru #7] 判断が必要 今日の 10:33.",                      # cut short

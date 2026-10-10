@@ -1144,6 +1144,10 @@ if ($Action -eq 'read') {
         $entry = "P:" + $Matches[1]
         if (-not $posts.Contains($Matches[1])) { $posts.Add($Matches[1]) }
       }
+      elseif ($l -match '^\[kimeru 詳細 #(\d+)\]') {
+        # the answer to `詳細 N` (full details): not an approval post and not a result post; it only closes the `詳細 N` replies above it
+        $entry = "D:" + $Matches[1]
+      }
       elseif ($l -match '^\[kimeru 試験 #(\d+)\]') {
         # a post of tools/check.ps1 (a test): it is not an approval post and not a boundary for the real reader (notify.scoped_timeline)
         $entry = "T:" + $Matches[1]
@@ -1156,7 +1160,7 @@ if ($Action -eq 'read') {
         # replies to #N before it were answered (notify.fresh_entries). The count keeps two result posts from being folded into one line.
         $entry = 'X:{0}:{1}' -f $Matches[1], $(if ($Matches[2]) { [int]$Matches[2] } else { 0 })
       }
-      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留|聞き返し|再実行|済)\s*#?(\d+)\s*[.。!！]*$') {
+      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留|聞き返し|詳細|再実行|済)\s*#?(\d+)\s*[.。!！]*$') {
         # phones often send full-width or re-cased text ("ＯＫ　６７５", "Ok 675"): canonicalize
         $c = '{0} {1}' -f $Matches[1].ToUpper(), $Matches[2]
         $entry = "R:" + $c

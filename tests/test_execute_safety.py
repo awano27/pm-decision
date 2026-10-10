@@ -212,7 +212,7 @@ class TestRoutesThatNeverExecute(Safety):
             r = daily.cycle(self.out, inbox, GRAPHS, NoCriteria(), PBS, cli.process, bridge=bridge, send=True, now=datetime(2026, 10, 1, 9, 5))
         self.assertIn("#1:approved", r["approvals"])
         self.assertFalse((self.out / "executions.jsonl").exists())
-        self.assertFalse(any("そのまま書きます" in p for p in bridge.posts))
+        self.assertFalse(any("コメントを書きます" in p for p in bridge.posts))
         src = (ROOT / "eval" / "day_run.py").read_text(encoding="utf-8")
         self.assertNotIn("real=True", src)
 
@@ -382,8 +382,8 @@ class TestNoRecordedOrigin(Safety):
     def test_the_post_says_it_will_not_write_and_ok_is_a_record_only_not_a_failure(self):
         bridge = self.plain()
         post = bridge.posts[0]
-        self.assertIn("書きません（取り込み元が記録されていない）", post)
-        self.assertNotIn("そのまま書きます", post)
+        self.assertIn("OK は記録だけです（ADO の取り込み元が記録されていません）", post)
+        self.assertNotIn("コメントを書きます", post)
         ch = self.cycle(bridge, reply="OK 1")
         self.assertEqual(ch[0]["status"], "approved")
         self.assertEqual(self.calls, [])
@@ -423,7 +423,7 @@ class TestTheRecordAndThePostNameTheOrigin(Safety):
     def test_every_row_has_the_organization_and_project_and_the_post_shows_the_origin(self):
         self.enable()
         bridge = self.decide_and_post()
-        self.assertIn("取り込み元の組織 contoso-not-real / プロジェクト Proj", bridge.posts[0])
+        self.assertIn("ADO（contoso-not-real / Proj", bridge.posts[0])
         self.cycle(bridge, http=self.http_with(post_error=TimeoutError("timed out")), reply="OK 1")
         self.cycle(bridge, reply="済 1")
         rows = self.rows()
@@ -477,7 +477,7 @@ class TestApprovalsBeforeExecutionWasSwitchedOn(Safety):
         self.assertEqual(self.state()["status"], "pending")
         notify.notify(self.out, bridge, send=True, real=True)          # made again
         again = bridge.posts[-1]
-        self.assertIn("そのまま書きます", again)
+        self.assertIn("上の文面そのまま", again)
         self.assertIn("contoso-not-real", again)                       # the target is in the post
         self.assertIn(execute.SIGNATURE_FIXED.strip(), again)                # and the signature line
         bridge.replies.clear()

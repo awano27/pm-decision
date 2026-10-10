@@ -52,7 +52,7 @@ class TestBridgeE2E(unittest.TestCase):
         self.assertEqual(ids[:2], [278, 279])
         posted = json.loads(self.chat.read_text(encoding="utf-8-sig"))["messages"]
         self.assertTrue(posted[0].startswith("[kimeru #278]"))
-        self.assertIn("\r\n返信: OK 278 / NG 278 / 保留 278", posted[0])   # multi-line, Japanese intact
+        self.assertIn("\r\nOK 278 / NG 278 / 詳細 278", posted[0])   # multi-line, Japanese intact
 
         self.reply("ＯＫ　２７８")          # phone-style full-width
         self.reply("NG 279")

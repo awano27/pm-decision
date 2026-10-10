@@ -99,9 +99,10 @@ class TestWorkProgress(unittest.TestCase):
         with mock.patch.object(brief, "rank", return_value=[]) as rank:
             text, ranked = brief.build(self.out, object(), now=None, date="2026-10-03")
         self.assertEqual(ranked, [])
-        self.assertIn("承認済み・未完了の作業（確認待ちとは別の進捗管理）", text)
-        self.assertIn("#1 改訂 1 / Unknown", text)
-        self.assertIn("担当: Unknown / 期限: Unknown / 完了条件: Unknown", text)
+        self.assertIn("承認済み・未完了の作業:", text)
+        self.assertIn("- #1 ", text)
+        self.assertNotIn("Unknown", text)          # what nobody recorded is left out of the brief (work list still shows it)
+        self.assertNotIn("改訂", text)
         rank.assert_called_once()
 
     def test_outbox_handoff_requires_identity_backed_bridge_readback(self):

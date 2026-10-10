@@ -56,7 +56,7 @@ class TestReadmeSamples(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if not k.startswith("KIMERU_")}
         with mock.patch.dict(os.environ, env, clear=True):
             post = mod.post()
-        self.assertEqual(post.rstrip("\n"), block_after("迷った件は、自分とのチャットに **1 通の投稿** として届きます。"))
+        self.assertEqual(post.rstrip("\n"), block_after("迷った件は、自分とのチャットに **1 通の短い投稿**（5 行ほど）として届きます。"))
 
 
 if __name__ == "__main__":

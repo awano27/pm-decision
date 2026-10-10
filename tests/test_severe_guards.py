@@ -73,8 +73,9 @@ class TestSevereAlerts(unittest.TestCase):
                 self.assertEqual(bool(queued), writer is not None)
                 self.assertEqual(res["needs_human"], writer is not None)
                 text = notify.format_notice(json.loads(notices[0]))
-                self.assertEqual("承認を待っています" in text, writer is not None)
-                self.assertEqual("返信は不要です" in text, writer is None)
+                self.assertEqual("承認待ち" in text, writer is not None)
+                self.assertNotIn("返信は不要です", text)
+                self.assertLessEqual(len(text.splitlines()), 4)
 
     def test_judge_down_still_waits_for_the_next_cycle(self):
         class Down:

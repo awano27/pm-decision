@@ -89,7 +89,7 @@ class TestApprovalPostContext(unittest.TestCase):
                "actions": [{"type": "teams.reply", "text": "copy body"},
                            {"type": "ado.comment", "id": "9", "exec_text": "EXACT\nCOMMENT BODY"},
                            {"type": "log.only", "text": "a local note"}]}
-        text = notify.format_post(5, rec)
+        text = notify.format_detail(5, rec)   # the full text (the answer to `詳細 5`) keeps the order and all the parts
         self.assertLess(text.index("いまの判断"), text.index("利用者数を確認"))
         self.assertLess(text.index("利用者数を確認"), text.index("影響する期間"))
         self.assertIn("改訂 2", text)
@@ -97,6 +97,13 @@ class TestApprovalPostContext(unittest.TestCase):
         self.assertIn("コピー用", text)
         self.assertIn("実行設定が有効なら、承認後に ADO へコメントを書き込む", text)
         self.assertIn("EXACT\nCOMMENT BODY", text)
+        short = notify.format_post(5, rec)   # the short approval post: the next step first, the exact comment, the revision as "（更新）"
+        self.assertLessEqual(len(short.splitlines()), 6)
+        self.assertTrue(short.startswith("[kimeru #5] （更新）"))
+        self.assertLess(short.index("→ 利用者数を確認"), short.index("EXACT\nCOMMENT BODY"))
+        self.assertIn("の #9 にコメントを書きます（上の文面そのまま）", short)
+        self.assertNotIn("改訂", short)
+        self.assertTrue(short.endswith("OK 5 / NG 5 / 詳細 5"))
 
     def test_repro_steps_are_kept_and_summary_limited_like_other_free_text(self):
         from unittest import mock

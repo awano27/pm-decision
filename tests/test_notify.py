@@ -37,8 +37,14 @@ class TestNotify(unittest.TestCase):
     def test_post_format_is_parseable_by_bridge(self):
         text = notify.format_post(3, REC)
         self.assertTrue(text.startswith("[kimeru #3]"))
-        self.assertIn("OK 3 / NG 3 / 保留 3", text)
-        self.assertIn("ado.update", text)
+        self.assertTrue(text.endswith("OK 3 / NG 3 / 詳細 3"))
+        self.assertLessEqual(len(text.splitlines()), 5)
+        for word in ("workitem-intake", "改訂", "ado.update", "判断メモなし"):
+            self.assertNotIn(word, text)
+        full = notify.format_detail(3, REC)               # the answer to `詳細 3`
+        self.assertTrue(full.startswith("[kimeru 詳細 #3]"))
+        self.assertIn("OK 3 / NG 3 / 保留 3", full)
+        self.assertIn("ado.update", full)
 
     def test_paste_only_does_not_mark_posted(self):
         with tempfile.TemporaryDirectory() as d:

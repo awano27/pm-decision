@@ -2,8 +2,10 @@ import atexit
 
 try:   # isolation from the real state folder, whichever way the tests are started
     from . import isolate  # noqa: F401
+    from .isolate import detail_of
 except ImportError:
     import isolate  # noqa: F401
+    from isolate import detail_of
 
 import json
 import os
@@ -85,8 +87,8 @@ class TestWriter(unittest.TestCase):
 
             self.assertEqual(notify.notify(out, t, send=True), [1])
             self.assertIn("佐藤さん、承知しました。", t.posts[-1])
-            self.assertIn("元: 佐藤: 来月のリリース日", t.posts[-1])                       # the PM sees what it answers
-            self.assertIn("作業項目の説明「", t.posts[-1])
+            self.assertIn("元: 佐藤: 来月のリリース日", detail_of(out))                       # the PM sees what it answers
+            self.assertIn("作業項目の説明「", detail_of(out))
             self.assertIn("修正 1", t.posts[-1])
 
             t.timeline.append("R:修正 1 もっと短く")
@@ -110,7 +112,7 @@ class TestWriter(unittest.TestCase):
             self.assertNotIn("teams.reply", [e["action"]["type"] for e in res["executed"]])   # not sent without a look
             notify.notify(out, t, send=True)
             self.assertIn("⚠ 文面 LLM の下書きを作れなかったため定型文です", t.posts[0])
-            self.assertIn("定型文: 受領しました", t.posts[0])
+            self.assertIn("定型文: 受領しました", detail_of(out))
 
     def test_refusal_or_broken_text_falls_back_per_action(self):
         class Refuses(FakeWriter):
@@ -127,7 +129,7 @@ class TestWriter(unittest.TestCase):
             self.assertEqual(reply["writer_warning"], "断りの返事")
             self.assertTrue(any(a.get("drafted_by") for a in res["actions"] if a["type"] == "ado.create"))
             notify.notify(out, t, send=True)
-            self.assertIn("⚠ 文面 LLM の返信は使えないため定型文です（断りの返事）", t.posts[0])
+            self.assertIn("⚠ 文面 LLM の返信は使えないため定型文です（断りの返事）", detail_of(out))
         self.assertEqual(writer.unusable('{"a1": "x"}'), "壊れた返事")
         self.assertEqual(writer.unusable("どの件について書けばよいか教えてください。"), "PM への聞き返し・指示への言及")
         self.assertEqual(writer.unusable("受領しました。判断材料の整理から進めます。"), "")
@@ -171,7 +173,7 @@ class TestWriter(unittest.TestCase):
             self.assertEqual(res["executed"], [])                              # the reply waits for the PM
             self.assertEqual(notify.notify(out, t, send=True), [1])
             self.assertTrue(t.posts[0].startswith("[kimeru #1]"))
-            self.assertIn("定型文: 受領しました", t.posts[0])
+            self.assertIn("定型文: 受領しました", detail_of(out))
             self.assertTrue(t.posts[1].startswith("[kimeru #1 Copilot 用]"))     # its own message to copy
             self.assertIn("メールや会議", t.posts[1])
             self.assertEqual(notify.notify(out, t, send=True), [])              # both posted once
@@ -205,7 +207,7 @@ class TestWriter(unittest.TestCase):
             self.assertEqual(res["memo"]["missing"][0], "QA 環境の復旧見込み")
             self.assertNotIn("copilot_sources", res)                               # a CLI writer cannot cite mail
             notify.notify(out, t, send=True)
-            post = t.posts[0]
+            post = detail_of(out)
             for s in ("文面 LLM のメモ:", "・足りない情報: QA 環境の復旧見込み / 延期した場合の影響範囲",
                       "・選択肢: 延期", "・次の一手: 復旧見込み",
                       "聞き返すなら（「聞き返し 1」でこちらを送る）", "/ 聞き返し 1"):
@@ -213,8 +215,8 @@ class TestWriter(unittest.TestCase):
             t.timeline.append("R:聞き返し 1")
             self.assertEqual(notify.collect(out, t), [{"id": 1, "status": "ask_back"}])   # not a decision yet
             self.assertEqual(notify.notify(out, t, send=True), [1])                         # same number, again
-            again = t.posts[-1]
-            self.assertTrue(again.startswith("[kimeru #1]"))
+            again = detail_of(out)
+            self.assertTrue(t.posts[-1].startswith("[kimeru #1]"))
             self.assertIn("返信（聞き返し）の下書き（fake）:" + chr(10) + "復旧見込みと影響範囲を教えていただけますか。", again)
             self.assertNotIn("/ 聞き返し 1", again)                                         # offered once
             t.timeline.append("R:OK 1")
@@ -253,8 +255,8 @@ class TestWriter(unittest.TestCase):
             n_tasks = sum(1 for a in res["actions"] if a["type"] == "ado.create")
             self.assertGreater(n_tasks, 2)
             notify.notify(out, t, send=True)
-            self.assertEqual(t.posts[0].count("作業項目の説明「"), 2)
-            self.assertIn(f"作業項目の説明の下書き ほか {n_tasks - 2} 件（OK ですべて記録）", t.posts[0])
+            self.assertEqual(detail_of(out).count("作業項目の説明「"), 2)
+            self.assertIn(f"作業項目の説明の下書き ほか {n_tasks - 2} 件（OK ですべて記録）", detail_of(out))
 
     def test_valid_json_without_drafts_is_a_failure_not_a_success(self):
         class Shapes(FakeWriter):
@@ -363,12 +365,12 @@ class TestWriter(unittest.TestCase):
             t.timeline.append("R:聞き返し 1")
             notify.collect(out, t)
             notify.notify(out, t, send=True)
-            self.assertIn("返信（聞き返し）の下書き", t.posts[-1])
+            self.assertIn("返信（聞き返し）の下書き", detail_of(out))
             t.timeline.append("R:修正 1 丁寧に")
             self.assertEqual(notify.collect(out, t, writer=w)[0]["status"], "redrafted")
             notify.notify(out, t, send=True)
-            self.assertNotIn("（聞き返し）の下書き", t.posts[-1])                            # a normal reply again
-            self.assertIn("聞き返すなら", t.posts[-1])                                       # and the offer is back
+            self.assertNotIn("（聞き返し）の下書き", detail_of(out))                            # a normal reply again
+            self.assertIn("聞き返すなら", detail_of(out))                                       # and the offer is back
 
     def test_hidden_work_items_still_show_their_warnings(self):
         class Invents(FakeWriter):
@@ -381,7 +383,7 @@ class TestWriter(unittest.TestCase):
             out, t = Path(d), FakeTeams()
             process(MSG, GRAPHS, StubBackend(), out, PBS, writer=Invents())
             notify.notify(out, t, send=True)
-            post = t.posts[0]
+            post = detail_of(out)
             self.assertIn("ほか ", post)
             self.assertIn("　⚠ 元の材料に無い日付・数値: ", post)
 

@@ -51,7 +51,7 @@ KNOWN_MESSAGES = [re.compile(p) for p in (
 )]
 CLASS = re.compile(r"^([A-Z][A-Za-z0-9_]{1,60}(?:Error|Exception|Unavailable|Expired|Exit|Interrupt|Failure)): ?(.*)$", re.S)
 TRUNCATION = ("…", "...", "もっと見る", "さらに表示", "See more", "Show more", "続きを読む")
-HEAD = re.compile(r"^\[kimeru (?:(?P<test>試験 )?(?P<run>実行 )?#(?P<num>\d+)(?P<copilot> Copilot 用)?|(?P<notice>通知)|(?P<ready>送信用 #\d+)|(?P<brief>brief))")
+HEAD = re.compile(r"^\[kimeru (?:(?P<test>試験 )?(?P<run>実行 )?#(?P<num>\d+)(?P<copilot> Copilot 用)?|(?P<notice>通知)|(?P<ready>(?:送信用|詳細) #\d+)|(?P<brief>brief))")
 
 
 def norm(s):

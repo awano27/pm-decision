@@ -215,8 +215,9 @@ class TestAdoComment(Base):
     def test_the_post_shows_what_will_be_written(self):
         self.enable()
         bridge = self.decide_and_post()
-        self.assertIn("作業項目 7002", bridge.posts[0])
-        self.assertIn("そのまま書きます", bridge.posts[0])
+        self.assertIn("ADO #7002", bridge.posts[0])
+        self.assertIn("の #7002 にコメントを書きます（上の文面そのまま）", bridge.posts[0])
+        self.assertLessEqual(len(bridge.posts[0].splitlines()), 8)
 
 
 class TestNoDoubleWrite(Base):

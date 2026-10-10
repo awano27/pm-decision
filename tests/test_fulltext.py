@@ -1,8 +1,10 @@
 """Reading a chat in full: only when enabled and needed, within limits, verified, forgotten after the decision. Teams is always a fake."""
 try:   # isolation from the real state folder, whichever way the tests are started
     from . import isolate  # noqa: F401
+    from .isolate import detail_of
 except ImportError:
     import isolate  # noqa: F401
+    from isolate import detail_of
 
 import json
 import os
@@ -192,7 +194,8 @@ class TestQuietAndStorage(Base):
         n, item = next(iter(ap.data["items"].items()))
         self.assertEqual(fulltext.load(self.out, item["key"])["text"][:20], LONG[:20])          # kept while it waits
         posted = "\n".join(t for t, _ in self.teams.posts if t.startswith("[kimeru #"))
-        self.assertIn("元（全文）", posted)
+        self.assertNotIn("元（全文）", posted)                                                    # the short post does not carry it
+        self.assertIn("元（全文）", detail_of(self.out, n))                                      # the answer to `詳細 N` does
         rec = self.decisions()[0]                                                                # the permanent records: a summary
         self.assertLessEqual(len(rec["event"]["text"]), fulltext.PERSIST_TEXT)
         self.assertNotIn(LONG[:260], (self.out / "decisions.jsonl").read_text(encoding="utf-8"))
@@ -250,7 +253,8 @@ class TestDedupAndMerge(Base):
         self.assertFalse(item["posted"])                                  # posted again under the same number
         self.teams.posts.clear()
         notify.notify(self.out, self.teams, send=True)
-        self.assertIn("続きのメッセージ", self.teams.posts[0][0])
+        self.assertIn("（更新）", self.teams.posts[0][0])
+        self.assertIn("続きのメッセージ", detail_of(self.out))
         self.assertEqual(len(self.decisions()), 2)                        # judged, not skipped; only the item is shared
 
     def test_a_follow_up_is_still_judged_when_it_joins(self):

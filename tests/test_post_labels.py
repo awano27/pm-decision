@@ -2,8 +2,10 @@
 describes recording as recording (not as execution)."""
 try:   # isolation from the real state folder, whichever way the tests are started
     from . import isolate  # noqa: F401
+    from .isolate import detail_of
 except ImportError:
     import isolate  # noqa: F401
+    from isolate import detail_of
 
 import contextlib
 import io
@@ -32,12 +34,12 @@ class Memo(FakeWriter):
         return d
 
 
-def post_with(writer):
+def post_with(writer, detail=True):
     with tempfile.TemporaryDirectory() as d:
         out, t = Path(d), FakeTeams()
         process(MSG, GRAPHS, StubBackend(), out, PBS, writer=writer)
         notify.notify(out, t, send=True)
-        return t.posts[0]
+        return detail_of(out) if detail else t.posts[0]
 
 
 class TestTheWriterIsNamedAsItIs(unittest.TestCase):
@@ -57,8 +59,9 @@ class TestTheWriterIsNamedAsItIs(unittest.TestCase):
     def test_a_failure_names_the_writer(self):
         w = FakeWriter(fail=True)
         w.NAME = "claude"
-        post = post_with(w)
+        post = post_with(w, detail=False)   # the short post says it too
         self.assertIn("⚠ Claude の下書きを作れなかったため定型文です", post)
+        self.assertIn("⚠ Claude の下書きを作れなかったため定型文です", post_with(w))
         self.assertNotIn("Copilot", post)
 
 
@@ -66,7 +69,10 @@ class TestNoWriter(unittest.TestCase):
     def test_nothing_is_shown_as_unknown_and_approval_is_not_called_execution(self):
         rec = {"graph": "teams-chat-triage", "event_kind": "teams.chat", "event_id": "7", "advice": "確認が必要",
                "actions": [{"type": "teams.reply", "text": "受領しました"}, {"type": "ado.create", "title": "t", "description": "d"}]}
-        post = notify.format_post(1, rec)
+        short = notify.format_post(1, rec)   # the short post carries no placeholder at all
+        for word in ("Unknown", "判断メモなし", "承認で実行", "teams-chat-triage", "改訂", "承認の対象"):
+            self.assertNotIn(word, short)
+        post = notify.format_detail(1, rec)
         self.assertNotIn("Unknown", post)
         self.assertIn("判断メモなし", post)
         self.assertNotIn("承認で実行", post)

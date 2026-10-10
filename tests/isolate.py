@@ -23,3 +23,11 @@ if os.environ.get("KIMERU_TEST_STATE_PID") != str(os.getpid()):   # once per pro
     os.environ["KIMERU_STATE_DIR"] = _state
     os.environ["KIMERU_TEST_STATE_PID"] = str(os.getpid())
     atexit.register(shutil.rmtree, _state, ignore_errors=True)
+
+
+def detail_of(out, n=1):
+    """The full text of item #n of a state folder: the answer to `詳細 N` (what the short approval post leaves out)."""
+    from pathlib import Path
+    from kimeru import fulltext, notify
+    it = notify.Approvals(Path(out)).data["items"][str(n)]
+    return notify.format_detail(n, it["record"], fulltext.load(Path(out), it["key"]))

@@ -148,7 +148,7 @@ def format_post(ranked, total, pending, date=None, empty_message="対応が必�
     if total > len(ranked):
         lines.append(f"ほか {total - len(ranked)} 件")
     if pending:
-        lines.append(f"確認待ち {pending} 件（OK 番号 / NG 番号 / 保留 番号 で返信）")
+        lines.append(f"確認待ち {pending} 件（OK 番号 / NG 番号 / 詳細 番号 で返信）")
     return "\n".join(lines)
 
 
@@ -250,8 +250,12 @@ def build(out, backend, top=3, now=None, date=None):
     # Progress is a local, explicit fact (or Unknown for legacy approvals). It is
     # appended separately and does not create another model/ranking call.
     if unfinished:
-        text += "\n\n承認済み・未完了の作業（確認待ちとは別の進捗管理）:"
-        for row in unfinished:
-            text += (f"\n- #{row['case']} 改訂 {row['revision']} / {row['state']} / 次: {row['next_action']} / "
-                     f"担当: {row['owner']} / 期限: {row['due']} / 完了条件: {row['completion_condition']}")
+        text += "\n\n承認済み・未完了の作業:"   # three rows at most; what nobody recorded (Unknown) is left out
+        for row in unfinished[:3]:
+            known = [f"{label}: {row[key]}" for label, key in (("担当", "owner"), ("期限", "due"), ("完了条件", "completion_condition"))
+                     if row[key] != "Unknown"]
+            text += (f"\n- #{row['case']} {row['next_action']}" + (f"（{row['state']}）" if row["state"] != "Unknown" else "")
+                     + ("　" + " / ".join(known) if known else ""))
+        if len(unfinished) > 3:
+            text += f"\nほか {len(unfinished) - 3} 件（kimeru work list で全件）"
     return text, ranked

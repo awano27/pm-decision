@@ -24,7 +24,7 @@ from . import actions, config, fsutil
 from . import writer as writer_mod
 
 HERE = Path(__file__).resolve().parent.parent
-REPLY = re.compile(r"^(OK|NG|保留|聞き返し|再実行|済)\s*#?(\d+)\s*[.。!！]*$", re.IGNORECASE)
+REPLY = re.compile(r"^(OK|NG|保留|聞き返し|詳細|再実行|済)\s*#?(\d+)\s*[.。!！]*$", re.IGNORECASE)
 REDRAFT = re.compile(r"^修正\s*#?(\d+)\s*[:：]?\s*(\S.*)$")
 REDO_K = re.compile(r"^再実行\s*#?(\d+)\s*-\s*(\d+)\s*[.。!！]*$")   # `再実行 N-k`: run again, k = the result count the PM saw (stated in the result post)
 REDO_BAD = re.compile(r"^再実行\s*#?(\d+)\s*[^\w\s.。!！]+\s*\d*\s*[.。!！]*$")   # looks like `再実行 N-k` but with a mark that is not a dash (~ / and the like): recorded, not dropped
@@ -98,7 +98,7 @@ def parse_paste(line):
     return (m.group(1), m.group(2).strip()) if m else None
 
 
-STATUS = {"OK": "approved", "NG": "rejected", "保留": "held", "聞き返し": "ask_back", "再実行": "redo", "済": "closed"}   # 聞き返し / 再実行 / 済: not decisions
+STATUS = {"OK": "approved", "NG": "rejected", "保留": "held", "聞き返し": "ask_back", "詳細": "detail", "再実行": "redo", "済": "closed"}   # 聞き返し / 詳細 / 再実行 / 済: not decisions
 
 
 TEST_ENV = "KIMERU_TEST_MARK"   # tools/check.ps1 sets it for the kimeru commands it runs: they post and read test posts
@@ -115,6 +115,8 @@ def to_test_post(text):
         return "[kimeru 試験 #" + text[len("[kimeru #"):]
     if text.startswith("[kimeru 実行 #"):
         return "[kimeru 試験 実行 #" + text[len("[kimeru 実行 #"):]
+    if text.startswith("[kimeru 詳細 #"):
+        return "[kimeru 試験 詳細 #" + text[len("[kimeru 詳細 #"):]
     return text
 
 
@@ -148,6 +150,9 @@ def scoped_timeline(read, test=None):
             if test and head in ("T", "TX"):
                 out.append(("P:" if head == "T" else "X:") + rest)
             elif not test and head in ("P", "X"):
+                out.append(e)
+        elif head == "D":   # a detail post "[kimeru 詳細 #N]": the real reader only (a test never posts one that is read back)
+            if not test:
                 out.append(e)
         elif head == "R":
             num = _reply_number(rest)
@@ -237,8 +242,115 @@ def ado_lines(rec):
     return lines
 
 
+def _clip(s, n):
+    s = " ".join(str(s or "").split())
+    return s if len(s) <= n else s[:max(1, n - 1)] + "…"
+
+
+WHAT_RAN = {"ado.update": "ADO 更新", "ado.comment": "ADO コメント", "ado.create": "ADO 起票", "teams.reply": "返信",
+            "teams.post": "チャネル投稿", "oncall.page": "当番呼び出し"}   # what a notice says was recorded, in the PM's words
+
+
+def _ado_label(rec):
+    ev = rec.get("event") or {}
+    label = f"ADO #{rec.get('event_id')}"
+    if ev.get("type"):
+        label += f" [{ev['type']}]"
+    if ev.get("title"):
+        label += " " + str(ev["title"])
+    return label
+
+
+def _who(rec, limit=40):
+    """Who or what an item is about, in `limit` characters: "山田さん: 仕様変更の可否", "ADO #501 [Bug] 一覧の並び順"."""
+    ev = rec.get("event") or {}
+    memo = rec.get("memo") or {}
+    kind = str(rec.get("event_kind") or "")
+    if kind.startswith("ado."):
+        return _clip(_ado_label(rec), limit)
+    short = memo.get("summary") if len(str(memo.get("summary") or "")) <= 30 else ""   # a short memo summary names the topic best
+    topic = short or ev.get("text") or ev.get("item") or memo.get("summary") or rec.get("summary") or rec.get("advice") or ""
+    if kind == "teams.chat" and ev.get("author"):
+        return _clip(f"{ev['author']}さん: {topic}", limit)
+    if kind == "meeting.item" and ev.get("meeting"):
+        return _clip(f"{ev['meeting']}: {ev.get('item') or topic}", limit)
+    if kind == "monitor.alert" and ev.get("rule"):
+        return _clip(f"{ev['rule']}（{ev.get('severity') or '?'}）", limit)
+    return _clip(rec.get("summary") or topic or kind, limit)
+
+
+def _draft_line(rec):
+    """The draft the item carries, in one line: a writer draft, the fixed comment, or the first work-item titles."""
+    actions = rec.get("actions", [])
+    for a in actions:
+        if a.get("exec_text"):   # exactly what OK writes (execute.freeze): shown whole up to 300 characters
+            text = str(a["exec_text"]).strip()
+            return "コメント: " + (text if len(text) <= 300 else text[:299] + "…（全文は 詳細）")
+    for a in actions:
+        field = writer_mod.FIELD.get(a.get("type"))
+        if field and a.get("type") != "ado.create" and str(a.get(field) or "").strip():
+            return "案: " + _clip(a[field], 120)
+    creates = [a for a in actions if a.get("type") == "ado.create" and a.get("title")]
+    if creates:
+        return "起票案: " + _clip(creates[0]["title"], 60) + (f" ほか {len(creates) - 1} 件" if len(creates) > 1 else "")
+    return ""
+
+
 def format_post(n, rec, full=None):
-    """`full` is the full text kept while the item waits (fulltext.load): the post then shows it and the earlier messages."""
+    """The approval post "[kimeru #N]": at most 5 short lines. Everything else (the source text, the memo, every draft, the
+    revision, the kinds of action) is in the answer to `詳細 N` (format_detail). `full` is not shown here."""
+    from . import execute
+    memo = rec.get("memo") or {}
+    plan = rec.get("plan") or {}
+    actions = rec.get("actions", [])
+    drafts = [a for a in actions if a.get("drafted_by")]
+    update = "（更新）" if int(rec.get("revision") or 1) > 1 else ""
+    lines = [f"[kimeru #{n}] {update}{_who(rec)}"]
+    if str(rec.get("event_kind") or "").startswith("ado.") and any(a.get("type") == "ado.comment" for a in actions) and not memo:
+        proposal = "情報不足: 追記依頼のコメント案あり"
+    else:
+        proposal = memo.get("next") or rec.get("advice") or plan.get("summary") or "内容を確認してください"
+    lines.append("→ " + _clip(proposal, 100))
+    draft = _draft_line(rec)
+    if draft:
+        lines.append(draft)
+    link = next((l for l in ado_lines(rec) if l.startswith("リンク: ")), "")
+    if link:
+        lines.append(link[len("リンク: "):])
+    rf = rec.get("read_full") or {}
+    if rf.get("state") == "preview_only":
+        lines.append("⚠ プレビューだけで判断しました（元のメッセージを Teams で確認）")
+    if rf.get("note"):   # the chat that was open could not be put back (also when nothing could be read)
+        lines.append("⚠ " + _clip(rf["note"], 100))
+    if rec.get("writer_error"):
+        lines.append(f"⚠ {writer_mod.writer_label(rec)} の下書きを作れなかったため定型文です")
+    elif any(a.get("writer_warning") for a in actions):
+        lines.append(f"⚠ {writer_mod.writer_label(rec)} の下書きの一部は定型文です（詳細 {n}）")
+    if rec.get("memo_unverified") or any(a.get("unverified") for a in drafts):
+        lines.append(f"⚠ 元の材料に無い日付・数値あり（詳細 {n}）")
+    if rec.get("redraft_note"):
+        lines.append("⚠ " + _clip(rec["redraft_note"], 100))
+    writes = [a for a in actions if a.get("exec_text")]
+    if writes:   # where it will be written: the organization and the project it was pulled from (execute.freeze)
+        tg = writes[0].get("exec_origin") or writes[0].get("exec_target") or {}
+        where = f"（{tg['org']} / {tg['project']}）" if tg.get("org") and tg.get("project") else ""
+        lines.append(f"OK で ADO{where}の #{writes[0].get('id')} にコメントを書きます（上の文面そのまま）")
+    elif any(a.get("exec_skip") for a in actions):
+        lines.append("OK は記録だけです（ADO の取り込み元が記録されていません）")
+    if rec.get("copilot_request"):
+        lines.append(f"↓ 次の投稿を Copilot に貼り、返った文面を 1 行で「下書き {n} 〈文面〉」と返信")
+    reply = f"OK {n} / NG {n}"
+    if drafts:
+        reply += f" / 修正 {n} <点>"
+    if any(a.get("ask_back") for a in drafts):
+        reply += f" / 聞き返し {n}"
+    lines.append(reply + f" / 詳細 {n}")
+    return "\n".join(lines)
+
+
+def format_detail(n, rec, full=None):
+    """The full text of an item ("[kimeru 詳細 #N]", the answer to `詳細 N`). `full` is the full text kept while the item waits
+    (fulltext.load): the post then shows it and the earlier messages."""
     from . import execute
     ev = rec.get("event_kind", "")
     memo = rec.get("memo") or {}
@@ -258,7 +370,7 @@ def format_post(n, rec, full=None):
         else:
             effects.append("記録のみ")
     revision = rec.get("revision", 1)
-    lines = [f"[kimeru #{n}] 判断が必要（{rec.get('graph')}） / 改訂 {revision}",
+    lines = [f"[kimeru 詳細 #{n}] 判断が必要（{rec.get('graph')}） / 改訂 {revision}",
              f"判断: {advice}", "次の一手: " + (next_action or no_memo),
              "不足情報: " + (" / ".join(str(v) for v in missing) if missing else ("メモに記載なし" if memo else no_memo)),
              "OK の効果: " + ("; ".join(dict.fromkeys(effects)) if effects else "記録のみ"),
@@ -765,7 +877,7 @@ def toast_text(out, posted, notices, unposted=0):
 
 
 ACK = {"approved": "承認", "rejected": "却下", "held": "保留", "ask_back": "聞き返し",
-       "redrafted": "書き直し", "redraft_failed": "書き直せず", "redo": "再実行", "redo_ignored": "再実行（無視: 古い回数）", "redo_ahead": "再実行（回数が大きすぎます。その回数の結果が出たら 1 回だけ効きます）", "redo_malformed": "再実行（形が違います）", "closed": "済（閉じました）",
+       "redrafted": "書き直し", "redraft_failed": "書き直せず", "redo": "再実行", "redo_ignored": "再実行（無視: 古い回数）", "redo_ahead": "再実行（回数が大きすぎます。その回数の結果が出たら 1 回だけ効きます）", "redo_malformed": "再実行（形が違います）", "closed": "済（閉じました）", "detail": "詳細を返信",
        "reposted": "文面を確認して OK し直してください"}
 
 
@@ -790,21 +902,18 @@ def show_toast(title, body):
 
 
 def format_notice(rec):
-    lines = [f"[kimeru 通知] 自動で決定しました（{rec.get('graph')}）"]
-    if rec.get("summary"):
-        lines.append(f"元: {str(rec['summary'])[:200]}")
-    lines.extend(ado_lines(rec))
-    if rec.get("advice"):
-        lines.append(f"内容: {rec['advice']}")
-    ran = [e["action"].get("type", "?") for e in rec.get("executed", [])]
-    if ran:
-        lines.append("記録した行動: " + ", ".join(ran) + "（現在は記録のみ）")
+    """A notice of an automatic decision, at most 4 lines: what it is about, what was done, a link."""
+    kind = str(rec.get("event_kind") or "")
+    what = _clip(_ado_label(rec), 80) if kind.startswith("ado.") else _clip(rec.get("summary") or rec.get("advice") or kind, 80)
+    lines = [f"[kimeru 通知] {what}"]
+    ran = list(dict.fromkeys(WHAT_RAN.get(e["action"].get("type"), "記録") for e in rec.get("executed", [])))
+    note = _clip(rec["advice"], 120) if rec.get("advice") else "自動で決定しました"
+    lines.append("→ " + note + (f"（記録: {', '.join(ran)}）" if ran else ""))
+    link = next((l for l in ado_lines(rec) if l.startswith("リンク: ")), "")
+    if link:
+        lines.append(link[len("リンク: "):])
     if rec.get("needs_human"):   # the same item also waits in its own numbered post (a draft to approve)
-        lines.append("文面の下書きは、番号付きの投稿で承認を待っています")
-    elif str(rec.get("event_kind") or "").startswith("ado.") and rec.get("advice"):
-        lines.append("判断は ADO 側で進めてください。この通知に返信しても何も起きません")   # the advice asks for a decision
-    else:
-        lines.append("返信は不要です")
+        lines.append("下書きは別の投稿で承認待ちです")
     return "\n".join(lines)
 
 
@@ -988,8 +1097,10 @@ def fresh_entries(read, x_boundary=True):
     tl = scoped_timeline(read)
     if tl is None:  # older bridge without ordering
         return [(line, 0) for line in read.get("replies", [])]
-    last_post, last_result = {}, {}
+    last_post, last_result, last_detail = {}, {}, {}
     for i, e in enumerate(tl):
+        if e.startswith("D:"):   # a detail post "[kimeru 詳細 #N]": it answers the `詳細 N` replies above it, and nothing else
+            last_detail[e[2:]] = i
         x = parse_result_entry(e)
         if e.startswith("P:") or (x_boundary and x):   # "X:N:k" is a result post ("[kimeru 実行 #N k]"): a reply before it is answered
             last_post[x[0] if x else e[2:]] = i
@@ -1010,6 +1121,9 @@ def fresh_entries(read, x_boundary=True):
             r = parse_reply(e[2:]) or parse_redraft(e[2:]) or parse_paste(e[2:])
             num = r and (r[1] if r[0] in STATUS else r[0])
             if num and i > last_post.get(num, len(tl)):
+                r0 = parse_reply(e[2:])
+                if r0 and r0[0] == "詳細" and i < last_detail.get(num, -1):
+                    continue   # answered already
                 out.append((e[2:], top.get(num, 0)))
     return out
 
@@ -1413,6 +1527,13 @@ def _collect(out, bridge, writer=None, real=False, send=False):
                 redo_done.add(num)
                 continue
             run_redo(num, it)
+            continue
+        if word == "詳細":   # the full text of the item, once per reply (the detail post is the boundary: fresh_entries); no decision is made
+            if it and it["posted"] and num not in redo_done:   # (redo_done doubles as "handled this step" for the numbers asked about)
+                redo_done.add(num)
+                from . import fulltext
+                post(format_detail(int(num), it["record"], fulltext.load(out, it["key"])))
+                changes.append({"id": int(num), "status": "detail"})
             continue
         if word == "済":   # the PM saw the comment in ADO: what was not known is closed
             if real and it and it["status"] == "approved" and execute.close_unknown(out, ap, int(num), it):

@@ -2,8 +2,10 @@
 (not as one post each), and every ADO post / notice names the work item (id, type, title, creator, link)."""
 try:   # isolation from the real state folder, whichever way the tests are started
     from . import isolate  # noqa: F401
+    from .isolate import detail_of
 except ImportError:
     import isolate  # noqa: F401
+    from isolate import detail_of
 try:
     from . import hidden_words
 except ImportError:
@@ -81,13 +83,21 @@ class TestInfoRequestIsQueued(Base):
         bridge = Bridge()
         notify.notify(self.out, bridge, send=True, real=True)
         post = bridge.posts[0]
-        for needle in ("#501", "Task", "レビュー指摘の修正", "山田 太郎",
+        for needle in ("#501", "Task", "レビュー指摘の修正", "情報不足: 追記依頼のコメント案あり",
                        "https://dev.azure.com/contoso-not-real/Proj%20A/_workitems/edit/501",
                        "着手に必要な情報が不足しています"):
             self.assertIn(needle, post)
-        self.assertIn("記録のみ", post)                              # OK N writes nothing unless ado.comment is switched on
+        self.assertLessEqual(len(post.splitlines()), 6)
+        self.assertNotIn("記録のみ", post)                           # OK N writes nothing unless ado.comment is switched on; the short post says nothing then
+        self.assertNotIn("OK で ADO にコメントを書きます", post)
+        for word in ("workitem-intake", "改訂", "ado.comment", "ado.update"):
+            self.assertNotIn(word, post)
         self.assertNotIn("判断の詳細は以下を確認してください", post)
         self.assertEqual(hidden_words.found(post), [])
+        detail = detail_of(self.out)                                # the answer to `詳細 1` has the rest
+        for needle in ("山田 太郎", "記録のみ", "ado.comment"):
+            self.assertIn(needle, detail)
+        self.assertTrue(detail.startswith("[kimeru 詳細 #1]"))
 
     def test_no_link_without_an_origin(self):
         self.run_one(workitem(502, "Task", "出所なし", origin=None), answers(ready=0.1))
@@ -163,16 +173,22 @@ class TestNotice(Base):
         r = self.run_one(workitem(701, "Bug", "請求書 PDF が生成されない", ac="生成されること"), answers(ready=0.9, score=2.0))
         self.assertTrue(r["notify"])
         text = notify.format_notice(rows(self.out, "notices.jsonl")[0])
-        for needle in ("#701", "Bug", "請求書 PDF が生成されない", "山田 太郎",
+        for needle in ("#701", "Bug", "請求書 PDF が生成されない",
                        "https://dev.azure.com/contoso-not-real/Proj%20A/_workitems/edit/701"):
             self.assertIn(needle, text)
         self.assertIn("判断", text)
-        self.assertNotIn("返信は不要です", text)                     # the advice asks for a decision
+        self.assertLessEqual(len(text.splitlines()), 4)
+        self.assertTrue(text.startswith("[kimeru 通知] "))
+        self.assertNotIn("返信は不要です", text)                     # no boilerplate
         self.assertEqual(hidden_words.found(text), [])
 
     def test_the_teams_notice_is_unchanged(self):
         rec = {"graph": "g", "event_kind": "teams.chat", "event_id": "1", "summary": "a: b", "advice": "x", "executed": []}
-        self.assertTrue(notify.format_notice(rec).endswith("返信は不要です"))
+        text = notify.format_notice(rec)
+        self.assertEqual(text.splitlines()[0], "[kimeru 通知] a: b")
+        self.assertEqual(text.splitlines()[1], "→ x")
+        self.assertNotIn("返信は不要です", text)
+        self.assertNotIn("g", text.splitlines()[0])                   # the graph name is not shown
 
 
 if __name__ == "__main__":

@@ -192,6 +192,28 @@ function Collapse-MessageRows([object[]]$rows, [int]$count = 100) {
 function Test-MeaningfulTextMatch([string]$left, [string]$right) {
   (Normalize-MeaningfulText $left) -ceq (Normalize-MeaningfulText $right)
 }
+function Test-PostedTextMatch([string]$sent, [string]$visible) {
+  # a posted message as the message list reads it back. Newer Teams builds wrap the text for screen readers:
+  # "<your name> 送信済み <the text> 今日の 10:33." (or "Sent ... Today at 10:33."). The text we sent must be there whole,
+  # starting with its "[kimeru" marker, with at most a short label before it and a short time after it
+  $a = Normalize-MeaningfulText $sent
+  $b = Normalize-MeaningfulText $visible
+  if ($a -ceq $b) { return $true }
+  if (-not $a.StartsWith('[kimeru') -or $a.Length -lt 8) { return $false }
+  $i = $b.IndexOf($a, [StringComparison]::Ordinal)
+  if ($i -lt 0 -or $i -gt 80) { return $false }
+  $before = $b.Substring(0, $i)
+  if ($before.Contains('[kimeru')) { return $false }
+  ($b.Length - $i - $a.Length) -le 60
+}
+function Get-AnchorIds($messages, [int]$keep = 3) {
+  # the newest messages on screen before a send: they must still be there afterwards (same chat, still at the bottom).
+  # Not every message: newer Teams builds drop the oldest rendered messages when a long post arrives, which made every
+  # readback of a long post fail although it was delivered
+  $ids = New-Object 'System.Collections.Generic.HashSet[string]'
+  foreach ($m in @(@($messages) | Select-Object -Last $keep)) { if ([string]$m.message_id) { [void]$ids.Add([string]$m.message_id) } }
+  ,$ids
+}
 function Find-NewMatchingMessage($messages, [string]$text, $priorIds, [int]$priorCount = 0, $priorAllIds = $null) {
   if ($priorAllIds) {
     $currentIds = New-Object 'System.Collections.Generic.HashSet[string]'
@@ -199,9 +221,9 @@ function Find-NewMatchingMessage($messages, [string]$text, $priorIds, [int]$prio
     foreach ($id in $priorAllIds) { if (-not $currentIds.Contains([string]$id)) { return @{ matched = $false; message_id = '' } } }
   }
   $matches = @($messages | Where-Object {
-    (Test-MeaningfulTextMatch $text ([string]$_.text)) -and -not $priorIds.Contains([string]$_.message_id)
+    (Test-PostedTextMatch $text ([string]$_.text)) -and -not $priorIds.Contains([string]$_.message_id)
   })
-  $matchingCount = @($messages | Where-Object { Test-MeaningfulTextMatch $text ([string]$_.text) }).Count
+  $matchingCount = @($messages | Where-Object { Test-PostedTextMatch $text ([string]$_.text) }).Count
   if ($matchingCount -gt $priorCount -and $matches.Count -eq 1 -and $matches[0].message_id) {
     return @{ matched = $true; message_id = [string]$matches[0].message_id }
   }
@@ -416,9 +438,18 @@ function Test-SelfTitleStrict($w) {
   # writes only (paste, delete, send): the window title names the learned display name exactly (case-sensitive)
   # followed by the self marker. Any "(You)" / "(自分)" chat of a colleague with a similar name does not pass.
   if (-not $w) { return $false }
+  if (Test-SelfHeader $w) { return $true }
   $n = Get-SelfName
   if (-not $n) { return $false }
   [bool]($w.Current.Name -cmatch ("\| " + [regex]::Escape($n) + " $SELF \|"))
+}
+function Test-SelfHeader($w) {
+  # newer Teams builds keep "チャット | Microsoft Teams" as the window title whatever chat is open; the header of the open
+  # chat carries the chat id instead: "chat-header-48:notes" is the self chat's fixed id, which no colleague's chat has
+  if (-not $w) { return $false }
+  $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'chat-header-48:notes')
+  $h = $w.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
+  [bool]($h -and $h.Current.BoundingRectangle.Height -gt 0)
 }
 function Ensure-Learned($w) {
   # the self chat was just opened through its fixed id (48:notes) or its title says so: remember the display
@@ -991,16 +1022,17 @@ if ($Action -eq 'send') {
   if (-not (Test-SelfTitleStrict $beforeWindow)) { Fail 'the window title changed before the self-chat readback baseline; nothing sent' }
   # Leave one slot for the message we expect to add; otherwise a 100-item window
   # would always evict its oldest prior ID on a successful send.
-  $priorMessages = @(Get-ChatMessages $beforeWindow 99).messages
-  $priorIds = New-Object 'System.Collections.Generic.HashSet[string]'
-  $priorAllIds = New-Object 'System.Collections.Generic.HashSet[string]'
-  $priorCount = 0
-  foreach ($old in $priorMessages) {
-    [void]$priorAllIds.Add([string]$old.message_id)
-    if (Test-MeaningfulTextMatch ([string]$old.text) $Text) { $priorCount++; [void]$priorIds.Add([string]$old.message_id) }
+  $baseMessages = @(Get-ChatMessages $beforeWindow 99).messages
+  $baseIds = New-Object 'System.Collections.Generic.HashSet[string]'
+  $baseAllIds = New-Object 'System.Collections.Generic.HashSet[string]'
+  $baseCount = 0
+  foreach ($old in $baseMessages) {
+    [void]$baseAllIds.Add([string]$old.message_id)
+    if (Test-PostedTextMatch $Text ([string]$old.text)) { $baseCount++; [void]$baseIds.Add([string]$old.message_id) }
   }
+  $baseAllIds = Get-AnchorIds $baseMessages
   $how = Send-Box $w
-  $readback = Find-PostedReadback $Text $priorIds $priorCount $priorAllIds
+  $readback = Find-PostedReadback $Text $baseIds $baseCount $baseAllIds
   if ($readback.matched) { $script:DeliverySent = $true }
   Out-Json @{ ok = $true; typed = $script:DeliveryTyped; sent = (Get-SentEvidence); via = $how; readback = $readback }; exit 0
 }
@@ -1062,21 +1094,22 @@ if ($Action -eq 'post') {
       Fail ("compose box does not hold exactly the planned text ($shape); not sent" +
             $(if ($cleared) { '; the pasted text was removed again' } else { '; clear the box in Teams and retry' }))
     }
-    $priorIds = New-Object 'System.Collections.Generic.HashSet[string]'
-    $priorAllIds = New-Object 'System.Collections.Generic.HashSet[string]'
+    $baseIds = New-Object 'System.Collections.Generic.HashSet[string]'
+    $baseAllIds = New-Object 'System.Collections.Generic.HashSet[string]'
     $beforeWindow = Get-TeamsWindow
     if (-not (Test-SelfTitleStrict $beforeWindow)) { Fail 'the window title changed before the self-chat readback baseline; nothing sent' }
-    $priorMessages = @(Get-ChatMessages $beforeWindow 99).messages
-    $priorCount = 0
-    foreach ($old in $priorMessages) {
-      [void]$priorAllIds.Add([string]$old.message_id)
-      if (Test-MeaningfulTextMatch ([string]$old.text) $Text) {
-        $priorCount++
-        [void]$priorIds.Add([string]$old.message_id)
+    $baseMessages = @(Get-ChatMessages $beforeWindow 99).messages
+    $baseCount = 0
+    foreach ($old in $baseMessages) {
+      [void]$baseAllIds.Add([string]$old.message_id)
+      if (Test-PostedTextMatch $Text ([string]$old.text)) {
+        $baseCount++
+        [void]$baseIds.Add([string]$old.message_id)
       }
     }
+    $baseAllIds = Get-AnchorIds $baseMessages
     [void](Send-Box $w); $sent = Get-SentEvidence
-    $readback = Find-PostedReadback $Text $priorIds $priorCount $priorAllIds
+    $readback = Find-PostedReadback $Text $baseIds $baseCount $baseAllIds
     if ($readback.matched) { $script:DeliverySent = $true; $sent = $true }
   }
   Out-Json @{ ok = $true; typed = $typed; sent = $sent; readback = $readback }; exit 0

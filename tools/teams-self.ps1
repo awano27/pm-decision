@@ -45,6 +45,10 @@ param(
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms
+# UI Automation reports physical pixels; a process that is not DPI aware moves the mouse in scaled pixels, so on a 150 %
+# display every click (the compose box, a chat entry) landed elsewhere and the paste went nowhere
+Add-Type -Namespace KI -Name Dpi -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();'
+[void][KI.Dpi]::SetProcessDPIAware()
 $A = [System.Windows.Automation.AutomationElement]
 $CT = [System.Windows.Automation.ControlType]
 $markers = @('あなた', '自分', 'You', 'Me')
@@ -465,6 +469,7 @@ function Test-SelfOpen($w) {
   # 48:notes entry reporting IsSelected (some list layouts report no selection at all)
   if (-not $w) { return $false }
   if (Test-SelfTitle $w) { return $true }
+  if (Test-SelfHeader $w) { return $true }   # newer Teams: no chat name in the title, the header carries 48:notes
   [bool](@(Get-NotesItems $w | Where-Object { Test-SelectedUp $_ }).Count)
 }
 function Get-SelectedKinds($w) {

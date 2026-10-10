@@ -696,8 +696,9 @@ def delivery_show(out, kind, target):
     return None
 
 
-def deliver_brief(out, bridge, text, send, date):
-    """Post a brief with the same explicit delivery evidence and recovery hold used by daily."""
+def deliver_brief(out, bridge, text, send, date, built_at=None):
+    """Post a brief with the same explicit delivery evidence and recovery hold used by daily. `built_at` (ISO, UTC): when the
+    brief was put together; it is kept as `brief_at` so that the next brief counts what happened since then."""
     if not send:
         bridge.post(text, False)
         return {"status": "pasted"}
@@ -712,7 +713,7 @@ def deliver_brief(out, bridge, text, send, date):
         if state.get("brief_date") == date:
             return {"status": "already_delivered"}
         at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        state["brief_delivery_unknown"] = {"date": date, "at": at, "revision": date,
+        state["brief_delivery_unknown"] = {"date": date, "at": at, "revision": date, "built_at": built_at or at,
                                            "part": "brief", "identity": date, "body": text, "text": text}
         fsutil.write_atomic(state_path, json.dumps(state, ensure_ascii=False))
         state_path.with_name(state_path.name + ".bak").unlink(missing_ok=True)
@@ -724,6 +725,7 @@ def deliver_brief(out, bridge, text, send, date):
             error_data = result
         if _delivered(result, True):
             state["brief_date"] = date
+            state["brief_at"] = built_at or at
             state.pop("brief_delivery_unknown", None)
             fsutil.write_atomic(state_path, json.dumps(state, ensure_ascii=False))
             state_path.with_name(state_path.name + ".bak").unlink(missing_ok=True)
@@ -814,6 +816,7 @@ def confirm_delivery(out, kind, target, confirm_delivered=False, source="user_co
             pending = state.pop("brief_delivery_unknown", None)
             if isinstance(pending, dict):
                 state["brief_date"] = pending.get("date")
+                state["brief_at"] = pending.get("built_at") or pending.get("at")
                 fsutil.write_atomic(state_path, json.dumps(state, ensure_ascii=False))
                 state_path.with_name(state_path.name + ".bak").unlink(missing_ok=True)
                 changed = True

@@ -73,7 +73,7 @@ class Base(unittest.TestCase):
 class TestInfoRequestIsQueued(Base):
     def test_queued_without_writer_or_execute(self):
         r = self.run_one(workitem(501, "Task", "レビュー指摘の修正"), answers(ready=0.1))
-        self.assertEqual(r["node"], "request_info")
+        self.assertEqual(r["node"], "request_info_ac")
         self.assertTrue(r["needs_human"])
         self.assertEqual([x["event_id"] for x in rows(self.out, "queue.jsonl")], ["501"])
         self.assertEqual(rows(self.out, "notices.jsonl"), [])      # a queued post, not a second notice

@@ -27,6 +27,9 @@ Every path must end in decide or advise, and every judge must have an `unsure`
 route, so a low-confidence judgment always degrades to advice instead of guessing.
 A malformed judge answer takes the same `unsure` route.
 
+A result reached through an unsure answer carries "via_unsure": [node ids]; when it also asked nobody (no notice, no
+confirmation) the morning brief lists it so that the PM can check it.
+
 A graph may set "severe": {"field", "pattern", "exempt": [node ids]}. When the event field matches (e.g.
 severity Sev0/Sev1), every outcome outside `exempt` reaches the PM: a decide is notified, an advise is queued,
 whichever path the model's answers took.
@@ -391,6 +394,9 @@ def run(g, event, backend, state=None, playbooks=None, batch=None):
                 out["notify" if n["kind"] == "decide" else "needs_human"] = True
             if plan:
                 out["plan"] = plan
+            unsure = [t["node"] for t in trace if t.get("edge") == "unsure"]
+            if unsure:   # reached through an answer the model was unsure of: the brief lists it when nobody was asked (brief.unsure_section)
+                out["via_unsure"] = unsure
             return {"graph": g["name"], "event_id": event.get("id"), "event_kind": event.get("kind"),
                     "path": trace, **out}
         if n["kind"] == "match":

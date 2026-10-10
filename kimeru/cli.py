@@ -71,10 +71,10 @@ SAVE_FAILED = {"state": "preview_only", "why": "全文を保存できなかっ�
 
 
 EVENT_KEEP = ("kind", "id", "author", "text", "item", "meeting", "title", "description", "work_item_type",
-              "repro_steps", "type", "created_by", "rule", "severity", "condition", "mentions_me", "context", "date", "chat_id", "chat_title", "origin")
+              "repro_steps", "acceptance_criteria", "test_steps", "area", "type", "created_by", "rule", "severity", "condition", "mentions_me", "context", "date", "chat_id", "chat_title", "origin")
 
 
-EVENT_TEXT = ("text", "description", "repro_steps", "item", "title", "meeting", "condition", "context")   # free text: cut in the records
+EVENT_TEXT = ("text", "description", "repro_steps", "acceptance_criteria", "test_steps", "item", "title", "meeting", "condition", "context")   # free text: cut in the records
 EVENT_TEXT_SUMMARY = 120     # what the records kept before the event was recorded at all: the length of `summary`
 EVENT_TEXT_FULL = 2000       # with the setting record_event_full=1
 
@@ -783,12 +783,14 @@ def _main(argv=None):
 
     if a.cmd == "brief":
         from . import brief as br
-        text, _ = br.build(out, _backend(a.backend, a.model), top=a.top)
+        built_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        since = fsutil.read_json(out / "daily_state.json", {}).get("brief_at")   # unknown: the last 24 hours
+        text, _ = br.build(out, _backend(a.backend, a.model), top=a.top, since=since)
         print(text)
         if a.post:
             from . import notify as nt
             delivery = nt.deliver_brief(out, nt.PowerShellBridge(), text, a.send,
-                                        datetime.now().astimezone().date().isoformat())
+                                        datetime.now().astimezone().date().isoformat(), built_at=built_at)
             status = delivery["status"]
             if status == "delivered":
                 print("sent (verified self-chat readback)")

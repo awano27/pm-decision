@@ -178,23 +178,47 @@ def not_put_back(out, now=None, days=1):
 
 
 ADO_LIST_MAX = 5   # work items named in the brief; the rest are counted
+MAX_WINDOW_DAYS = 7   # "since the last brief" never reaches back further than this (a brief that was off for weeks)
+
+
+def window_start(now=None, days=1, since=None):
+    """(start, known) of the window the automatic sections count: `since` (the last brief's time, from daily_state) when it is
+    known, else `days` days back. A `since` in the future or unreadable is not trusted; one older than a week is cut to a week."""
+    now = now or datetime.now(timezone.utc)
+    if since is not None:
+        try:
+            if isinstance(since, str):
+                since = datetime.fromisoformat(since)
+            if since.tzinfo is None:
+                since = since.astimezone()
+            if since <= now:
+                return max(since, now - timedelta(days=MAX_WINDOW_DAYS)), True
+        except (TypeError, ValueError):
+            pass
+    return now - timedelta(days=days), False
+
+
+def _window_name(known, days):
+    return "前回のまとめ以降" if known else f"直近 {days * 24} 時間"
+
+
+ADO_NODE_LABEL = {"record_only": "記録のみ"}   # Epic / Feature: recorded, no priority proposed
 
 
 def _ado_outcome(rec):
-    """"P2" for a decision that set priority 2, else the node's name."""
+    """"P2" for a decision that set priority 2, "記録のみ" for an Epic / Feature, else the node's name."""
     for a in rec.get("actions") or []:
         n = (a.get("fields") or {}).get("Microsoft.VSTS.Common.Priority")
         if n:
             return f"P{n}"
-    return str(rec.get("node") or "?")
+    return ADO_NODE_LABEL.get(rec.get("node"), str(rec.get("node") or "?"))
 
 
-def ado_auto(out, now=None, days=1):
+def ado_auto(out, now=None, days=1, since=None):
     """Work items the graph decided by itself in the last `days` day(s), with nothing for the PM to answer (no confirmation, no
     notice): [{id, type, title, outcome}], one per work item (the latest judgment), newest first. A decision that waits in a
     numbered post, or was notified, is shown there and not here."""
-    now = now or datetime.now(timezone.utc)
-    since = now - timedelta(days=days)
+    since, _ = window_start(now, days, since)
     seen, found = set(), []
     for rec in reversed(_rows(Path(out) / "decisions.jsonl")):
         if rec.get("event_kind") != "ado.workitem.created" or rec.get("outcome") != "decide":
@@ -204,21 +228,23 @@ def ado_auto(out, now=None, days=1):
         if rec.get("event_id") in seen:
             continue
         seen.add(rec.get("event_id"))
+        if rec.get("via_unsure"):   # listed under "迷って自動で決めた件" instead
+            continue
         ev = rec.get("event") or {}
         found.append({"id": rec.get("event_id"), "type": ev.get("type"), "title": ev.get("title"), "outcome": _ado_outcome(rec)})
     return found
 
 
-def ado_section(out, now=None, days=1):
+def ado_section(out, now=None, days=1, since=None):
     """The brief's lines for `ado_auto`: counts per outcome, a few "#id [type] title → P2" lines, then "ほか N 件". "" when none."""
-    rows = ado_auto(out, now=now, days=days)
+    rows = ado_auto(out, now=now, days=days, since=since)
     if not rows:
         return ""
     from . import graph
     counts = {}
     for r in rows:
         counts[r["outcome"]] = counts.get(r["outcome"], 0) + 1
-    lines = [f"ADO の自動判断（直近 24 時間）: {len(rows)} 件（" + " / ".join(f"{k} {v} 件" for k, v in sorted(counts.items())) + "）"]
+    lines = [f"ADO の自動判断（{_window_name(window_start(now, days, since)[1], days)}）: {len(rows)} 件（" + " / ".join(f"{k} {v} 件" for k, v in sorted(counts.items())) + "）"]
     for r in rows[:ADO_LIST_MAX]:
         lines.append(f"・#{r['id']}" + (f" [{r['type']}]" if r.get("type") else "")
                      + (" " + graph.one_line(str(r["title"])) if r.get("title") else "") + f" → {r['outcome']}")
@@ -230,12 +256,11 @@ def ado_section(out, now=None, days=1):
 TEAMS_OUTCOME = {"log_fyi": "返信不要", "reply_status": "状況の自動返信"}
 
 
-def teams_section(out, now=None, days=1):
+def teams_section(out, now=None, days=1, since=None):
     """Teams chats the graph settled by itself in the last `days` day(s) (a thanks or an OK recorded as FYI, a status question
     answered with the fixed reply): one line with the counts and up to five chat names. Nothing went to the PM for these,
     so this is where the PM sees that they were not lost. "" when none."""
-    now = now or datetime.now(timezone.utc)
-    since = now - timedelta(days=days)
+    since, known = window_start(now, days, since)
     seen, counts, names = set(), {}, []
     for rec in reversed(_rows(Path(out) / "decisions.jsonl")):
         if rec.get("event_kind") != "teams.chat" or rec.get("outcome") != "decide" or rec.get("node") not in TEAMS_OUTCOME:
@@ -254,12 +279,53 @@ def teams_section(out, now=None, days=1):
     if not counts:
         return ""
     total = sum(counts.values())
-    return (f"Teams の自動判断（直近 24 時間）: {total} 件（" + " / ".join(f"{k} {v} 件" for k, v in sorted(counts.items())) + "）"
+    return (f"Teams の自動判断（{_window_name(known, days)}）: {total} 件（" + " / ".join(f"{k} {v} 件" for k, v in sorted(counts.items())) + "）"
             + (f": {'、'.join(names[:ADO_LIST_MAX])}{' ほか' if len(names) > ADO_LIST_MAX else ''}" if names else ""))
 
 
-def build(out, backend, top=3, now=None, date=None):
-    """now: aware datetime for the collection window; date: "YYYY-MM-DD" shown in the header."""
+UNSURE_LIST_MAX = 5
+UNSURE_KIND = {"teams.chat": "Teams", "monitor.alert": "アラート", "ado.workitem.created": "ADO", "meeting.item": "議事録"}
+UNSURE_NODE = {"task_internal": "アラートの確認タスクにした", "ask_owner": "担当・期限を確認する扱いにした",
+               "risk_item": "リスクとして記録した", "record_only": "記録のみにした"}
+
+
+def unsure_auto(out, now=None, days=1, since=None):
+    """Results that were reached through an answer the model was unsure of and that asked nobody (no confirmation, no notice):
+    [{id, kind, line}], one per event (the latest judgment), newest first. They are decided, but the PM may want to check them."""
+    from . import graph
+    since, _ = window_start(now, days, since)
+    seen, found = set(), []
+    for rec in reversed(_rows(Path(out) / "decisions.jsonl")):
+        if not rec.get("via_unsure") or rec.get("outcome") != "decide" or rec.get("needs_human") or rec.get("notify"):
+            continue
+        if not rec.get("at") or datetime.fromisoformat(rec["at"]) < since:
+            continue
+        key = (rec.get("graph"), rec.get("event_id"))
+        if key in seen:
+            continue
+        seen.add(key)
+        kind = rec.get("event_kind")
+        what = UNSURE_NODE.get(rec.get("node")) or (f"{_ado_outcome(rec)} にした" if kind == "ado.workitem.created" else "")
+        found.append({"id": rec.get("event_id"), "kind": kind,
+                      "line": f"・{UNSURE_KIND.get(kind, '')} {graph.one_line(str(rec.get('summary') or rec.get('event_id')), 70)}".replace("・ ", "・")
+                              + (f" → {what}" if what else "")})
+    return found
+
+
+def unsure_section(out, now=None, days=1, since=None):
+    """"迷って自動で決めた件（確かめてください）" with up to five lines and "ほか N 件". "" when none."""
+    rows = unsure_auto(out, now=now, days=days, since=since)
+    if not rows:
+        return ""
+    lines = ["迷って自動で決めた件（確かめてください）"] + [r["line"] for r in rows[:UNSURE_LIST_MAX]]
+    if len(rows) > UNSURE_LIST_MAX:
+        lines.append(f"ほか {len(rows) - UNSURE_LIST_MAX} 件")
+    return "\n".join(lines)
+
+
+def build(out, backend, top=3, now=None, date=None, since=None):
+    """now: aware datetime for the collection window; date: "YYYY-MM-DD" shown in the header; since: when the last brief was
+    built (ISO text or datetime): the ADO / Teams / unsure sections count from there instead of the last 24 hours."""
     items = collect(out, now=now)
     ranked = rank(items, backend, top)
     pending = sum(1 for i in items if i["kind"] == "approval")
@@ -275,12 +341,15 @@ def build(out, backend, top=3, now=None, date=None):
     lost = not_put_back(out, now=now)
     if lost:
         text += f"\n⚠ 開いたチャットを元へ戻せなかった件が {lost} 件あります。Teams で開いているチャットを確認してください"
-    ado = ado_section(out, now=now)
+    ado = ado_section(out, now=now, since=since)
     if ado:
         text += "\n" + ado
-    teams = teams_section(out, now=now)
+    teams = teams_section(out, now=now, since=since)
     if teams:
         text += "\n" + teams
+    unsure = unsure_section(out, now=now, since=since)
+    if unsure:
+        text += "\n" + unsure
     # Progress is a local, explicit fact (or Unknown for legacy approvals). It is
     # appended separately and does not create another model/ranking call.
     if unfinished:

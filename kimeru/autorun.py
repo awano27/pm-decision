@@ -220,7 +220,7 @@ def build_report(out, since=None, until=None, now=None):
             outcome["通知"] += 1
         else:
             outcome["自動"] += 1
-        if r.get("node") == "request_info":
+        if str(r.get("node")).startswith("request_info"):
             info_req += 1
         if r.get("event_kind") == "ado.workitem.created" and r.get("outcome") == "decide" and not r.get("needs_human") and not r.get("notify"):
             code = brief_mod._ado_outcome(r)

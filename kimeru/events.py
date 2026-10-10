@@ -107,6 +107,25 @@ def monitor_alert(p):
     }]
 
 
+def _test_steps(raw):
+    """Microsoft.VSTS.TCM.Steps (XML: <step> with an action and an expected result, each rich text) -> numbered lines
+    "1. open the page -> the form shows". Steps without any text count as none. Text that is not that XML is read as HTML."""
+    raw = (raw or "")[:100000]
+    if not raw.strip():
+        return ""
+    try:
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(raw)
+    except Exception:
+        return _drop_template(_strip_html(raw))
+    lines = []
+    for st in root.iter("step"):
+        parts = [_strip_html("".join(e.itertext())).replace(chr(10), " ").strip() for e in st.findall("parameterizedString")]
+        if any(parts):
+            lines.append(f"{len(lines) + 1}. " + " -> ".join(x for x in parts if x))
+    return chr(10).join(lines)
+
+
 def ado_workitem_created(p):
     """Azure DevOps service hook `workitem.created`."""
     r = p.get("resource") or {}
@@ -126,6 +145,8 @@ def ado_workitem_created(p):
         "acceptance_criteria": _drop_template(_strip_html(f.get("Microsoft.VSTS.Common.AcceptanceCriteria") or "")),
         # where `pull ado` took it from ({"org", "project"}); a service-hook payload has none: nothing is written back to it
         "origin": p.get("kimeru_origin") if isinstance(p.get("kimeru_origin"), dict) else None,
+        # only a Test Case has steps; for any other item the key is absent (the judge sees no extra empty field)
+        **({"test_steps": steps} if (steps := _test_steps(f.get("Microsoft.VSTS.TCM.Steps"))) else {}),
     }]
 
 
@@ -234,7 +255,7 @@ def state_of(event):
     except ValueError:
         cap = 1200
     s = {k: v for k, v in event.items() if k not in JUDGE_HIDDEN}
-    for k in ("text", "description", "repro_steps", "acceptance_criteria"):   # the long ADO fields are cut like a chat text
+    for k in ("text", "description", "repro_steps", "acceptance_criteria", "test_steps"):   # the long ADO fields are cut like a chat text
         if isinstance(s.get(k), str) and len(s[k]) > cap:
             s[k] = s[k][:cap]
     return s

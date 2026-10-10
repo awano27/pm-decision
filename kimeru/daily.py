@@ -7,7 +7,7 @@ Each step is isolated: a failing step is logged and the cycle continues, so one
 broken source (e.g. Teams closed) does not stop the rest.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import actions, brief as brief_mod, config, events, fsutil, fulltext, graph, notify, pull, push
@@ -386,10 +386,11 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
             _log(out, {"step": "brief", "status": "delivery_unknown_hold"})
         else:
             def do_brief():
-                text, ranked = brief_mod.build(out, backend, date=today)
+                built_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                text, ranked = brief_mod.build(out, backend, date=today, since=st.get("brief_at"))   # unknown: the last 24 hours
                 if len(ranked) >= 2:   # a one-line day needs no summary, and an empty one must not invent one
                     text = _with_key_points(text)
-                result = notify.deliver_brief(out, bridge, text, send, today)
+                result = notify.deliver_brief(out, bridge, text, send, today, built_at=built_at)
                 status = result["status"]
                 if status in ("delivered", "pasted", "already_delivered"):
                     return len(ranked)

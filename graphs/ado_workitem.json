@@ -24,28 +24,9 @@
       },
       "routes": {
         "yes": "priority",
-        "no": "request_info",
+        "no": "info_steps",
         "unsure": "priority"
       }
-    },
-    "request_info": {
-      "kind": "decide",
-      "queue": true,
-      "advice": "情報が足りない起票 #{event.id}: 追記を依頼するコメントを書いてよいか",
-      "actions": [
-        {
-          "type": "ado.comment",
-          "id": "{event.id}",
-          "text": "着手に必要な情報が不足しています。受け入れ条件（Bugは再現手順と期待結果）を追記してください。— kimeru"
-        },
-        {
-          "type": "ado.update",
-          "id": "{event.id}",
-          "fields": {
-            "System.Tags": "kimeru;needs-info"
-          }
-        }
-      ]
     },
     "priority": {
       "kind": "judge",
@@ -192,7 +173,7 @@
       ],
       "routes": {
         "yes": "set_p1_critical",
-        "no": "has_ac",
+        "no": "plan_level",
         "mixed": "triage_pm"
       },
       "exclude": [
@@ -255,8 +236,138 @@
       ],
       "routes": {
         "yes": "priority",
+        "no": "has_steps"
+      }
+    },
+    "plan_level": {
+      "kind": "match",
+      "_comment": "Epic / Feature are planning items, not work to start: no readiness question and no priority proposal, only a record (listed in the morning brief). Bug / Task / User Story / PBI / Issue keep the information request and the priority question. A priority-1 Epic still reaches the PM through 'severe'.",
+      "fields": [
+        "type"
+      ],
+      "when": {
+        "type": "^[ ]*(epic|feature|エピック|フィーチャー)[ ]*$"
+      },
+      "patterns": [
+        "^"
+      ],
+      "routes": {
+        "yes": "record_only",
+        "no": "has_ac"
+      }
+    },
+    "record_only": {
+      "kind": "decide",
+      "actions": [
+        {
+          "type": "log.only"
+        }
+      ],
+      "advice": "記録のみ（Epic / Feature は優先度を付けません）: #{event.id} {event.title}"
+    },
+    "has_steps": {
+      "kind": "match",
+      "_comment": "Test Case: the steps (Microsoft.VSTS.TCM.Steps, read into test_steps) count like reproduction steps -> ready",
+      "fields": [
+        "test_steps"
+      ],
+      "patterns": [
+        "."
+      ],
+      "routes": {
+        "yes": "priority",
         "no": "ready"
       }
+    },
+    "info_steps": {
+      "kind": "match",
+      "_comment": "which information request to write: a Test Case lacks steps, a Bug lacks reproduction steps and an expected result, anything else lacks acceptance criteria",
+      "fields": [
+        "type"
+      ],
+      "when": {
+        "type": "test ?case|テスト ?ケース"
+      },
+      "patterns": [
+        "^"
+      ],
+      "routes": {
+        "yes": "request_info_steps",
+        "no": "info_bug"
+      }
+    },
+    "info_bug": {
+      "kind": "match",
+      "fields": [
+        "type"
+      ],
+      "when": {
+        "type": "bug|defect|バグ|不具合|欠陥"
+      },
+      "patterns": [
+        "^"
+      ],
+      "routes": {
+        "yes": "request_info",
+        "no": "request_info_ac"
+      }
+    },
+    "request_info": {
+      "kind": "decide",
+      "queue": true,
+      "advice": "情報が足りない起票（再現手順と期待結果が空） #{event.id}: 追記を依頼するコメントを書いてよいか",
+      "actions": [
+        {
+          "type": "ado.comment",
+          "id": "{event.id}",
+          "text": "着手に必要な情報が不足しています。再現手順と期待結果（期待する動作）が書かれていません。追記してください。— kimeru"
+        },
+        {
+          "type": "ado.update",
+          "id": "{event.id}",
+          "fields": {
+            "System.Tags": "kimeru;needs-info"
+          }
+        }
+      ]
+    },
+    "request_info_ac": {
+      "kind": "decide",
+      "queue": true,
+      "advice": "情報が足りない起票（受け入れ条件が空） #{event.id}: 追記を依頼するコメントを書いてよいか",
+      "actions": [
+        {
+          "type": "ado.comment",
+          "id": "{event.id}",
+          "text": "着手に必要な情報が不足しています。受け入れ条件（何ができれば完了か）が書かれていません。追記してください。— kimeru"
+        },
+        {
+          "type": "ado.update",
+          "id": "{event.id}",
+          "fields": {
+            "System.Tags": "kimeru;needs-info"
+          }
+        }
+      ]
+    },
+    "request_info_steps": {
+      "kind": "decide",
+      "queue": true,
+      "advice": "情報が足りない起票（テスト手順が空） #{event.id}: 追記を依頼するコメントを書いてよいか",
+      "actions": [
+        {
+          "type": "ado.comment",
+          "id": "{event.id}",
+          "text": "着手に必要な情報が不足しています。テスト手順（操作と期待結果）が書かれていません。追記してください。— kimeru"
+        },
+        {
+          "type": "ado.update",
+          "id": "{event.id}",
+          "fields": {
+            "System.Tags": "kimeru;needs-info"
+          }
+        }
+      ]
     }
   }
 }

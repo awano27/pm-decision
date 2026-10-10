@@ -189,7 +189,7 @@ class TestAdoComment(Base):
         self.enable()
         bridge = self.decide_and_post()
         shown = bridge.posts[0]
-        template = next(a for a in GRAPHS["ado.workitem.created"][0]["nodes"]["request_info"]["actions"] if a["type"] == "ado.comment")["text"]
+        template = next(a for a in GRAPHS["ado.workitem.created"][0]["nodes"]["request_info_ac"]["actions"] if a["type"] == "ado.comment")["text"]
         signed = execute.comment_text({"text": template})
         self.assertEqual(signed.count("kimeru"), 1)                  # one signature line: the fixed sentence's own sign-off is dropped
         self.assertIn(signed, shown)           # the approval post shows the full text, signature line included

@@ -227,6 +227,37 @@ def ado_section(out, now=None, days=1):
     return "\n".join(lines)
 
 
+TEAMS_OUTCOME = {"log_fyi": "返信不要", "reply_status": "状況の自動返信"}
+
+
+def teams_section(out, now=None, days=1):
+    """Teams chats the graph settled by itself in the last `days` day(s) (a thanks or an OK recorded as FYI, a status question
+    answered with the fixed reply): one line with the counts and up to five chat names. Nothing went to the PM for these,
+    so this is where the PM sees that they were not lost. "" when none."""
+    now = now or datetime.now(timezone.utc)
+    since = now - timedelta(days=days)
+    seen, counts, names = set(), {}, []
+    for rec in reversed(_rows(Path(out) / "decisions.jsonl")):
+        if rec.get("event_kind") != "teams.chat" or rec.get("outcome") != "decide" or rec.get("node") not in TEAMS_OUTCOME:
+            continue
+        if rec.get("needs_human") or rec.get("notify") or not rec.get("at") or datetime.fromisoformat(rec["at"]) < since:
+            continue
+        if rec.get("event_id") in seen:
+            continue
+        seen.add(rec.get("event_id"))
+        label = TEAMS_OUTCOME[rec["node"]]
+        counts[label] = counts.get(label, 0) + 1
+        ev = rec.get("event") or {}
+        name = str(ev.get("chat_title") or ev.get("author") or "").strip()[:30]
+        if name and name not in names:
+            names.append(name)
+    if not counts:
+        return ""
+    total = sum(counts.values())
+    return (f"Teams の自動判断（直近 24 時間）: {total} 件（" + " / ".join(f"{k} {v} 件" for k, v in sorted(counts.items())) + "）"
+            + (f": {'、'.join(names[:ADO_LIST_MAX])}{' ほか' if len(names) > ADO_LIST_MAX else ''}" if names else ""))
+
+
 def build(out, backend, top=3, now=None, date=None):
     """now: aware datetime for the collection window; date: "YYYY-MM-DD" shown in the header."""
     items = collect(out, now=now)
@@ -247,6 +278,9 @@ def build(out, backend, top=3, now=None, date=None):
     ado = ado_section(out, now=now)
     if ado:
         text += "\n" + ado
+    teams = teams_section(out, now=now)
+    if teams:
+        text += "\n" + teams
     # Progress is a local, explicit fact (or Unknown for legacy approvals). It is
     # appended separately and does not create another model/ranking call.
     if unfinished:

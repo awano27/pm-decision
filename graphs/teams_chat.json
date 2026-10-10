@@ -32,8 +32,26 @@
       ],
       "routes": {
         "yes": "incident_bug",
-        "no": "intent",
+        "no": "ack_only",
         "mixed": "ask_pm"
+      }
+    },
+    "ack_only": {
+      "kind": "match",
+      "_comment": "Kev answers 'fyi' for a bare thanks / OK / greeting, but with 0.2-0.5 confidence on a one-line preview, under the intent node's 0.6: every such chat went to the PM as 'intent unknown'. A message that is ONLY acknowledgements, thanks, greetings or emoji (an optional 'Name: ' / '@name' prefix of a group preview, then nothing else) needs no reply and is recorded as FYI without asking the model. Anything more - a question mark, a cut preview (…), a request, an incident word - goes on to the model as before. A lone 'よろしくお願いします' is not taken: it usually follows a request that the preview does not show. Runs after critical_incident, so it can never hide an incident.",
+      "fields": [
+        "text"
+      ],
+      "patterns": [
+        "^(?!.*\\.\\.)(?:[^:?\\n]{1,30}:\\s*)?(?:@\\S+(?:\\s*さん)?\\s*)?(?:了解(?:しました|いたしました|です)?|承知(?:しました|いたしました|です)?|かしこまりました|(?:わかり|分かり)ました|ok(?:です)?|おk|オッケー(?:です)?|りょ(?:うかい)?(?:です)?|(?:どうも)?ありがとう(?:ございます|ございました)?|感謝(?:します|いたします|です)|助かり(?:ます|ました)|お?(?:疲れ|つかれ)(?:様|さま)(?:です|でした)|いえいえ|こちらこそ|(?:今日|本日)も|確認(?:します|しました|いたします|いたしました)|対応(?:します|しました|しておきます|いたします))(?:[\\s、。,.!~〜ーｰw笑☀-➿\\U0001F300-\\U0001FAFF‍️]*(?:(?:了解(?:しました|いたしました|です)?|承知(?:しました|いたしました|です)?|かしこまりました|(?:わかり|分かり)ました|ok(?:です)?|おk|オッケー(?:です)?|りょ(?:うかい)?(?:です)?|(?:どうも)?ありがとう(?:ございます|ございました)?|感謝(?:します|いたします|です)|助かり(?:ます|ました)|お?(?:疲れ|つかれ)(?:様|さま)(?:です|でした)|いえいえ|こちらこそ|(?:今日|本日)も|確認(?:します|しました|いたします|いたしました)|対応(?:します|しました|しておきます|いたします))|(?:よろしくお願い(?:します|いたします|致します))))*[\\s、。,.!~〜ーｰw笑☀-➿\\U0001F300-\\U0001FAFF‍️]*$",
+        "^(?!.*\\.\\.)(?:[^:?\\n]{1,30}:\\s*)?(?:@\\S+(?:\\s*さん)?\\s*)?[☀-➿\\U0001F300-\\U0001FAFF][\\s☀-➿\\U0001F300-\\U0001FAFF‍️]*$"
+      ],
+      "exclude": [
+        "障害|本番|エラー|不具合|落ち|停止|ダウン|至急|緊急|incident|outage|\bdown\b|error|urgent"
+      ],
+      "routes": {
+        "yes": "log_fyi",
+        "no": "intent"
       }
     },
     "intent": {

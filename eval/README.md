@@ -14,6 +14,12 @@ The report lists per-node `ok/n` and how many routed to `unsure` (a safe miss: t
 **Do not publish Jev results.** TypeSafe's terms forbid publishing Jev benchmark/performance data;
 keep `answers*.jsonl` and scores out of this repository, issues and public CI logs.
 
+`fixtures_preview_ja.jsonl` (58 events) holds what a PM sees in the Teams chat list (one-line Japanese previews, some cut
+with …) and new ADO items, each labeled `want: auto | pm` (and `severe`). It measures how much reaches the PM, not node
+accuracy: thanks / OK / FYI should not, decisions, requests, incidents must. Kev-4B (CPU fp32, 2026-10-10): 45 of 58 went
+to the PM, 20 of the 33 `auto` ones (Teams `intent` picked `fyi` at 0.2-0.5 confidence, under 0.6); with the `ack_only`
+rule 31 and 6; 0 `pm` events automatic and 0 severe misses both times. `tests/test_preview_prefilter.py` checks the rule on it.
+
 ## Per-backend thresholds
 
 Node thresholds were tuned on Jev. A backend with a different confidence scale gets a profile in

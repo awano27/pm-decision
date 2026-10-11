@@ -89,6 +89,7 @@ python -m kimeru --out <出力先> delivery confirm KIND TARGET --confirm-delive
 自分の業務の判断で、kimeru の判断が合っているかを測り、係数を調整します。**判断モデルは呼びません。Teams も使いません。** 手順は [1 週間の試し方](trial-week.md)。
 
 - `kimeru review [--limit N]`: 自動で決まった判断を 1 件ずつ、端末で「合っている / 違う / 分からない」と答えます。違うときは、どの質問の答えが違い、正しい答えは何かを選びます。結果は、状態フォルダの `reviews.jsonl`（正誤と、その判断をした判断モデルの名前）と `fixtures_user.jsonl`（`eval/fixtures.jsonl` と同じ形の評価用の例。score の正解は、幅で持ちます）に残ります。元のイベントは、`decisions.jsonl` にあるとおり（既定は要約の長さ。長い依頼の全文を例に残すには、設定 `record_event_full=1`）
+- Teams の返信での正誤（設定 `KIMERU_LEARN=1`）: `違う N` は #N の最終結果が違ったという印です。`違う N k` は、直前の `詳細 N` に番号で示した「迷った質問」の k 番が正しい答えだったという印です。どちらも `kimeru review` と同じ `reviews.jsonl`・`fixtures_user.jsonl` に残り、`kimeru calibrate` が読みます。件の状態・投稿・承認・実行は変わりません。出力先の `labels.log.jsonl` には、鍵・正誤・k・時刻だけを残します（返信の文字は残しません）。
 - `kimeru digest --week [--share]`: 直近 7 日の件数、自動と人の割合、規則で決めた件数、重大な通知、承認の結果、同じ修正指示の繰り返し（別の項目で）、判断の一致率。`--share` は、Issue に貼れる形です（数値と環境だけ。同梱のグラフ以外の名前は「追加のグラフ N」に伏せ、本文・人名・件名・ID・パスは出ません）。**一致率は、Jev の判断を数えません**（期間や出力先が違っても）。Jev の性能の数値は、公開できません（TypeSafe の利用規約）
 - `kimeru config show --share`: Issue に貼れる設定の一覧です。パス、ADO の組織とプロジェクト、サブスクリプション、メールの宛先、接続先の URL は出さず、「設定あり」とだけ出します。1 行目に、kimeru の版、OS、Python、画面の倍率が出ます。不具合の報告には、`config show` ではなく、これを貼ってください
 - `kimeru calibrate [--apply | --revert | --allow-wider] [--min-questions N]`: 記録した回答を、別の係数で読み直して、`conf_scale` と `noul_scale` の変更を探します（条件は 1 週間の試し方）。**判断モデルごとに分けて**探し、適用します。Jev・Kev・CLM の判断を確かめた記録だけが対象で、stub など判断モデルの分からない記録からは、探さず、適用せず、理由を出します。`--apply` は、状態フォルダの `thresholds.json` に書きます。グラフと `profiles.py` は書き換えません。`--revert` は、このファイルを消します
@@ -141,6 +142,7 @@ python -m kimeru config path
 | `KIMERU_PRIORITY` | 判断の順番（種類のコンマ区切り。既定 `monitor.alert,teams.chat,ado.workitem.created,meeting.item`） |
 | `KIMERU_CYCLE_BUDGET` | 1 サイクルの時間の上限（秒。未設定は自動運転の間隔） |
 | `KIMERU_PLAN_LEAN` / `KIMERU_BATCH` | 不要な手順の期限を聞かない（既定 0）／グラフの質問を 1 回にまとめる（既定 0） |
+| `KIMERU_LEARN` | Teams の返信 `違う N` / `違う N k` を正誤として記録し、`詳細 N` に「迷った質問」の番号を付ける（既定 0。0 のときは、この返信に反応せず、投稿の文も変わりません） |
 | `KIMERU_READ_FULL` / `KIMERU_READ_MAX_OPEN` / `KIMERU_READ_BUDGET` / `KIMERU_READ_MESSAGES` | チャットを開いて全文を読む（既定 0）、1 サイクルに開く数（既定 3。0 なら読まない）、読む秒数の上限（既定 60。0 なら読まない）、開いたチャットから読む末尾のメッセージ数（既定 5） |
 | `KIMERU_READ_IDLE_SEC` / `KIMERU_READ_CLICK` / `KIMERU_READ_MAX_DEFER` | 全文を読むために開く前と、開いたあとの操作の直前に、キーボード・マウスが止まっているべき秒数（既定 30、`0` で確かめない。`KIMERU_IDLE_SEC` は読む処理に影響しない。戻す処理は別に 3 秒。`read_idle_sec` が 3 未満ならそれに合わせる）／Teams を前面に出してクリックする経路を使う（既定 0）／人の操作と重なって回せる回数の上限（既定 12。超えたらプレビューで判断。0 は延期しない: 最初の 1 回は読み、読めなければプレビューで判断） |
 | `KIMERU_INBOX_DONE_KEEP_DAYS` | 取り込んだ原本（`inbox/done/*.json`。全文を含む）を残す日数（既定 7。`0` で消さない。`*.error` は対象外）。`daily` の各サイクルで消す |

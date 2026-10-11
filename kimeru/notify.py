@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 import unicodedata
 from pathlib import Path
 
-from . import actions, config, fsutil
+from . import actions, config, fsutil, labels
 from . import writer as writer_mod
 
 HERE = Path(__file__).resolve().parent.parent
@@ -30,6 +30,7 @@ REDO_K = re.compile(r"^再実行\s*#?(\d+)\s*-\s*(\d+)\s*[.。!！]*$")   # `再
 REDO_BAD = re.compile(r"^再実行\s*#?(\d+)\s*[^\w\s.。!！]+\s*\d*\s*[.。!！]*$")   # looks like `再実行 N-k` but with a mark that is not a dash (~ / and the like): recorded, not dropped
 DASHES = str.maketrans({c: "-" for c in "ー−‐‑‒–—―─ｰ－"})   # every dash a phone or an IME may type between N and k (NFKC leaves several of them)
 PASTE = re.compile(r"^下書き\s*#?(\d+)\s*[:：]?\s*(\S.*)$")   # the PM brings back what Microsoft 365 Copilot wrote
+LABEL = re.compile(r"^違う\s*#?(\d+)(?:\s+(\d+))?$")   # `違う N`: the final result of #N was wrong; `違う N k`: the k-th option of the question `詳細 N` showed is right (learn=1 only)
 MAX_PASTE = 1200
 
 
@@ -98,6 +99,12 @@ def parse_paste(line):
     return (m.group(1), m.group(2).strip()) if m else None
 
 
+def parse_label(line):
+    """("3", None) for "違う 3", ("3", 2) for "違う 3 2"; None otherwise. Read only when learn=1 (labels.py)."""
+    m = LABEL.match(unicodedata.normalize("NFKC", line).strip())
+    return (m.group(1), int(m.group(2)) if m.group(2) else None) if m else None
+
+
 STATUS = {"OK": "approved", "NG": "rejected", "保留": "held", "聞き返し": "ask_back", "詳細": "detail", "再実行": "redo", "済": "closed"}   # 聞き返し / 詳細 / 再実行 / 済: not decisions
 
 
@@ -125,7 +132,7 @@ def _reply_number(line):
     r = parse_reply(line)
     if r:
         return r[1] if r[0] in STATUS else r[0]
-    for f in (parse_redraft, parse_paste, parse_redo_k):
+    for f in (parse_redraft, parse_paste, parse_redo_k, parse_label):
         r = f(line)
         if r:
             return r[0]
@@ -1195,7 +1202,7 @@ def fresh_entries(read, x_boundary=True):
         if x:                # (a state folder made new), the result posts of the earlier item above it are not this item's
             top[x[0]] = max(top.get(x[0], 0), x[1])
         if e.startswith("R:"):
-            r = parse_reply(e[2:]) or parse_redraft(e[2:]) or parse_paste(e[2:])
+            r = parse_reply(e[2:]) or parse_redraft(e[2:]) or parse_paste(e[2:]) or parse_label(e[2:])
             num = r and (r[1] if r[0] in STATUS else r[0])
             if num and i > last_post.get(num, len(tl)):
                 r0 = parse_reply(e[2:])
@@ -1623,6 +1630,12 @@ def _collect(out, bridge, writer=None, real=False, send=False):
             if it and it["posted"] and it["status"] in ("pending", "held"):
                 changes.append({"id": int(rd[0]), **_redraft(it, rd[1], writer, out)})
             continue
+        lb = parse_label(line)
+        if lb:   # 違う N / 違う N k: a verdict on the decision (learn=1, the daily and approvals paths). It never changes the item
+            it = ap.data["items"].get(lb[0])
+            if real and it and it["posted"] and labels.enabled():
+                labels.record(out, it, lb[1])
+            continue
         r = parse_reply(line)
         if not r:
             continue
@@ -1641,7 +1654,10 @@ def _collect(out, bridge, writer=None, real=False, send=False):
             if it and it["posted"] and num not in redo_done:   # (redo_done doubles as "handled this step" for the numbers asked about)
                 redo_done.add(num)
                 from . import fulltext
-                post(format_detail(int(num), it["record"], fulltext.load(out, it["key"])))
+                text = format_detail(int(num), it["record"], fulltext.load(out, it["key"]))
+                if real and labels.enabled():   # the question the route was unsure of, numbered: kept for `違う N k`
+                    text = labels.attach(it, int(num), text)
+                post(text)
                 changes.append({"id": int(num), "status": "detail"})
             continue
         if word == "済":   # the PM saw the comment in ADO: what was not known is closed
@@ -1681,6 +1697,7 @@ def _collect(out, bridge, writer=None, real=False, send=False):
         if new in ("approved", "rejected"):   # the full text is kept only while the item waits
             from . import fulltext
             fulltext.drop_safe(out, it["key"])   # a failure is noted in warnings.jsonl; the approval goes on, purge deletes the text later
+            it.pop("detail_question", None)   # the options of `詳細 N` are kept only while the item waits (labels.py)
         ch = {"id": int(num), "status": new}
         if new == "approved":
             ch["executed"] = [actions.execute(a, dry_run=True) for a in it["record"].get("actions", [])]

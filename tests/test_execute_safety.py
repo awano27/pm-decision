@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
-from kimeru import cli, config, daily, demo, execute, fsutil, notify, pull
+from kimeru import cli, config, daily, demo, execute, fsutil, notify, pull, review
 from tests.test_execute import GRAPHS, PBS, ROOT, WI, Base, Bridge, NoCriteria, SECRET_TOKEN, TENANT
 
 
@@ -583,3 +583,23 @@ class TestTheApprovalsCommand(Safety):
             self.assertEqual(cli.main(["--out", str(self.out), "approvals"]), 0)
             self.assertEqual(cli.main(["--out", str(self.out), "approvals", "--send"]), 0)
         self.assertEqual([c.kwargs for c in col.call_args_list], [{"real": True, "send": False}, {"real": True, "send": True}])
+
+
+class TestAVerdictIsNotAnApproval(Safety):
+    """`違う N` on an approved ADO comment (R03, learn=1): it is kept as a review, and nothing is written to ADO or run again."""
+
+    def test_a_verdict_on_an_approved_comment_writes_nothing_and_runs_nothing(self):
+        self.enable(KIMERU_LEARN="1")
+        bridge = self.decide_and_post()
+        self.cycle(bridge, http=self.http_with(), reply="OK 1")                          # the comment is written once
+        self.assertEqual(len(self.posts_of("POST")), 1)
+        second = {**WI, "resource": {**WI["resource"], "id": 7003}}
+        cli.process(second, GRAPHS, NoCriteria(), self.out, PBS)                          # #2 keeps waiting, so the cycle reads the chat
+        notify.notify(self.out, bridge, send=True, real=True)
+        rows_before = self.rows()
+        self.calls.clear()
+        self.cycle(bridge, http=self.http_with(), reply="違う 1")
+        self.assertEqual(self.posts_of("POST"), [])                                       # nothing written to ADO
+        self.assertEqual(self.rows(), rows_before)                                        # nothing recorded as executed
+        self.assertEqual(self.state()["status"], "approved")
+        self.assertEqual([r["verdict"] for r in review.read_jsonl(review.reviews_path())], ["wrong"])

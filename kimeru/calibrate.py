@@ -54,7 +54,7 @@ def labeled_questions(out, graphs):
             nid = step.get("node")
             node = (g or {}).get("nodes", {}).get(nid)
             if node and nid in row["expect"] and "matched" not in (step.get("answer") or {}):
-                qs.append({"key": rev["key"], "node": node, "node_id": nid, "ans": step["answer"], "label": row["expect"][nid],
+                qs.append({"key": rev["key"], "graph": rec.get("graph"), "node": node, "node_id": nid, "ans": step["answer"], "label": row["expect"][nid],
                            "judge": (rec.get("judge") or {}).get("name", "unknown")})
     return qs
 

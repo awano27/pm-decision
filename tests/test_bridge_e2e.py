@@ -16,6 +16,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from kimeru import notify
 
@@ -75,6 +76,23 @@ class TestBridgeE2E(unittest.TestCase):
         r = run("approvals")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("#278 -> approved", r.stdout)
+
+
+@unittest.skipUnless(os.name == "nt" and shutil.which("powershell"), "needs Windows PowerShell")
+class TestTheLabelReply(unittest.TestCase):
+    """`違う N` / `違う N k` are handed back by the reader as replies; a word inside a sentence is not a reply."""
+
+    def read(self, messages):
+        with tempfile.TemporaryDirectory() as d:
+            chat = Path(d) / "chat.json"
+            chat.write_text(json.dumps({"messages": messages}, ensure_ascii=False), encoding="utf-8")
+            with mock.patch.dict(os.environ, {"KIMERU_FAKE_CHAT": str(chat)}):
+                return notify.PowerShellBridge(script=FAKE).read()
+
+    def test_the_label_is_on_the_timeline_and_a_word_in_a_sentence_is_not(self):
+        read = self.read(["[kimeru #12] x\nOK 12 / NG 12", "違う 12 3", "この判断は違う 12", "違う　１２", "違う 12 3 お願い"])
+        self.assertEqual(read["timeline"], ["P:12", "R:違う 12 3", "R:違う 12"])
+        self.assertEqual(notify.fresh_entries(read), [("違う 12 3", 0), ("違う 12", 0)])
 
 
 if __name__ == "__main__":

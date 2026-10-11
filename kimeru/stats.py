@@ -230,7 +230,8 @@ def _calibration(out):
 def _week_extra(out, decision_rows, decisions, week_replies, review_rows, now, since):
     """What the week digest adds: the week before, the kinds that arrived, the automatic decisions a review called wrong, the replies
     per item, the OKs whose proposal never changed, the weekly medians of the approval latency, and what calibrate still needs.
-    Only files are read; no model is called. Jev's decisions are counted in the totals and left out of every performance figure."""
+    Only files are read; no model is called. Jev's decisions and those of an unnamed judge are counted in the totals and left out
+    of every performance figure."""
     from . import trial
     prev_since = since - timedelta(days=7)
     previous = _span(decision_rows, "at", prev_since, since)
@@ -256,6 +257,7 @@ def _week_extra(out, decision_rows, decisions, week_replies, review_rows, now, s
                      "human": sum(bool(r.get("needs_human")) for r in previous)},
         "arrivals": arrivals,
         "jev_decisions": sum(_record_judge_name(r) == JevBackend.NAME for r in decisions),
+        "unnamed_decisions": sum(_record_judge_name(r) == "unknown" for r in decisions),
         "auto_checked": len(auto_keys), "auto_wrong": len(auto_keys & wrong_keys),
         "replied_items": len(replies), "replies": sum(replies.values()),
         "oks_with_draft": draft, "oks_unchanged": unchanged,
@@ -470,6 +472,8 @@ def render(s, share=False):
                      f"前の 7 日 {_seconds(wk['latency']['previous'])}")
         if wk["jev_decisions"]:
             lines.append(f"（Jev の判断 {wk['jev_decisions']} 件は数えていません）")
+        if wk.get("unnamed_decisions"):   # a judge with no name (an older record) is left out the same way, and the reader is told why
+            lines.append(f"（判断モデルが分からない判断 {wk['unnamed_decisions']} 件は数えていません）")
         if wk["calibration"] is None:
             lines.append("calibrate の正誤: 不明（記録かグラフを読めませんでした）")
         else:

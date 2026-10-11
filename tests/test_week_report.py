@@ -13,8 +13,9 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
-from kimeru import brief, notify, push, review, stats, trial
+from kimeru import brief, calibrate, notify, push, review, stats, trial
 from tests.test_notify import REC
 from tests.test_review_stats import MARK_ID, MARK_NAME, MARK_PATH, MARK_TEXT, Base
 
@@ -79,8 +80,8 @@ class TwoWeeks(Base):
         k2 = decision("teams-chat-triage", "102", "decision_today", "teams.chat", days=2, needs_human=True)
         ado = decision("ado-workitem", "4812", "triage", "ado.workitem.created", days=3, actions=ADO_DRAFT)
         ado2 = decision("ado-workitem", "4813", "triage", "ado.workitem.created", days=3)
-        j1 = decision("teams-chat-triage", "103", "decision_today", "teams.chat", days=1, judge="Jev")
-        u1 = decision("monitor-alert", "201", "alert", "monitor.alert", days=4, judge=None)
+        j1 = decision("teams-chat-triage", "103", "decision_today", "teams.chat", days=1, judge="Jev", actions=TEAMS_DRAFT)
+        u1 = decision("monitor-alert", "201", "alert", "monitor.alert", days=4, judge=None, actions=TEAMS_DRAFT)
         k4 = decision("monitor-alert", "202", "alert", "monitor.alert", days=5)
         k5 = decision("teams-chat-triage", "104", "decision_today", "teams.chat", days=7, actions=TEAMS_DRAFT)
         future = decision("teams-chat-triage", "105", "decision_today", "teams.chat", days=-1)
@@ -106,6 +107,7 @@ class TwoWeeks(Base):
             approved(11, fut, days=-1, latency=30),                 # approved in the future
             approved(12, old_ado, days=8, latency=120),             # the week before
             approved(13, old_ado2, days=9, latency=240),            # the week before
+            approved(14, u1, days=4, latency=40),                   # no judge name: a draft and an OK, left out like Jev's
         ])
         rows = [k1, k2, ado, ado2, j1, u1, k4, k5, future, p1, p2, p3, p4, old]
         (self.out / "decisions.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows) + BROKEN,
@@ -114,10 +116,10 @@ class TwoWeeks(Base):
                approval_row(7, j1, days=1), approval_row(8, sample, days=1), approval_row(9, demo, days=1),
                approval_row(12, old_ado, days=8), approval_row(10, k4, status="rejected", days=4),
                approval_row(2, k2, status="held", days=6), approval_row(3, ado, status="redrafted", days=2),
-               approval_row(11, fut, days=-1)]
+               approval_row(11, fut, days=-1), approval_row(14, u1, days=4)]
         (self.out / "approvals.log.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in log) + BROKEN,
                                                       encoding="utf-8")
-        (self.out / "approvals.json").write_text(json.dumps({"next": 14, "items": items}, ensure_ascii=False), encoding="utf-8")
+        (self.out / "approvals.json").write_text(json.dumps({"next": 15, "items": items}, ensure_ascii=False), encoding="utf-8")
         for rec, verdict, judge in ((k1, "yes", "Kev"), (k4, "wrong", "Kev"), (j1, "wrong", "Jev"), (u1, "wrong", None)):
             row = {"key": review.decision_key(rec), "verdict": verdict, "at": at(1)}
             if judge:
@@ -129,11 +131,12 @@ class TwoWeeks(Base):
         "判断: 8 件 / 自動で決めた 7 件",                                                    # existing line, for the counts
         "前の 7 日（2026-09-28 から）: 判断 4 件（自動 75%・人 25%）",                        # p1..p4; p4 is one second before this week
         "届いた件数（種類別）: teams 4 件、ado 2 件、alert 2 件",                             # teams: k1 k2 j1 k5; ado: ado ado2
-        "1 件あたりの返信: 1.1 回（返信のあった件 7 件）",                                    # 8 replies on 7 items; sample left out
+        "1 件あたりの返信: 1.1 回（返信のあった件 8 件）",                                    # 9 replies on 8 items (u1 added); sample left out
         "自動で決めた判断で、正誤に「違う」が付いた件: 1 件（対象 5 件）",                     # k1 ado ado2 k4 k5 (Jev, unnamed left out)
-        "提案が一度も変わらなかった OK: 1 件（下書きのある OK 2 件・参考）",                  # ado and k5 have drafts; ado is generation 1
+        "提案が一度も変わらなかった OK: 1 件（下書きのある OK 2 件・参考）",                  # ado and k5 have drafts; ado is generation 1; j1 (Jev), u1 (no judge) left out
         "投稿から OK を見るまで（中央値）: 今週 60.0 秒（測れた 3 件・参考）、前の 7 日 180.0 秒（測れた 2 件・参考）",
         "（Jev の判断 1 件は数えていません）",
+        "（判断モデルが分からない判断 1 件は数えていません）",
         "calibrate の正誤（判断モデルごと。下限 100 問）: CLM 0 問（あと 100 問）、Kev 0 問（あと 100 問）",
     )
 
@@ -150,7 +153,7 @@ class TwoWeeks(Base):
 
     def test_the_replies_per_item_count_every_reply_and_leave_the_fictional_item_out(self):
         self.seed()
-        self.assertIn("1 件あたりの返信: 1.1 回（返信のあった件 7 件）", stats.week(self.out, now=NOW))
+        self.assertIn("1 件あたりの返信: 1.1 回（返信のあった件 8 件）", stats.week(self.out, now=NOW))
 
     def test_an_ok_counts_as_unchanged_only_when_its_item_has_a_draft_and_it_is_neither_jev_demo_nor_the_fictional_item(self):
         self.seed()
@@ -165,6 +168,22 @@ class TwoWeeks(Base):
     def test_jev_decisions_are_counted_once_and_named_as_left_out_of_the_performance_rows(self):
         self.seed()
         self.assertIn("（Jev の判断 1 件は数えていません）", stats.week(self.out, now=NOW))
+
+    def test_a_decision_by_an_unnamed_judge_is_left_out_of_the_figures_and_the_digest_says_how_many(self):
+        self.seed()
+        for share in (False, True):
+            text = stats.week(self.out, share=share, now=NOW)
+            self.assertIn("（判断モデルが分からない判断 1 件は数えていません）", text)
+            self.assertIn("自動で決めた判断で、正誤に「違う」が付いた件: 1 件（対象 5 件）", text)   # u1 is not among the 5
+
+    def test_the_calibrate_count_takes_each_named_judge_other_than_jev_and_says_what_is_still_needed(self):
+        self.seed()
+        questions = [{"judge": "Kev"}] * 3 + [{"judge": "CLM"}] * 100 + [{"judge": "Jev"}] * 2
+        with mock.patch.object(calibrate, "labeled_questions", return_value=questions):
+            text = stats.week(self.out, now=NOW)
+        self.assertIn("calibrate の正誤（判断モデルごと。下限 100 問）: CLM 100 問（下限に達しています）、Kev 3 問（あと 97 問）", text)
+        line = next(x for x in text.splitlines() if x.startswith("calibrate の正誤"))
+        self.assertNotIn("Jev", line)
 
     def test_calibrate_says_how_many_labeled_questions_each_judge_still_needs_without_calling_a_model(self):
         self.seed()
@@ -220,7 +239,8 @@ class TwoWeeks(Base):
         self.seed()
         seen_now = trial.measurement_collect(self.out, [], now=NOW.timestamp())["local"]["approval_latency"]["measured"]
         seen_later = trial.measurement_collect(self.out, [], now=(NOW + timedelta(days=2)).timestamp())["local"]["approval_latency"]["measured"]
-        self.assertEqual((seen_now, seen_later), (7, 8))                     # the OK one day in the future counts only later
+        # the OK one day in the future counts only later; the no-name OK (u1) counts here, as every local OK does (only --share leaves them out)
+        self.assertEqual((seen_now, seen_later), (8, 9))
 
 
 class TestFiguresAndTheirReferenceMarks(Base):

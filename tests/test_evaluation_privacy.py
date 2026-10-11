@@ -134,6 +134,26 @@ class TestNoJevNumbers(Reviewing):
             self.assertIn("（Jev の判断 1 件は数えていません）", text)
             self.assertNotIn("件のうち", text)
 
+    def test_a_jev_ok_on_a_draft_that_never_changed_is_left_out_of_the_unchanged_figure_on_the_screen_and_in_the_share(self):
+        self.make(FakeJev(), 1)                                              # Jev's OK on a draft: left out
+        self.make(FakeKev(), 2)                                              # a named judge's OK on a draft: counted (the control)
+        rows = read_jsonl(self.out / "decisions.jsonl")
+        items, log = {}, []
+        for n, rec in enumerate(rows, 1):
+            rec["actions"] = [{"type": "teams.reply", "text": "下書きの本文"}]
+            key = review.decision_key(rec)
+            timing = {"schema": 1, "source": "local", "generation": 1, "case_key": key}
+            items[str(n)] = {"key": key, "status": "approved", "posted": True, "record": rec, "measurement": timing}
+            log.append({"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "key": key, "id": str(n),
+                        "status": "approved", "measurement": timing})
+        (self.out / "decisions.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+        (self.out / "approvals.json").write_text(json.dumps({"next": len(rows) + 1, "items": items}, ensure_ascii=False), encoding="utf-8")
+        (self.out / "approvals.log.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in log), encoding="utf-8")
+        for share in (False, True):
+            text = stats.week(self.out, share=share)
+            self.assertIn("提案が一度も変わらなかった OK: 1 件（下書きのある OK 1 件・参考）", text)
+            self.assertIn("（Jev の判断 1 件は数えていません）", text)
+
     def test_the_plain_digest_shows_no_time_for_jev(self):
         self.make(FakeJev(), 1)
         buf = io.StringIO()

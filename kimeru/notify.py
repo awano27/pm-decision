@@ -1246,6 +1246,38 @@ def fresh_replies(read, x_boundary=True):
     return [line for line, _ in fresh_entries(read, x_boundary)]
 
 
+INSTRUCTION_MAX = 40   # a longer instruction is about one message, not a preference
+_INSTRUCTION_LINK = re.compile(r"https?:|ftp:|www\.|@", re.IGNORECASE)
+
+
+def _plain(text):
+    """NFKC, casefolded, without spaces, marks and symbols: the form that is compared and hashed."""
+    s = unicodedata.normalize("NFKC", str(text)).casefold()
+    return "".join(c for c in s if not c.isspace() and unicodedata.category(c)[0] not in "PSCZ")
+
+
+def _pairs(s):
+    return {s[i:i + 2] for i in range(len(s) - 1)}
+
+
+def instruction_sig(instruction, event=None):
+    """A 12-digit fingerprint of a revision instruction that is a short preference (the same wording written again gives the
+    same value), or None. None for a figure, a link, `@`, what writer.TOKENS reads as a date, time, number, ticket or name,
+    a wording over 40 characters, and a wording that shares two characters in a row with the colleague's name or text.
+    The words themselves are never kept."""
+    text = unicodedata.normalize("NFKC", str(instruction or "")).strip()
+    plain = _plain(text)
+    if not plain or len(text) > INSTRUCTION_MAX or re.search(r"\d", text) or _INSTRUCTION_LINK.search(text):
+        return None
+    if writer_mod.TOKENS.search(text):
+        return None
+    ev = event if isinstance(event, dict) else {}
+    quoted = _pairs(_plain(ev.get("author") or "")) | _pairs(_plain(ev.get("text") or ""))
+    if quoted & _pairs(plain):
+        return None
+    return hashlib.sha256(plain.encode("utf-8")).hexdigest()[:12]
+
+
 STALE_ACTION_KEYS = ("drafted_by", "held_for", "writer_warning", "variant", "ask_back", "ask_back_unverified", "unverified")
 STALE_RECORD_KEYS = ("writer_error", "copilot_request", "copilot_sources", "memo", "redraft_note")
 
@@ -1659,10 +1691,14 @@ def _collect(out, bridge, writer=None, real=False, send=False):
             for ch in changes:
                 # when, and which decision (the same key as the decision record): old lines without them stay readable
                 item = ap.data["items"].get(str(ch.get("id"))) or {}
-                # a revision instruction is the PM's own words about a colleague's message: only its length is logged
+                # a revision instruction is the PM's own words about a colleague's message: only its length is logged, and for a
+                # short preference also a fingerprint, so the same wording written again on another item can be counted
                 logged = {k: v for k, v in ch.items() if k != "instruction"}
                 if "instruction" in ch:
                     logged["instruction_len"] = len(str(ch["instruction"] or ""))
+                    sig = instruction_sig(ch["instruction"], (item.get("record") or {}).get("event"))
+                    if sig:
+                        logged["instruction_sig"] = sig
                 f.write(json.dumps({"at": at, "key": item.get("key"), **logged,
                                     "measurement": dict(measurement_for(item))}, ensure_ascii=False) + "\n")
     return changes

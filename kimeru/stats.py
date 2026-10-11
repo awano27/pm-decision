@@ -138,6 +138,16 @@ def bundled_graph_names():
     return names
 
 
+def _repeated_instructions(rows):
+    """Revision instructions written again on another item: for each fingerprint, the items it came up on, minus one."""
+    items = {}
+    for r in rows:
+        sig, key = r.get("instruction_sig"), r.get("key")
+        if sig and key:
+            items.setdefault(str(sig), set()).add(str(key))
+    return sum(len(keys) - 1 for keys in items.values())
+
+
 def collect(out, now=None):
     now = now or datetime.now(timezone.utc)
     since = now - timedelta(days=7)
@@ -179,6 +189,7 @@ def collect(out, now=None):
         "rule": sum(g["rule"] for g in per_graph.values()),
         "critical": sum(1 for r in decisions if r.get("notify")),
         "per_graph": per_graph, "approvals": statuses, "approvals_undated": undated,
+        "instruction_repeats": _repeated_instructions(dated),
         "invalid_evidence": invalid_evidence, "future_evidence": future_evidence,
         "judges": judges, "models": models, "reviewed_yes": yes, "reviewed_no": no,
         "reviewed_wrong": wrong, "reviewed_left_out": left_out,
@@ -300,6 +311,7 @@ def render(s, share=False):
         lines.append("承認の結果: " + "、".join(f"{LABEL.get(k, k)} {v}" for k, v in sorted(s["approvals"].items(), key=lambda kv: str(kv[0]))))
     else:
         lines.append("承認の結果: 日時つきの記録なし")
+    lines.append(f"同じ修正指示の繰り返し（別の項目で）: {s.get('instruction_repeats', 0)} 件")
     if s["approvals_undated"]:
         lines.append(f"（日時の無い古い承認の記録 {s['approvals_undated']} 件は、期間の集計に入れていません）")
     if s.get("invalid_evidence"):

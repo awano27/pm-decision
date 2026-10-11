@@ -99,5 +99,48 @@ class TestInstructionIsNotLogged(Base):
         self.assertNotIn("instruction", row)
 
 
+class TestInstructionFingerprint(Base):
+    """A short preference-like revision instruction leaves a 12-digit fingerprint in approvals.log.jsonl, never its words, so
+    digest --week can count the same wording written again on another item. The post and the returned change do not change."""
+    EVENT = {"author": "佐藤", "text": "来月のリリース日をずらすか判断をお願いします"}
+    GOLDEN_POST = ("[kimeru #1] 佐藤さん: 来月のリリース日をずらすか判断をお願いします\n"
+                   "→ スケジュール変更の判断: 1.現行日程に依存するチーム・顧客を確認（今日） → 2.選択肢（延期・スコープ縮小・現状維持）を比較（今日） → 3.日程を決定し記録（今日） → 4.関係者へ変更を通知…\n"
+                   "案: 佐藤さん、承知しました。（もっと 短く）\n"
+                   "OK 1 / NG 1 / 修正 1 <点> / 詳細 1")
+
+    def test_the_same_short_instruction_written_again_with_other_spacing_or_width_has_the_same_fingerprint(self):
+        first = notify.instruction_sig("もっと短く", self.EVENT)
+        self.assertRegex(first, r"^[0-9a-f]{12}$")
+        for again in ("もっと 短く", "もっと　短く", "もっと短く！", "もっと短く。", " もっと短く "):
+            self.assertEqual(notify.instruction_sig(again, self.EVENT), first, again)
+
+    def test_a_date_a_name_a_number_a_link_or_a_quote_of_the_colleague_gets_no_fingerprint(self):
+        for words in ("明日と書いて", "山田さんに", "#12 を", "もっと短く 2 行で", "詳細は https://example.com を",
+                      "担当は a@example.jp で", "来月の件を短く", "あ" * 41):
+            self.assertIsNone(notify.instruction_sig(words, self.EVENT), words)
+        self.assertIsNotNone(notify.instruction_sig("あ" * 40, self.EVENT))
+
+    def test_the_log_keeps_the_fingerprint_and_not_the_words_and_the_post_is_the_same_as_before(self):
+        try:
+            from .test_writer import GRAPHS, MSG, PBS, FakeTeams, FakeWriter
+        except ImportError:
+            from test_writer import GRAPHS, MSG, PBS, FakeTeams, FakeWriter
+        from kimeru.backends import StubBackend
+        from kimeru.cli import process
+        out, w, t = Path(self.dir.name) / "out", FakeWriter(), FakeTeams()
+        process(MSG, GRAPHS, StubBackend(), out, PBS, writer=w)
+        notify.notify(out, t, send=True)
+        t.timeline.append("R:修正 1 もっと 短く")
+        changes = notify.collect(out, t, writer=w)
+        self.assertEqual(changes, [{"id": 1, "instruction": "もっと 短く", "status": "redrafted"}])   # no fingerprint in the change
+        notify.notify(out, t, send=True)
+        self.assertEqual(t.posts[-1], self.GOLDEN_POST)
+        log = (out / "approvals.log.jsonl").read_text(encoding="utf-8")
+        self.assertNotIn("もっと", log)
+        self.assertNotIn("短く", log)
+        row = next(json.loads(l) for l in log.splitlines() if "instruction_len" in l)
+        self.assertEqual(row["instruction_sig"], notify.instruction_sig("もっと短く", self.EVENT))
+
+
 if __name__ == "__main__":
     unittest.main()

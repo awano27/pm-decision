@@ -89,7 +89,7 @@ python -m kimeru --out <出力先> delivery confirm KIND TARGET --confirm-delive
 自分の業務の判断で、kimeru の判断が合っているかを測り、係数を調整します。**判断モデルは呼びません。Teams も使いません。** 手順は [1 週間の試し方](trial-week.md)。
 
 - `kimeru review [--limit N]`: 自動で決まった判断を 1 件ずつ、端末で「合っている / 違う / 分からない」と答えます。違うときは、どの質問の答えが違い、正しい答えは何かを選びます。結果は、状態フォルダの `reviews.jsonl`（正誤と、その判断をした判断モデルの名前）と `fixtures_user.jsonl`（`eval/fixtures.jsonl` と同じ形の評価用の例。score の正解は、幅で持ちます）に残ります。元のイベントは、`decisions.jsonl` にあるとおり（既定は要約の長さ。長い依頼の全文を例に残すには、設定 `record_event_full=1`）
-- `kimeru digest --week [--share]`: 直近 7 日の件数、自動と人の割合、規則で決めた件数、重大な通知、承認の結果、判断の一致率。`--share` は、Issue に貼れる形です（数値と環境だけ。同梱のグラフ以外の名前は「追加のグラフ N」に伏せ、本文・人名・件名・ID・パスは出ません）。**一致率は、Jev の判断を数えません**（期間や出力先が違っても）。Jev の性能の数値は、公開できません（TypeSafe の利用規約）
+- `kimeru digest --week [--share]`: 直近 7 日の件数、自動と人の割合、規則で決めた件数、重大な通知、承認の結果、同じ修正指示の繰り返し（別の項目で）、判断の一致率。`--share` は、Issue に貼れる形です（数値と環境だけ。同梱のグラフ以外の名前は「追加のグラフ N」に伏せ、本文・人名・件名・ID・パスは出ません）。**一致率は、Jev の判断を数えません**（期間や出力先が違っても）。Jev の性能の数値は、公開できません（TypeSafe の利用規約）
 - `kimeru config show --share`: Issue に貼れる設定の一覧です。パス、ADO の組織とプロジェクト、サブスクリプション、メールの宛先、接続先の URL は出さず、「設定あり」とだけ出します。1 行目に、kimeru の版、OS、Python、画面の倍率が出ます。不具合の報告には、`config show` ではなく、これを貼ってください
 - `kimeru calibrate [--apply | --revert | --allow-wider] [--min-questions N]`: 記録した回答を、別の係数で読み直して、`conf_scale` と `noul_scale` の変更を探します（条件は 1 週間の試し方）。**判断モデルごとに分けて**探し、適用します。Jev・Kev・CLM の判断を確かめた記録だけが対象で、stub など判断モデルの分からない記録からは、探さず、適用せず、理由を出します。`--apply` は、状態フォルダの `thresholds.json` に書きます。グラフと `profiles.py` は書き換えません。`--revert` は、このファイルを消します
 

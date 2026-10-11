@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 import unicodedata
 from pathlib import Path
 
-from . import actions, config, fsutil, hold, labels
+from . import actions, config, explain, fsutil, hold, labels
 from . import writer as writer_mod
 
 HERE = Path(__file__).resolve().parent.parent
@@ -312,6 +312,14 @@ def _draft_line(rec):
     return ""
 
 
+def _why(rec):
+    """R11: with the setting post_reason=1, the line that says which question the model was unsure of (explain.open_question);
+    "" otherwise, so at 0 (the default) the texts are unchanged."""
+    if config.value("post_reason") != "1":
+        return ""
+    return explain.open_question(rec)
+
+
 def format_post(n, rec, full=None, marks=None):
     """The approval post "[kimeru #N]": at most 5 short lines. Everything else (the source text, the memo, every draft, the
     revision, the kinds of action) is in the answer to `詳細 N` (format_detail). `full` is not shown here. `marks` (R09, hold.post_marks):
@@ -333,6 +341,9 @@ def format_post(n, rec, full=None, marks=None):
     else:
         proposal = memo.get("next") or rec.get("advice") or plan.get("summary") or "内容を確認してください"
     lines.append("→ " + _clip(proposal, 100))
+    why = _why(rec)   # R11: one line more, after the arrow line (it replaces nothing)
+    if why:
+        lines.append(why)
     if rec.get("first_message"):   # R08: the newest message of a continued item, one line after the proposal (30 characters)
         newest = _clip((rec.get("event") or {}).get("text"), 30)
         if newest:
@@ -401,6 +412,9 @@ def format_detail(n, rec, full=None):
              "不足情報: " + (" / ".join(str(v) for v in missing) if missing else ("メモに記載なし" if memo else no_memo)),
              "OK の効果: " + ("; ".join(dict.fromkeys(effects)) if effects else "記録のみ"),
              f"{ev} #{rec.get('event_id')}"] + ado_lines(rec)
+    why = _why(rec)   # R11: under the header, when post_reason=1
+    if why:
+        lines.insert(1, why)
     rf = rec.get("read_full") or {}
     if rf.get("state") == "preview_only":
         lines.append("⚠ プレビューだけで判断しました（" + str(rf.get("why", ""))[:100] + "）。元のメッセージを Teams で確認してください")

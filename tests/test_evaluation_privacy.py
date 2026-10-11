@@ -539,5 +539,34 @@ class TestArrivalTimesStayLocal(Reviewing):
                          {"arrived_at", "arrival_source", "arrival_window_s"})
 
 
+class JevAnswers(StubBackend):
+    """A judge named Jev that answers the teams intent question unsure, with probabilities (R11: the line must not show them)."""
+    NAME = "Jev"
+    CANNED = {"intent": {"choice": "status", "confidence": 0.41,
+                         "probabilities": {"decision": 0.37, "requirements": 0.04, "status": 0.41, "incident": 0.06,
+                                           "fyi": 0.08, "none": 0.04}}}
+
+    def ask(self, state, questions):
+        return {q: self.CANNED[q] for q in questions}
+
+
+class TestUnsureLineHasNoJevNumber(unittest.TestCase):
+    def test_the_post_and_the_detail_name_the_question_and_show_no_probability(self):
+        chat = next(g for lst in GRAPHS.values() for g in lst if g["name"] == "teams-chat-triage")
+        event = {"kind": "teams.chat", "id": "t9", "author": "佐藤", "text": "この件、どうしましょう"}
+        res = graph.run(chat, event, JevAnswers(), playbooks=PBS)
+        self.assertEqual((res["path"][-1]["node"], res["path"][-1]["edge"]), ("intent", "unsure"), res["path"])
+        with mock.patch.dict(os.environ, {"KIMERU_POST_REASON": "1"}):
+            post = notify.format_post(9, res)
+            detail = notify.format_detail(9, res)
+        for text in (post, detail):
+            line = [l for l in text.splitlines() if l.startswith("迷った点")]
+            self.assertEqual(len(line), 1, text)
+            self.assertIn("依頼の種類", line[0])
+            self.assertNotRegex(line[0], r"[0-9%]")
+        for shown in ("0.41", "0.37", "41%", "37%"):
+            self.assertNotIn(shown, post + detail)
+
+
 if __name__ == "__main__":
     unittest.main()

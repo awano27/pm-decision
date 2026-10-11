@@ -3,10 +3,13 @@ try:   # isolation from the real state folder, whichever way the tests are start
 except ImportError:
     import isolate  # noqa: F401
 
+import copy
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from kimeru import notify
 
@@ -239,6 +242,84 @@ class TestContinuedPostFormat(unittest.TestCase):
         self.assertIn("最初のメッセージ: 最初の依頼です", text)
         self.assertIn("続きのメッセージ: 続きです", text)
         self.assertLess(text.index("最初のメッセージ:"), text.index("続きのメッセージ:"))
+
+
+# R11: a chat the model was unsure of (intent), with a draft; the golden text is what HEAD printed before the setting existed
+UNSURE_CHAT = {"graph": "teams-chat-triage", "event_kind": "teams.chat", "event_id": "t2", "node": "ask_pm",
+               "outcome": "advise", "needs_human": True, "revision": 1, "advice": "意図が判定できないチャット",
+               "event": {"kind": "teams.chat", "id": "t2", "author": "佐藤", "text": "この件、どうしましょう"},
+               "memo": {"summary": "進め方の相談", "next": "状況を確認して返事する"},
+               "path": [{"node": "intent", "answer": {"choice": "status", "confidence": 0.45,
+                         "probabilities": {"decision": 0.2, "requirements": 0.02, "status": 0.62, "incident": 0.03,
+                                           "fyi": 0.08, "none": 0.05}}, "edge": "unsure"}],
+               "actions": [{"type": "teams.reply", "to": "佐藤", "text": "確認して返信します。", "drafted_by": "fake"}]}
+GOLD_POST = "\n".join(["[kimeru #3] 佐藤さん: 進め方の相談", "→ 状況を確認して返事する", "案: 確認して返信します。",
+                       "OK 3 / NG 3 / 修正 3 <点> / 詳細 3"])
+GOLD_DETAIL = "\n".join([
+    "[kimeru 詳細 #3] 判断が必要（teams-chat-triage） / 改訂 1", "判断: 意図が判定できないチャット",
+    "次の一手: 状況を確認して返事する", "不足情報: メモに記載なし",
+    "OK の効果: コピー用文面を自分チャットへ返す（相手には送信しない）", "teams.chat #t2",
+    "内容: 意図が判定できないチャット", "承認の対象: teams.reply（既定は記録だけ。実行するのは設定で有効にした種類だけ）",
+    "文面 LLM のメモ:", "・要点: 進め方の相談", "・次の一手: 状況を確認して返事する",
+    "返信の下書き（fake）:", "確認して返信します。", "返信: OK 3 / NG 3 / 保留 3 / 修正 3 <直してほしい点>"])
+LINE = "迷った点: 依頼の種類（近いのは 状況確認）"
+
+
+class TestPostReasonLine(unittest.TestCase):
+    """R11: post_reason=1 puts one line under the arrow line (and under the header of the detail) that says which question the
+    model was unsure of. At 0, and by default, the post and the detail are the golden text, byte for byte."""
+
+    def test_at_zero_the_post_and_the_detail_are_the_golden_text(self):
+        with mock.patch.dict(os.environ, {"KIMERU_POST_REASON": "0"}):
+            self.assertEqual(notify.format_post(3, UNSURE_CHAT), GOLD_POST)
+            self.assertEqual(notify.format_detail(3, UNSURE_CHAT), GOLD_DETAIL)
+
+    def test_by_default_the_post_and_the_detail_are_the_golden_text(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop("KIMERU_POST_REASON", None)
+            self.assertEqual(notify.format_post(3, UNSURE_CHAT), GOLD_POST)
+            self.assertEqual(notify.format_detail(3, UNSURE_CHAT), GOLD_DETAIL)
+
+    def test_at_one_the_unsure_question_is_the_line_under_the_arrow_and_the_post_stays_within_five_lines(self):
+        with mock.patch.dict(os.environ, {"KIMERU_POST_REASON": "1"}):
+            lines = notify.format_post(3, UNSURE_CHAT).splitlines()
+        self.assertEqual(lines, ["[kimeru #3] 佐藤さん: 進め方の相談", "→ 状況を確認して返事する", LINE,
+                                 "案: 確認して返信します。", "OK 3 / NG 3 / 修正 3 <点> / 詳細 3"])
+        self.assertLessEqual(len(lines), 5)
+
+    def test_at_one_the_detail_has_the_line_under_its_header_and_nothing_else_changes(self):
+        with mock.patch.dict(os.environ, {"KIMERU_POST_REASON": "1"}):
+            lines = notify.format_detail(3, UNSURE_CHAT).splitlines()
+        gold = GOLD_DETAIL.splitlines()
+        self.assertEqual(lines, [gold[0], LINE, *gold[1:]])
+
+    def test_a_warning_line_is_kept_and_the_question_line_is_added_beside_it(self):
+        rec = {**UNSURE_CHAT, "read_full": {"state": "preview_only"}}
+        with mock.patch.dict(os.environ, {"KIMERU_POST_REASON": "0"}):
+            base = notify.format_post(3, rec).splitlines()
+        with mock.patch.dict(os.environ, {"KIMERU_POST_REASON": "1"}):
+            lines = notify.format_post(3, rec).splitlines()
+        self.assertIn("⚠ プレビューだけで判断しました（元のメッセージを Teams で確認）", lines)
+        self.assertEqual(len(lines), len(base) + 1)
+        self.assertEqual([l for l in lines if l != LINE], base)
+
+    def test_a_record_without_a_path_gets_no_line_and_no_error(self):
+        rec = {k: v for k, v in UNSURE_CHAT.items() if k != "path"}
+        with mock.patch.dict(os.environ, {"KIMERU_POST_REASON": "1"}):
+            self.assertEqual(notify.format_post(3, rec), GOLD_POST)
+            self.assertEqual(notify.format_detail(3, rec), GOLD_DETAIL)
+
+    def test_the_line_does_not_change_the_record_it_reads(self):
+        rec = copy.deepcopy(UNSURE_CHAT)
+        with mock.patch.dict(os.environ, {"KIMERU_POST_REASON": "1"}):
+            notify.format_post(3, rec)
+            notify.format_detail(3, rec)
+        self.assertEqual(rec, UNSURE_CHAT)
+
+    def test_the_line_names_no_graph_node_option_or_action_in_english(self):
+        with mock.patch.dict(os.environ, {"KIMERU_POST_REASON": "1"}):
+            line = [l for l in notify.format_post(3, UNSURE_CHAT).splitlines() if l.startswith("迷った点")][0]
+        self.assertNotRegex(line, r"[A-Za-z0-9_%.]")
 
 
 if __name__ == "__main__":

@@ -123,6 +123,17 @@ class TestNoJevNumbers(Reviewing):
         self.assertNotIn("判断の一致率: 100%", text)
         self.assertNotIn("件のうち", text)
 
+    def test_the_week_digest_leaves_jevs_wrong_answer_and_its_oks_and_medians_out_on_the_screen_and_in_the_share(self):
+        self.make(FakeJev(), 1)
+        self.review_all(self.out, ["w"])          # Jev's decision is called wrong: the wrong-answer row must not count it
+        for share in (False, True):
+            text = stats.week(self.out, share=share)
+            self.assertIn("自動で決めた判断で、正誤に「違う」が付いた件: 不明（対象 0 件）", text)
+            self.assertIn("提案が一度も変わらなかった OK: 不明（下書きのある OK 0 件）", text)
+            self.assertIn("投稿から OK を見るまで（中央値）: 今週 不明、前の 7 日 不明", text)
+            self.assertIn("（Jev の判断 1 件は数えていません）", text)
+            self.assertNotIn("件のうち", text)
+
     def test_the_plain_digest_shows_no_time_for_jev(self):
         self.make(FakeJev(), 1)
         buf = io.StringIO()

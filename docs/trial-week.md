@@ -87,12 +87,14 @@ Teams は使いません。確かめた結果は、状態フォルダの `fixtur
 ## 1 週間後
 
 ```powershell
-python -m kimeru digest --week           # 件数、自動と人の割合、規則で決めた件数、重大な通知、承認の結果、一致率
+python -m kimeru digest --week           # 件数、前の 7 日との比較、自動と人の割合、重大な通知、承認の結果、「違う」の件数、変わらなかった OK、中央値、一致率
 python -m kimeru digest --week --share   # Issue に貼れる形（数値と環境だけ。追加したグラフの名前は伏せます）
 python -m kimeru trial report --share    # 集計のみ。Jev と判断モデル不明の試行は除外
 python -m kimeru calibrate               # 係数を調整できるか（モデルは呼びません）
 python -m kimeru config show --share     # Issue に貼れる設定の一覧（パス・組織・サブスクリプションは出ません）
 ```
+
+`digest --week` の性能の行（「違う」・変わらなかった OK・中央値）は、Jev の判断を分母分子から外し、「Jev の判断 n 件は数えていません」と出します。画面と `--share` は同じ行です。
 
 `trial report --share` は個別 case の計測ペアを出さず、Jev と判断モデルの出所が分からない試行を除いて集計します。導入前の時間が未記録なら、時間差は `Unknown` のままです。承認から引き渡しまでの時間も証拠がない場合は `Unknown` と表示されます。
 

@@ -120,7 +120,8 @@ def _work_evidence(out):
     return evidence
 
 
-def collect(out, share=False):
+def collect(out, share=False, now=None):
+    now = time.time() if now is None else now
     source_rows = _read(out)["samples"]
     # Shared output omits Jev and unknown-provenance samples, including their duration and draft-use data.
     if share:
@@ -135,7 +136,7 @@ def collect(out, share=False):
         valid = (isinstance(row, dict) and isinstance(row.get("case"), int) and not isinstance(row.get("case"), bool)
                  and row["case"] > 0 and _finite_nonnegative(row.get("after_minutes"))
                  and _finite_nonnegative(row.get("at"))
-                 and row["at"] <= time.time()
+                 and row["at"] <= now
                  and row.get("draft") in ("unchanged", "edited", "unused")
                  and row.get("outcome") in ("correct", "wrong", "unknown")
                  and (row.get("before_minutes") is None or _finite_nonnegative(row.get("before_minutes"))))
@@ -183,7 +184,7 @@ def collect(out, share=False):
             "effect": "inconclusive" if len(paired_cases) < 5 else "observed",
             "approval_count": approved, "approval_to_handoff": handoff,
             "work_completion": completion, "notification_receipts": receipt_count,
-            "measurement": measurement_collect(out, rows, share=share)}
+            "measurement": measurement_collect(out, rows, share=share, now=now)}
 
 
 def _timestamp(value):
@@ -240,9 +241,10 @@ def measurement_valid(item, timing, reference):
             and timing.get("case_key") == item["key"])
 
 
-def measurement_collect(out, observations, share=False):
-    """Only aggregates leave this function. No implicit trial or actual-arrival evidence."""
-    now = time.time()
+def measurement_collect(out, observations, share=False, now=None):
+    """Only aggregates leave this function. No implicit trial or actual-arrival evidence. `now` (epoch seconds) is the time the
+    intervals must end by; it defaults to the current time."""
+    now = time.time() if now is None else now
     items = notify.Approvals(out).data.get("items", {})
     groups = {source: {"delivery_wait": [], "approval_latency": [], "total_case_wait": [], "pending_age": [],
                        "arrival_to_ready": [], "arrival_to_approval": [],
@@ -315,6 +317,36 @@ def measurement_collect(out, observations, share=False):
     for source, group in groups.items():
         result[source] = {key: _coverage(value) if isinstance(value, list) else value for key, value in group.items()}
     return result
+
+
+def approval_latencies(out, now=None):
+    """(the time an OK was seen, seconds from the post to that) for each approval that measurement_collect's approval latency
+    counts, so that `digest --week` can take the medians of each week. The same confirmation as measurement_collect; the demo,
+    the fictional item, Jev and a decision whose judge has no name are left out. Times are epoch seconds."""
+    from . import autorun
+    now = time.time() if now is None else now
+    data = notify.Approvals(out).data
+    items = data.get("items") if isinstance(data, dict) else None
+    found = []
+    for item in (items.values() if isinstance(items, dict) else []):
+        if not isinstance(item, dict) or item.get("status") != "approved":
+            continue
+        rec = item.get("record") if isinstance(item.get("record"), dict) else {}
+        timing = item.get("measurement") if isinstance(item.get("measurement"), dict) else {}
+        reference = rec.get("measurement") if isinstance(rec.get("measurement"), dict) else {}
+        judge = rec.get("judge")
+        name = judge.get("name") if isinstance(judge, dict) else None
+        if reference.get("source") == "demo" or not isinstance(name, str) or name.casefold() in ("jev", "unknown", ""):
+            continue
+        if autorun.is_sample(rec.get("event_kind"), rec.get("event_id")):
+            continue
+        confirmed = (measurement_valid(item, timing, reference) and timing.get("posting_source") == "bridge_readback"
+                     and not item.get("delivery_unknown"))
+        seconds = _interval(timing, "posted_at", "approval_observed_at", now) if confirmed else None
+        observed = _timestamp(timing.get("approval_observed_at"))
+        if seconds is not None and observed is not None:
+            found.append((observed, seconds))
+    return found
 
 
 def measurement_lines(data):

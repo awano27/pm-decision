@@ -10,7 +10,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import actions, brief as brief_mod, config, events, fsutil, fulltext, graph, notify, pull, push
+from . import actions, brief as brief_mod, config, events, fsutil, fulltext, graph, hold, notify, pull, push
 from .backends import BackendUnavailable, is_jev
 
 
@@ -377,13 +377,24 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
     changes = []
 
     def do_collect():
-        got = notify.collect(out, bridge, real=real and send, send=send)   # R13: an OK on a run without --send writes nothing
+        got = notify.collect(out, bridge, real=real and send, send=send, now=now)   # R13: an OK on a run without --send writes nothing
         if getattr(got, "busy", False):
             _busy(r, "approvals", "another run holds approvals.lock, nothing was applied this cycle")
             return []
         changes.extend(got)
         return [f"#{c['id']}:{c['status']}" for c in changes]
     _step(out, "approvals", do_collect, r)
+    if send:   # R09: a held item whose day has come is posted again under the same number, in this cycle; nothing is decided by it
+        try:
+            back = hold.resurface(out, now)
+        except Exception as e:   # the cycle goes on; the held item stays as it was
+            back = []
+            _log(out, {"step": "hold", "error": f"{type(e).__name__}: {str(e)[:120]}"})
+        if getattr(back, "busy", False):   # the same lock as notify and approvals, which already name the busy lock; the next cycle retries
+            back = []
+        if back:
+            r["hold_resurfaced"] = list(back)
+            _step(out, "notify_hold", lambda: notify.notify(out, bridge, send=True, real=real), r)
     if send and toaster and changes:
         try:
             toaster(*notify.ack_text(changes))

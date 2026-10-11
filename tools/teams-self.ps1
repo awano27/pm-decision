@@ -1166,6 +1166,12 @@ if ($Action -eq 'read') {
         $entry = "R:" + $c
         if (-not $seen.ContainsKey($c)) { $seen[$c] = 1; $replies.Add($c) }
       }
+      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)保留\s*#?(\d+)\s+(\S{1,10})$') {
+        # `保留 N <いつ>` (R09, notify.parse_hold_until): the line is handed over as it is; kimeru reads the day word
+        $c = '保留 {0} {1}' -f $Matches[1], $Matches[2]
+        $entry = "R:" + $c
+        if (-not $seen.ContainsKey($c)) { $seen[$c] = 1; $replies.Add($c) }
+      }
       elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^違う\s*#?(\d+)(?:\s+(\d+))?$') {
         # a verdict on a decision (notify.parse_label, learn=1): `違う N` (the final result was wrong) or `違う N k` (the k-th option of the question 詳細 N showed)
         $c = if ($Matches[2]) { '違う {0} {1}' -f $Matches[1], $Matches[2] } else { '違う {0}' -f $Matches[1] }

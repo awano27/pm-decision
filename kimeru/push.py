@@ -196,11 +196,18 @@ def _push_gate(out):
         return _push_gates.setdefault(key, threading.Lock())
 
 
+def _item_key(n, it):
+    """What the phone is told about a posted item: its number, and after the item came back (R09, hold.resurface) `#N` + `r<round>`,
+    so the same number is announced once more when it is posted again."""
+    r = int(it.get("hold_round") or 0)
+    return f"#{n}r{r}" if r else f"#{n}"
+
+
 def pending(out):
-    """(numbers of pending items that are posted, keys of notices not yet announced anywhere, unposted item numbers)."""
+    """((number, key) of the items posted and still pending or held, keys of notices not yet announced anywhere, unposted item numbers)."""
     from . import notify
     ap = notify.Approvals(out)
-    posted = sorted(int(n) for n, it in ap.data["items"].items() if it["posted"] and it["status"] in ("pending", "held"))
+    posted = sorted((int(n), _item_key(n, it)) for n, it in ap.data["items"].items() if it["posted"] and it["status"] in ("pending", "held"))
     unposted = sorted(int(n) for n, it in ap.data["items"].items() if not it["posted"] and it["status"] == "pending")
     return posted, list(ap.data.get("notices", [])), unposted
 
@@ -230,7 +237,7 @@ def _begin_cycle_locked(out, now=None):
         changed = True
     if routes:
         posted, notices, unposted = pending(out)
-        everything = {f"#{n}" for n in posted} | {f"unposted:{n}" for n in unposted}
+        everything = {k for _, k in posted} | {f"unposted:{n}" for n in unposted}
         for route in routes:
             if "notice_n" not in data["routes"].get(route, {}):
                 data["routes"][route] = {"sent": sorted(everything), "notice_n": len(notices), "fails": 0,
@@ -269,7 +276,7 @@ def _run_locked(out, now=None, sender=None, routes=None):
         return {}
     now = time.time() if now is None else now
     posted, notices, unposted = pending(out)
-    everything = {f"#{n}" for n in posted} | {f"unposted:{n}" for n in unposted}
+    everything = {k for _, k in posted} | {f"unposted:{n}" for n in unposted}
     for r in [r for r in data["routes"] if r not in routes]:
         del data["routes"][r]            # turned off: turning it on again starts from a fresh baseline
     result = {}
@@ -292,7 +299,7 @@ def _run_locked(out, now=None, sender=None, routes=None):
         if now - st.get("last_at", 0) < min_interval():
             result[route] = "waiting for the minimum interval"
             continue
-        text = message([n for n in posted if f"#{n}" in new], new_notices, sum(1 for n in unposted if f"unposted:{n}" in new))
+        text = message([n for n, k in posted if k in new], new_notices, sum(1 for n in unposted if f"unposted:{n}" in new))
         try:
             if sender is None:
                 _sender(route)(text)

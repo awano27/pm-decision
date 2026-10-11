@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -60,6 +61,15 @@ class TestBridgeE2E(unittest.TestCase):
         changes = notify.collect(self.out, bridge)
         self.assertEqual(sorted((c["id"], c["status"]) for c in changes), [(278, "approved"), (279, "rejected")])
         self.assertEqual(notify.collect(self.out, bridge), [])                 # no double processing
+
+    def test_a_dated_hold_reply_reaches_the_reader_and_is_read_once(self):
+        # R09: `保留 N <いつ>` is a line the reader hands over (the fake reads it like the real one) and kimeru applies once
+        bridge = notify.PowerShellBridge(script=FAKE)
+        notify.notify(self.out, bridge, send=True)
+        self.reply("保留 278 金曜")
+        changes = notify.collect(self.out, bridge, now=datetime(2026, 10, 14, 10, 0))   # a Wednesday
+        self.assertEqual(changes, [{"id": 278, "status": "held", "until": "2026-10-16"}])
+        self.assertEqual(notify.collect(self.out, bridge, now=datetime(2026, 10, 15, 7, 0)), [])
 
     def test_cli_commands(self):
         env = {**os.environ, "PYTHONIOENCODING": "utf-8"}

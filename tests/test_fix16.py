@@ -61,7 +61,7 @@ class TestATestPostIsNotAnApproval(unittest.TestCase):
         self.assertEqual(notify.redo_bad_entries({"timeline": ["P:7", "T:7", "R:再実行 7/1"]}), [])
 
     def test_every_kind_of_reply_is_kept_from_the_real_item(self):
-        for reply in ("OK 123", "NG 123", "保留 123", "再実行 123", "再実行 123-1", "済 123", "聞き返し 123", "修正 123 短く", "下書き 123 了解です"):
+        for reply in ("OK 123", "NG 123", "保留 123", "保留 123 金", "再実行 123", "再実行 123-1", "済 123", "聞き返し 123", "修正 123 短く", "下書き 123 了解です"):
             self.assertEqual(notify.fresh_entries({"timeline": ["P:123", "X:123:1", "TX:123:1", f"R:{reply}"]}), [], reply)
 
     def test_the_test_reader_reads_its_own_posts_and_replies_only(self):

@@ -47,6 +47,7 @@ switch ($Action) {
       elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^再実行\s*#?(\d+)\s*[-ー−‐‑‒–—―─ｰ]\s*(\d+)\s*[.。!！]*$') { $c = 'R:再実行 {0}-{1}' -f $Matches[1], $Matches[2] }
       elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^再実行\s*#?(\d+)(\s*[^\d\s.。!！]{1,6}\s*|\s+)(\d*)\s*[.。!！]*$') { $c = 'R:再実行形式 {0} {1}' -f $Matches[1], (($Matches[2] + $Matches[3]).Trim()) }
       elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留|聞き返し|詳細|再実行|済)\s*#?(\d+)$') { $c = 'R:{0} {1}' -f $Matches[1].ToUpper(), $Matches[2] }
+      elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)保留\s*#?(\d+)\s+(\S{1,10})$') { $c = 'R:保留 {0} {1}' -f $Matches[1], $Matches[2] }
       elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^違う\s*#?(\d+)(?:\s+(\d+))?$') { $c = if ($Matches[2]) { 'R:違う {0} {1}' -f $Matches[1], $Matches[2] } else { 'R:違う {0}' -f $Matches[1] } }
       if ($c -and ($tl.Count -eq 0 -or $tl[$tl.Count - 1] -ne $c)) { $tl.Add($c) }
     }

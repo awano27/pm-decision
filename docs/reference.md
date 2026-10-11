@@ -142,6 +142,7 @@ python -m kimeru config path
 | `KIMERU_PRIORITY` | 判断の順番（種類のコンマ区切り。既定 `monitor.alert,teams.chat,ado.workitem.created,meeting.item`） |
 | `KIMERU_CYCLE_BUDGET` | 1 サイクルの時間の上限（秒。未設定は自動運転の間隔） |
 | `KIMERU_PLAN_LEAN` / `KIMERU_BATCH` | 不要な手順の期限を聞かない（既定 0）／グラフの質問を 1 回にまとめる（既定 0） |
+| `KIMERU_HOLD_STALE_DAYS` | 日付のない保留（`保留 N`）を、朝のまとめで「長く保留: #N（N 日）」と書くまでの日数（既定 0 = 書かない）。1 以上のとき、その日数より長く保留している件だけ書きます。`保留 N <いつ>` の件（`保留 #N（10/15 に再表示）`）には関係しません |
 | `KIMERU_LEARN` | Teams の返信 `違う N` / `違う N k` を正誤として記録し、`詳細 N` に「迷った質問」の番号を付ける（既定 0。0 のときは、この返信に反応せず、投稿の文も変わりません） |
 | `KIMERU_READ_FULL` / `KIMERU_READ_MAX_OPEN` / `KIMERU_READ_BUDGET` / `KIMERU_READ_MESSAGES` | チャットを開いて全文を読む（既定 0）、1 サイクルに開く数（既定 3。0 なら読まない）、読む秒数の上限（既定 60。0 なら読まない）、開いたチャットから読む末尾のメッセージ数（既定 5） |
 | `KIMERU_READ_IDLE_SEC` / `KIMERU_READ_CLICK` / `KIMERU_READ_MAX_DEFER` | 全文を読むために開く前と、開いたあとの操作の直前に、キーボード・マウスが止まっているべき秒数（既定 30、`0` で確かめない。`KIMERU_IDLE_SEC` は読む処理に影響しない。戻す処理は別に 3 秒。`read_idle_sec` が 3 未満ならそれに合わせる）／Teams を前面に出してクリックする経路を使う（既定 0）／人の操作と重なって回せる回数の上限（既定 12。超えたらプレビューで判断。0 は延期しない: 最初の 1 回は読み、読めなければプレビューで判断） |

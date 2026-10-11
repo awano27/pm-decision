@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 import unicodedata
 from pathlib import Path
 
-from . import actions, config, fsutil, labels
+from . import actions, config, fsutil, hold, labels
 from . import writer as writer_mod
 
 HERE = Path(__file__).resolve().parent.parent
@@ -105,6 +105,14 @@ def parse_label(line):
     return (m.group(1), int(m.group(2)) if m.group(2) else None) if m else None
 
 
+def _hold_reply(line):
+    """(number, None) for `保留 N`, (number, word) for `保留 N <いつ>` (R09, hold.py); None for any other line."""
+    r = parse_reply(line)
+    if r:
+        return (r[1], None) if r[0] == "保留" else None
+    return hold.parse_hold_until(line)
+
+
 STATUS = {"OK": "approved", "NG": "rejected", "保留": "held", "聞き返し": "ask_back", "詳細": "detail", "再実行": "redo", "済": "closed"}   # 聞き返し / 詳細 / 再実行 / 済: not decisions
 
 
@@ -132,7 +140,7 @@ def _reply_number(line):
     r = parse_reply(line)
     if r:
         return r[1] if r[0] in STATUS else r[0]
-    for f in (parse_redraft, parse_paste, parse_redo_k, parse_label):
+    for f in (parse_redraft, parse_paste, parse_redo_k, parse_label, hold.parse_hold_until):
         r = f(line)
         if r:
             return r[0]
@@ -304,9 +312,10 @@ def _draft_line(rec):
     return ""
 
 
-def format_post(n, rec, full=None):
+def format_post(n, rec, full=None, hold=None):
     """The approval post "[kimeru #N]": at most 5 short lines. Everything else (the source text, the memo, every draft, the
-    revision, the kinds of action) is in the answer to `詳細 N` (format_detail). `full` is not shown here."""
+    revision, the kinds of action) is in the answer to `詳細 N` (format_detail). `full` is not shown here. `hold` (R09, hold.post_marks):
+    {"day": 2} for an item that came back on the 2nd day of its hold, {"undated": ["3"]} for the undated holds named on this post."""
     from . import execute
     memo = rec.get("memo") or {}
     plan = rec.get("plan") or {}
@@ -314,7 +323,11 @@ def format_post(n, rec, full=None):
     drafts = [a for a in actions if a.get("drafted_by")]
     update = "（更新）" if int(rec.get("revision") or 1) > 1 else ""
     held_mark = " （前回 保留）" if rec.get("held_before") else ""   # R08: a continued item that was on hold before, until OK or NG
-    lines = [f"[kimeru #{n}] {update}{_who(rec)}{held_mark}"]
+    day = (hold or {}).get("day")
+    resurfaced = f" （保留から・{day} 日目）" if day else ""
+    undated = (hold or {}).get("undated")
+    named = f" （保留（日付なし）: {', '.join('#' + str(x) for x in undated)}）" if undated else ""
+    lines = [f"[kimeru #{n}] {update}{_who(rec)}{held_mark}{resurfaced}{named}"]
     if str(rec.get("event_kind") or "").startswith("ado.") and any(a.get("type") == "ado.comment" for a in actions) and not memo:
         proposal = "情報不足: 追記依頼のコメント案あり"
     else:
@@ -1101,7 +1114,8 @@ def _notify_locked(out, bridge, send, real):
             execute.freeze(it["record"], real)
             ap.save()
             fsutil.refresh(lock_path(out))
-            body = format_post(n, it["record"], fulltext.load(out, it["key"]))
+            marks = hold.post_marks(it, ap.data["items"])   # R09: a day that came back, and the undated holds not named yet
+            body = format_post(n, it["record"], fulltext.load(out, it["key"]), hold=marks)
             if send:
                 attempt = _attempt_record("case", n, "post", body, it.get("revision", 1), it["key"])
                 it.update({"delivery_unknown": True, "delivery_unknown_part": "post",
@@ -1125,6 +1139,7 @@ def _notify_locked(out, bridge, send, real):
                 raise RuntimeError(f"#{n} was not posted with verified readback")
             if send:
                 it["posted"], it["toasted"] = True, False
+                hold.noted(it, ap.data["items"], marks)
                 timing = measurement_for(it)
                 if not timing.get("posted_at"):
                     timing["posted_at"] = measurement_now()
@@ -1211,7 +1226,7 @@ def fresh_entries(read, x_boundary=True):
         if x:                # (a state folder made new), the result posts of the earlier item above it are not this item's
             top[x[0]] = max(top.get(x[0], 0), x[1])
         if e.startswith("R:"):
-            r = parse_reply(e[2:]) or parse_redraft(e[2:]) or parse_paste(e[2:]) or parse_label(e[2:])
+            r = parse_reply(e[2:]) or parse_redraft(e[2:]) or parse_paste(e[2:]) or parse_label(e[2:]) or hold.parse_hold_until(e[2:])
             num = r and (r[1] if r[0] in STATUS else r[0])
             if num and i > last_post.get(num, len(tl)):
                 r0 = parse_reply(e[2:])
@@ -1308,6 +1323,7 @@ def _redraft(it, instruction, writer, out=None):
     again under the same number either way (a failure says so and keeps the previous draft)."""
     rec = it["record"]
     it["posted"], it["status"], it["request_posted"] = False, "pending", False
+    hold.clear(it)
     if writer is None or not rec.get("material_event"):
         invalidate_measurement_post(it)
         rec["redraft_note"] = "修正できませんでした（writer が設定されていません）。前の下書きのままです"
@@ -1348,6 +1364,7 @@ def _apply_paste(it, text):
     that are not in the source). Returns the change to log."""
     rec = it["record"]
     it["posted"], it["status"], it["request_posted"] = False, "pending", False
+    hold.clear(it)
     text = writer_mod.strip_citations(text)[:MAX_PASTE]
     target = next((a for a in rec.get("actions", []) if a.get("type") in ("teams.reply", "teams.post", "ado.comment")), None)
     if target is None:
@@ -1538,7 +1555,11 @@ class Changes(fsutil.BusyList):
     """The applied changes. `busy` is True when another approvals run holds the lock: nothing was read or applied."""
 
 
-def collect(out, bridge, writer=None, real=False, send=False):
+def _naive_now():
+    return datetime.now()
+
+
+def collect(out, bridge, writer=None, real=False, send=False, now=None):
     """Read replies from the self chat and apply them. Returns applied changes. Only one collect runs at a time (a lock file in
     the state folder): the daily cycle and a hand-typed `approvals` could otherwise approve the same "OK N" twice and write twice.
     When the lock is held, nothing is done and the result has `busy` set."""
@@ -1547,7 +1568,7 @@ def collect(out, bridge, writer=None, real=False, send=False):
             res = Changes()
             res.busy = True
             return res
-        return Changes(_collect(out, bridge, writer, real, send))
+        return Changes(_collect(out, bridge, writer, real, send, now))
 
 
 def unwritten(it):
@@ -1558,7 +1579,7 @@ def unwritten(it):
         execute.is_gated(a) and a.get("exec_text") for a in (it.get("record") or {}).get("actions", []))
 
 
-def _collect(out, bridge, writer=None, real=False, send=False):
+def _collect(out, bridge, writer=None, real=False, send=False, now=None):
     """The body of collect (the lock is held).
     real=True (the daily and approvals paths only): an approval carries out the switched-on kinds, and `再実行 N` / `済 N` work.
     send=True: what is posted while collecting (results, texts ready to copy) is sent; otherwise it is only pasted.
@@ -1641,7 +1662,13 @@ def _collect(out, bridge, writer=None, real=False, send=False):
             it["redo_malformed"] = int(it.get("x_seq", 0))
             ap.save()
             changes.append({"id": int(num), "status": "redo_malformed", "latest": it["redo_malformed"]})
-    for line in replies:
+    now = now or _naive_now()   # R09: a day hold is counted from this moment (naive local, as the cycle's clock)
+    last_hold = {}   # of the replies on the screen, the last 保留 of each number is the one that counts (its day, if it has one)
+    for idx, line in enumerate(replies):
+        hr = _hold_reply(line)
+        if hr:
+            last_hold[hr[0]] = idx
+    for idx, line in enumerate(replies):
         ps = parse_paste(line)
         if ps:
             it = ap.data["items"].get(ps[0])
@@ -1659,6 +1686,17 @@ def _collect(out, bridge, writer=None, real=False, send=False):
             it = ap.data["items"].get(lb[0])
             if real and it and it["posted"] and labels.enabled():
                 labels.record(out, it, lb[1])
+            continue
+        hr = _hold_reply(line)   # 保留 N, and 保留 N <いつ> (R09): the last one of the number decides the day
+        if hr:
+            num, day_word = hr
+            it = ap.data["items"].get(num)
+            if last_hold.get(num) == idx and it and it["posted"] and it["status"] in ("pending", "held"):
+                entering = it["status"] != "held"
+                it["status"] = "held"
+                info = hold.apply(it, day_word, now, entering)
+                if entering or info is not None:
+                    changes.append({"id": int(num), "status": "held", **(info or {})})
             continue
         r = parse_reply(line)
         if not r:
@@ -1700,6 +1738,7 @@ def _collect(out, bridge, writer=None, real=False, send=False):
                 a["unverified"] = a.pop("ask_back_unverified", [])
                 a["variant"] = "ask_back"
             it["posted"], it["status"], it["request_posted"] = False, "pending", False
+            hold.clear(it)
             next_measurement(it)
             changes.append({"id": int(num), "status": "ask_back"})
             continue
@@ -1716,6 +1755,7 @@ def _collect(out, bridge, writer=None, real=False, send=False):
             changes.append({"id": int(num), "status": "reposted"})
             continue
         it["status"] = new
+        hold.clear(it)
         if new == "approved":
             measurement_for(it).setdefault("approval_observed_at", measurement_now())
         if new in ("approved", "rejected"):   # the full text is kept only while the item waits

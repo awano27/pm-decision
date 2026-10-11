@@ -292,7 +292,8 @@ def _merge_locked(out, ev, res, notify, source_event=None, source_request=None, 
         preserve = {name: it[name] for name in ("key", "work", "handoff_evidence", "handoff_unknown",
                                                  "measurement", "measurement_history",
                                                  "delivery_unknown", "delivery_unknown_part", "delivery_unknown_at",
-                                                 "delivery_unknown_revision", "delivery_unknown_generation", "delivery_attempt")
+                                                 "delivery_unknown_revision", "delivery_unknown_generation", "delivery_attempt",
+                                                 "held_at", "hold_count", "hold_round")   # R09: when a hold began, its count and its round carry over; the day does not (the item is pending again)
                     if name in it}
         if it.get("delivery_unknown") and "delivery_unknown_revision" not in preserve:
             preserve["delivery_unknown_revision"] = revision

@@ -186,6 +186,7 @@ python -m kimeru config path
 | `executions.jsonl` | 承認した ADO コメントの実行の記録（実行中・完了・失敗・結果不明・閉じた。組織・プロジェクトを含む） |
 | `processed.txt` | 判断済みのイベント（グラフの版とイベント ID）。二重判断の防止 |
 | `pull_state.json` / `daily.log.jsonl` | 取り込みの位置、各サイクルの結果 |
+| `brief_history.jsonl` | 配信が確かめられた朝のまとめごとの、件の順位と点数（本文・名前は含まない。90 日を過ぎた行は消す） |
 | `report.html` | 判断の一覧レポート |
 
 ### 入力形式

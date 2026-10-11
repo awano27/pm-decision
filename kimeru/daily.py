@@ -117,6 +117,15 @@ def _with_key_points(text):
     return "\n".join([head, f"今日の要点（{label}）:"] + [f"・{p}" for p in points] + rest)
 
 
+def _record_brief(out, report, date, backend, ranked):
+    """The day's row of out/brief_history.jsonl, after a delivered brief. Never changes the brief's result: a failure is logged."""
+    try:
+        if brief_mod.record_history(out, date, backend, ranked) == "busy":
+            _busy(report, "brief_history", "another run holds brief_history.lock, this day's row was not written")
+    except Exception as e:
+        _log(out, {"step": "brief_history", "error": f"{type(e).__name__}: {str(e)[:120]}"})
+
+
 def retry_errors(inbox):
     """Move inbox/done/*.error back into the inbox (decided events are skipped by dedup). Returns the count."""
     inbox = Path(inbox)
@@ -273,6 +282,10 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
             r["inbox_done_purged"] = gone
     except Exception as e:
         _log(out, {"step": "inbox_done", "error": type(e).__name__})
+    try:   # morning brief rows older than the comparison needs (out/brief_history.jsonl, 90 days); nothing is reported when none go
+        brief_mod.purge_history(out, now=now)
+    except Exception as e:
+        _log(out, {"step": "brief_history", "error": f"{type(e).__name__}: {str(e)[:120]}"})
     if send:   # a route turned on is baselined before this cycle posts anything; a route turned off forgets what came meanwhile
         try:
             push.begin_cycle(out)
@@ -388,12 +401,15 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
             def do_brief():
                 built_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
                 text, ranked = brief_mod.build(out, backend, date=today, since=st.get("brief_at"))   # unknown: the last 24 hours
-                if len(ranked) >= 2:   # a one-line day needs no summary, and an empty one must not invent one
+                shown = ranked[:brief_mod.TOP]   # the post names the first three; the history keeps every item
+                if len(shown) >= 2:   # a one-line day needs no summary, and an empty one must not invent one
                     text = _with_key_points(text)
                 result = notify.deliver_brief(out, bridge, text, send, today, built_at=built_at)
                 status = result["status"]
+                if status == "delivered":   # only a brief whose delivery was read back is recorded (not pasted, not unknown)
+                    _record_brief(out, r, today, backend, ranked)
                 if status in ("delivered", "pasted", "already_delivered"):
-                    return len(ranked)
+                    return len(shown)
                 if status == "delivery_unknown":
                     return "error: brief delivery_unknown; use delivery show/confirm/retry"
                 return f"error: brief delivery {status}"

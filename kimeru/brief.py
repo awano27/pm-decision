@@ -7,13 +7,19 @@ Ordering: due level first (already judged by Jev inside the plan node), then the
 harm of a one-day delay, scored by Jev in ONE call (one score question per item).
 The due label is NOT shown to Jev for the harm question, so it cannot anchor on it.
 """
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from . import fsutil
+from .backends import judge_name
+
 HARM = ["No real harm", "Minor inconvenience for the team",
         "Significant harm to the schedule or to stakeholders", "Severe harm to customers or the business"]
 MAX_ITEMS = 30  # keep a single Jev call small
+TOP = 3         # the items the post names; the rest are counted
+HISTORY_KEEP_DAYS = 90   # out/brief_history.jsonl keeps a row this many days back (the next brief compares with it)
 STUB_HINTS = {"3": ["障害", "incident", "顧客", "customer"], "2": ["スケジュール", "リリース", "判断"], "1": ["確認待ち"]}
 
 
@@ -49,10 +55,12 @@ def collect(out, now=None, days=2):
     since = now - timedelta(days=days)
     items, seen = [], set()
 
-    def add(key, kind, text, subject, due_level):
+    def add(key, kind, text, subject, due_level, rec=None):
+        # `notify` and `severe` are copied from the decision record (what the history keeps); neither reaches Jev
         if key not in seen:
             seen.add(key)
-            items.append({"key": key, "kind": kind, "text": text, "subject": subject, "due_level": due_level})
+            items.append({"key": key, "kind": kind, "text": text, "subject": subject, "due_level": due_level,
+                          "notify": bool((rec or {}).get("notify")), "severe": bool((rec or {}).get("severe_guard"))})
 
     ap = json.loads((out / "approvals.json").read_text(encoding="utf-8")) if (out / "approvals.json").exists() else {"items": {}}
     queued = set()
@@ -60,12 +68,12 @@ def collect(out, now=None, days=2):
         queued.add(it["key"])
         if it["status"] in ("pending", "held"):
             what = it['record'].get('advice') or it['record'].get('graph')
-            add(f"approval:{n}", "approval", f"確認待ち #{n}: {what}", f"Waiting for the PM's approval: {what}", 0)
+            add(f"approval:{n}", "approval", f"確認待ち #{n}: {what}", f"Waiting for the PM's approval: {what}", 0, it["record"])
     for rec in reversed(_rows(out / "queue.jsonl")):
         key = f"{rec.get('graph')}:{rec.get('event_id')}:{rec.get('node')}"
         if key not in queued:
             what = rec.get('advice') or rec.get('graph')
-            add(f"queue:{key}", "approval", f"確認待ち（未投稿）: {what}", f"Waiting for the PM's approval: {what}", 0)
+            add(f"queue:{key}", "approval", f"確認待ち（未投稿）: {what}", f"Waiting for the PM's approval: {what}", 0, rec)
     decisions = _rows(out / "decisions.jsonl")
     # A decision row is only a proposal snapshot. For a case with a current
     # approval record, that record's status, revision and plan are authoritative.
@@ -102,7 +110,7 @@ def collect(out, now=None, days=2):
                 due = due_date(at, s["due_level"]) if at else None
                 label, level = (due_label(due, today), 0 if due <= today else 1) if due else (s["due"], s["due_level"])
                 add(f"step:{source_key}:{p['playbook']}:{s['id']}", "step",
-                    f"{p['title']}: {s['title']}（{label}）", f"{p['title']}: {s['title']}", level)
+                    f"{p['title']}: {s['title']}（{label}）", f"{p['title']}: {s['title']}", level, rec)
 
     for _, item in ap.get("items", {}).items():
         record = item.get("record") or {}
@@ -125,7 +133,8 @@ def collect(out, now=None, days=2):
     return items[:MAX_ITEMS]
 
 
-def rank(items, backend, top=3):
+def rank(items, backend, top=None):
+    """Every item, best first, with its harm (one score per item, one call) and its `rank` (1 = first). `top` keeps the first N."""
     if not items:
         return []
     state = {"items": [i["subject"] for i in items]}
@@ -135,7 +144,8 @@ def rank(items, backend, top=3):
     ans = backend.ask(state, qs)
     keyed = [((-it["due_level"], ans[f"h{i}"]["score"], -i), it) for i, it in enumerate(items)]  # tie -> newer first
     keyed.sort(key=lambda t: t[0], reverse=True)
-    return [{**it, "harm": round(k[1], 2)} for k, it in keyed[:top]]
+    ranked = [{**it, "harm": round(k[1], 2), "rank": n} for n, (k, it) in enumerate(keyed, 1)]
+    return ranked if top is None else ranked[:top]
 
 
 def format_post(ranked, total, pending, date=None, empty_message="対応が必要な項目はありません"):
@@ -323,17 +333,18 @@ def unsure_section(out, now=None, days=1, since=None):
     return "\n".join(lines)
 
 
-def build(out, backend, top=3, now=None, date=None, since=None):
+def build(out, backend, top=TOP, now=None, date=None, since=None):
     """now: aware datetime for the collection window; date: "YYYY-MM-DD" shown in the header; since: when the last brief was
-    built (ISO text or datetime): the ADO / Teams / unsure sections count from there instead of the last 24 hours."""
+    built (ISO text or datetime): the ADO / Teams / unsure sections count from there instead of the last 24 hours.
+    Returns (text, ranked): the text names the first `top` items; `ranked` is every item with its harm and rank (the history)."""
     items = collect(out, now=now)
-    ranked = rank(items, backend, top)
+    ranked = rank(items, backend)
     pending = sum(1 for i in items if i["kind"] == "approval")
     from . import work
     unfinished = [row for row in work.list_work(out) if row["state"] != "done"]
     empty_message = ("実行候補はありません。未完了作業の状況は下記を確認してください"
                      if unfinished else "対応が必要な項目はありません")
-    text = format_post(ranked, len(items), pending, date, empty_message)
+    text = format_post(ranked[:top], len(items), pending, date, empty_message)
     quiet = quiet_reads(out, now=now)
     if quiet:
         text += (f"\n開いて読みましたが、対応は不要でした: {len(quiet)} 件（{'、'.join(quiet[:5])}{' ほか' if len(quiet) > 5 else ''}）"
@@ -362,3 +373,89 @@ def build(out, backend, top=3, now=None, date=None, since=None):
         if len(unfinished) > 3:
             text += f"\nほか {len(unfinished) - 3} 件（kimeru work list で全件）"
     return text, ranked
+
+
+# --- out/brief_history.jsonl: what each delivered morning brief ranked (the next brief's changes are counted from it) ---
+# One row per day: {"date", "backend", "rows": [{key, kind, sig, harm, rank, notify, severe, due_level}]}. No text, no name:
+# `sig` is the first 12 hex digits of the sha1 of the subject. Written by daily.cycle only, after a delivery was read back.
+
+def history_path(out):
+    return Path(out) / "brief_history.jsonl"
+
+
+def history_lock(out):
+    return Path(out) / "brief_history.lock"
+
+
+def _lines(path):
+    """The non-empty lines as they are on disk. A damaged line is kept as it is: nothing here drops what it cannot read."""
+    if not path.exists():
+        return []
+    return [l for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+
+def _row_date(line):
+    """The date of a history line, or None when the line is damaged or has no valid date."""
+    try:
+        d = json.loads(line).get("date")
+        datetime.strptime(d, "%Y-%m-%d")
+        return d
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def _write(path, lines):
+    fsutil.write_atomic(path, "".join(l + "\n" for l in lines))
+    path.with_name(path.name + ".bak").unlink(missing_ok=True)   # no second copy: the rows are kept only as long as the rule says
+
+
+def _history_row(it):
+    return {"key": it["key"], "kind": it["kind"],
+            "sig": hashlib.sha1(it["subject"].encode("utf-8")).hexdigest()[:12],
+            "harm": it.get("harm"), "rank": it.get("rank"), "notify": bool(it.get("notify")),
+            "severe": bool(it.get("severe")), "due_level": it["due_level"]}
+
+
+def record_history(out, date, backend, ranked):
+    """Write the row of `date`; a second write for the same day replaces it. `ranked` is what build returns (every item, with its
+    rank and harm). Returns "recorded", or "busy" when another run holds brief_history.lock (then nothing is written)."""
+    entry = json.dumps({"date": date, "backend": judge_name(backend), "rows": [_history_row(it) for it in ranked]},
+                       ensure_ascii=False)
+    path = history_path(out)
+    with fsutil.exclusive(history_lock(out)) as got:
+        if not got:
+            return "busy"
+        lines, placed = [], False
+        for line in _lines(path):
+            if _row_date(line) == date:
+                if not placed:
+                    lines.append(entry)
+                    placed = True
+            else:
+                lines.append(line)
+        if not placed:
+            lines.append(entry)
+        _write(path, lines)
+    return "recorded"
+
+
+def purge_history(out, now=None, keep_days=HISTORY_KEEP_DAYS):
+    """Delete the rows dated more than `keep_days` before `now` (a row exactly `keep_days` back is kept). Returns how many were
+    deleted: 0 when nothing is old, or when another run holds brief_history.lock (the next cycle tries again)."""
+    path = history_path(out)
+    cutoff = ((now or datetime.now()).date() - timedelta(days=keep_days)).isoformat()
+
+    def old(line):
+        d = _row_date(line)
+        return d is not None and d < cutoff
+    if not any(old(l) for l in _lines(path)):   # read without the lock first: most cycles have nothing to delete
+        return 0
+    with fsutil.exclusive(history_lock(out)) as got:
+        if not got:
+            return 0
+        lines = _lines(path)
+        kept = [l for l in lines if not old(l)]
+        if len(kept) == len(lines):
+            return 0
+        _write(path, kept)
+        return len(lines) - len(kept)

@@ -86,6 +86,14 @@ class TestRankAndFormat(unittest.TestCase):
         r = brief.rank(items, Fixed({"a": 0.5, "b": 2.9, "c": 1.2, "d": 2.1}), top=3)
         self.assertEqual([i["text"] for i in r], ["c", "a", "b"])
 
+    def test_rank_without_top_returns_every_item_in_order_with_its_rank(self):
+        items = [{"key": k, "kind": "step", "text": k, "subject": k, "due_level": lv}
+                 for k, lv in (("a", 0), ("b", 1), ("c", 0), ("d", 1))]
+        r = brief.rank(items, Fixed({"a": 0.5, "b": 2.9, "c": 1.2, "d": 2.1}))
+        self.assertEqual([i["text"] for i in r], ["c", "a", "b", "d"])
+        self.assertEqual([i["rank"] for i in r], [1, 2, 3, 4])
+        self.assertEqual([i["harm"] for i in r], [1.2, 0.5, 2.9, 2.1])
+
     def test_due_label_hidden_from_jev(self):
         seen = {}
 

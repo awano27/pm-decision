@@ -192,6 +192,55 @@ class TestAdviseNotExecuted(unittest.TestCase):
             self.assertTrue((Path(d) / "queue.jsonl").exists())
 
 
+CHAT_REC = {"graph": "teams-chat-triage", "event_kind": "teams.chat", "event_id": "t1", "node": "reply",
+            "revision": 1, "outcome": "decide", "needs_human": True, "advice": "スケジュール変更の判断",
+            "event": {"kind": "teams.chat", "id": "t1", "author": "山田", "text": "仕様変更してもよいですか。来週の予定に響きます"},
+            "memo": {"summary": "仕様変更の可否", "next": "影響範囲を確認して返事する", "missing": ["期限"]},
+            "actions": [{"type": "teams.reply", "to": "山田", "text": "確認して今日中に返信します。", "drafted_by": "fake"}]}
+
+
+class TestContinuedPostFormat(unittest.TestCase):
+    def test_a_first_post_without_a_continuation_is_byte_identical_to_the_golden_text(self):
+        self.assertEqual(notify.format_post(3, CHAT_REC),
+                         "\n".join(["[kimeru #3] 山田さん: 仕様変更の可否", "→ 影響範囲を確認して返事する",
+                                    "案: 確認して今日中に返信します。", "OK 3 / NG 3 / 修正 3 <点> / 詳細 3"]))
+        self.assertEqual(notify.format_detail(3, CHAT_REC), "\n".join([
+            "[kimeru 詳細 #3] 判断が必要（teams-chat-triage） / 改訂 1", "判断: スケジュール変更の判断",
+            "次の一手: 影響範囲を確認して返事する", "不足情報: 期限",
+            "OK の効果: コピー用文面を自分チャットへ返す（相手には送信しない）", "teams.chat #t1",
+            "内容: スケジュール変更の判断", "承認の対象: teams.reply（既定は記録だけ。実行するのは設定で有効にした種類だけ）",
+            "文面 LLM のメモ:", "・要点: 仕様変更の可否", "・足りない情報: 期限", "・次の一手: 影響範囲を確認して返事する",
+            "返信の下書き（fake）:", "確認して今日中に返信します。", "返信: OK 3 / NG 3 / 保留 3 / 修正 3 <直してほしい点>"]))
+        self.assertNotIn("前回 保留", notify.format_post(3, CHAT_REC))
+
+    def test_the_first_request_on_line_one_is_cut_to_forty_characters(self):
+        rec = {**CHAT_REC, "revision": 2, "first_message": {"text": "あ" * 200, "at": "2026-10-11T09:00:00+00:00"}}
+        first = notify.format_post(3, rec).splitlines()[0]
+        self.assertTrue(first.startswith("[kimeru #3] （更新）山田さん: "))
+        self.assertLessEqual(len(first) - len("[kimeru #3] （更新）"), 40)
+
+    def test_the_continuation_line_shows_thirty_characters_of_the_newest_message_after_the_arrow_line(self):
+        rec = {**CHAT_REC, "revision": 2, "first_message": {"text": "最初の依頼", "at": "2026-10-11T09:00:00+00:00"},
+               "event": {**CHAT_REC["event"], "text": "い" * 80}}
+        lines = notify.format_post(3, rec).splitlines()
+        self.assertTrue(lines[1].startswith("→ "))
+        self.assertEqual(lines[2], "続き「" + "い" * 29 + "…」")
+        self.assertLessEqual(len(lines), 5)
+
+    def test_a_continued_held_item_says_held_before_at_the_end_of_line_one(self):
+        rec = {**CHAT_REC, "revision": 2, "held_before": True,
+               "first_message": {"text": "仕様変更の件", "at": "2026-10-11T09:00:00+00:00"}}
+        self.assertEqual(notify.format_post(3, rec).splitlines()[0], "[kimeru #3] （更新）山田さん: 仕様変更の件 （前回 保留）")
+
+    def test_the_detail_lists_the_first_message_before_the_continuation(self):
+        rec = {**CHAT_REC, "revision": 2, "first_message": {"text": "最初の依頼です", "at": "2026-10-11T09:00:00+00:00"},
+               "followups": [{"text": "続きです", "at": "2026-10-11T09:05:00+00:00"}]}
+        text = notify.format_detail(3, rec)
+        self.assertIn("最初のメッセージ: 最初の依頼です", text)
+        self.assertIn("続きのメッセージ: 続きです", text)
+        self.assertLess(text.index("最初のメッセージ:"), text.index("続きのメッセージ:"))
+
+
 if __name__ == "__main__":
     unittest.main()
 

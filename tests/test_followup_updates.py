@@ -245,5 +245,74 @@ class TestAcknowledgementFold(unittest.TestCase):
         self.assertTrue(last.endswith("…"))
 
 
+class TestContinuedItem(unittest.TestCase):
+    """A continuation that revises a waiting item (the same node) keeps the first request: line 1 names it, the newest message
+    follows as "続き「…」", a held item says "（前回 保留）" until the PM answers OK or NG, and the record keeps the first request
+    at most 120 characters long (R08)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.out = Path(tmp.name)
+        self.bridge, self.writer = FakeBridge(), FakeWriter()
+
+    def ev(self, i, text, author="田中"):
+        return {"kind": "teams.chat", "id": str(i), "chat_id": "19:same@thread.v2", "author": author, "text": text,
+                "mentions_me": True}
+
+    def process(self, ev, backend):
+        return cli.process(ev, GRAPHS, backend, self.out, PBS, writer=self.writer, dedup=True)[0]
+
+    def ask_pm(self, text=ASKED):
+        self.process(self.ev(1, text), UNSURE_DECISION)
+        notify.notify(self.out, self.bridge, send=True)
+
+    def item(self, n="1"):
+        return notify.Approvals(self.out).data["items"][n]
+
+    def test_a_continuation_posts_the_first_request_on_line_one_and_the_newest_message_on_line_three(self):
+        self.ask_pm()
+        self.process(self.ev(2, "資料を共有しました"), CONFIDENT_FYI)
+        self.assertEqual(self.item()["revision"], 2)
+        notify.notify(self.out, self.bridge, send=True)
+        text = self.bridge.posts[-1][0]
+        lines = text.splitlines()
+        self.assertTrue(lines[0].startswith("[kimeru #1] （更新）田中さん: リリース日を決めてください"), lines[0])
+        self.assertEqual(lines[2], "続き「資料を共有しました」")
+        self.assertLessEqual(len(lines), 5)
+        self.assertNotIn("⚠", text)
+
+    def test_a_held_item_that_is_continued_says_held_before_and_the_detail_keeps_both_requests(self):
+        self.ask_pm()
+        notify.collect(self.out, FakeBridge(["保留 1"]), send=False)
+        self.assertEqual(self.item()["status"], "held")
+        self.process(self.ev(2, "資料を共有しました"), CONFIDENT_FYI)
+        item = self.item()
+        self.assertEqual(item["status"], "pending")
+        self.assertTrue(item["record"]["held_before"])
+        self.assertTrue(notify.format_post(1, item["record"]).splitlines()[0].endswith("（前回 保留）"))
+        detail = notify.format_detail(1, item["record"], fulltext.load(self.out, item["key"]))
+        self.assertIn("最初のメッセージ: リリース日を決めてください", detail)
+        self.assertIn("続きのメッセージ: 資料を共有しました", detail)
+        self.assertLess(detail.index("最初のメッセージ:"), detail.index("続きのメッセージ:"))
+
+    def test_the_first_request_is_kept_at_120_characters_and_the_held_mark_is_dropped_after_ok_or_ng(self):
+        long_first = "リリース日を決めてください。" + "詳しい事情は後で説明します。" * 20
+        for answer, word in (("OK 1", "approved"), ("NG 1", "rejected")):
+            with self.subTest(answer=answer), tempfile.TemporaryDirectory() as d:
+                self.out, self.bridge = Path(d), FakeBridge()
+                self.ask_pm(long_first)
+                notify.collect(self.out, FakeBridge(["保留 1"]), send=False)
+                self.process(self.ev(2, "資料を共有しました"), CONFIDENT_FYI)
+                first = self.item()["record"]["first_message"]["text"]
+                self.assertLessEqual(len(first), 120)
+                self.assertTrue(first.startswith("リリース日を決めてください"))
+                self.assertTrue(self.item()["record"]["held_before"])
+                notify.notify(self.out, self.bridge, send=True)
+                notify.collect(self.out, FakeBridge([answer]), send=False)
+                self.assertEqual(self.item()["status"], word)
+                self.assertNotIn("held_before", self.item()["record"])
+
+
 if __name__ == "__main__":
     unittest.main()

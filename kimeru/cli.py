@@ -101,6 +101,12 @@ def _cut(v, limit):
     return v[:limit - 1] + "…" if limit == EVENT_TEXT_SUMMARY else v[:limit]
 
 
+def _short(text, limit=EVENT_TEXT_SUMMARY):
+    """One line of text, cut to `limit` characters the way the records cut their text (120 characters by default)."""
+    text = " ".join(str(text or "").split())
+    return _cut(text, limit) if len(text) > limit else text
+
+
 def _seal_material(res, held, out, key, ev_run, merged):
     """A writer works from the whole text, but the records that stay (decisions.jsonl, queue.jsonl) keep a summary-length
     excerpt like everything else (SECURITY.md). The longer text of the free-text fields, and the request built from it, wait in
@@ -267,6 +273,10 @@ def _merge_locked(out, ev, res, notify, source_event=None, source_request=None, 
             "text": followup_text,
             "at": datetime.now(timezone.utc).isoformat(timespec="seconds")
         }]
+        # R08: the first request stays with the item (120 characters, when it was judged), and a held item says so until the PM answers
+        updated["first_message"] = rec.get("first_message") or {"text": _short(old.get("text")), "at": rec.get("at")}
+        if it.get("status") == "held" or rec.get("held_before"):
+            updated["held_before"] = True
         key = it["key"]
         if source_event is not None:
             from . import fulltext

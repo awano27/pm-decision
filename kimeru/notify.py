@@ -278,7 +278,8 @@ def _who(rec, limit=40):
     short = memo.get("summary") if len(str(memo.get("summary") or "")) <= 30 else ""   # a short memo summary names the topic best
     topic = short or ev.get("text") or ev.get("item") or memo.get("summary") or rec.get("summary") or rec.get("advice") or ""
     if kind == "teams.chat" and ev.get("author"):
-        return _clip(f"{ev['author']}さん: {topic}", limit)
+        first = (rec.get("first_message") or {}).get("text")   # R08: a continued item names its first request, not the newest message
+        return _clip(f"{ev['author']}さん: {first or topic}", limit)
     if kind == "meeting.item" and ev.get("meeting"):
         return _clip(f"{ev['meeting']}: {ev.get('item') or topic}", limit)
     if kind == "monitor.alert" and ev.get("rule"):
@@ -312,12 +313,17 @@ def format_post(n, rec, full=None):
     actions = rec.get("actions", [])
     drafts = [a for a in actions if a.get("drafted_by")]
     update = "（更新）" if int(rec.get("revision") or 1) > 1 else ""
-    lines = [f"[kimeru #{n}] {update}{_who(rec)}"]
+    held_mark = " （前回 保留）" if rec.get("held_before") else ""   # R08: a continued item that was on hold before, until OK or NG
+    lines = [f"[kimeru #{n}] {update}{_who(rec)}{held_mark}"]
     if str(rec.get("event_kind") or "").startswith("ado.") and any(a.get("type") == "ado.comment" for a in actions) and not memo:
         proposal = "情報不足: 追記依頼のコメント案あり"
     else:
         proposal = memo.get("next") or rec.get("advice") or plan.get("summary") or "内容を確認してください"
     lines.append("→ " + _clip(proposal, 100))
+    if rec.get("first_message"):   # R08: the newest message of a continued item, one line after the proposal (30 characters)
+        newest = _clip((rec.get("event") or {}).get("text"), 30)
+        if newest:
+            lines.append(f"続き「{newest}」")
     draft = _draft_line(rec)
     if draft:
         lines.append(draft)
@@ -404,6 +410,9 @@ def format_detail(n, rec, full=None):
         lines.append("元" + ("（全文）" if full else "") + ": " + (f"{who}: " if who else "") + str(shown)[:(600 if full else 200)])
         for t in ((full or {}).get("thread") or [])[-3:]:
             lines.append("　直前のやり取り: " + str(t)[:120])
+    first = (rec.get("first_message") or {}).get("text")
+    if first:   # R08: the first request of a continued item, before the continuation lines
+        lines.append("最初のメッセージ: " + str(first)[:120])
     for f in (rec.get("followups") or [])[-3:]:
         lines.append("続きのメッセージ: " + str(f.get("text", ""))[:120])
     if memo:
@@ -1713,6 +1722,7 @@ def _collect(out, bridge, writer=None, real=False, send=False):
             from . import fulltext
             fulltext.drop_safe(out, it["key"])   # a failure is noted in warnings.jsonl; the approval goes on, purge deletes the text later
             it.pop("detail_question", None)   # the options of `詳細 N` are kept only while the item waits (labels.py)
+            it["record"].pop("held_before", None)   # R08: the "（前回 保留）" mark ends with the decision
         ch = {"id": int(num), "status": new}
         if new == "approved":
             ch["executed"] = [actions.execute(a, dry_run=True) for a in it["record"].get("actions", [])]

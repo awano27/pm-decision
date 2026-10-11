@@ -9,8 +9,11 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from datetime import datetime, timezone
 
 from kimeru import config, notify, review, trial
+
+ONE = "19:a_b@unq.gbl.spaces"   # a chat id (the one the R14 tests use)
 
 
 class TrialTests(unittest.TestCase):
@@ -190,6 +193,41 @@ class TrialTests(unittest.TestCase):
         self.assertEqual(tally["wrong"], 2)
         self.assertEqual(len(rows), 2)
         self.assertFalse(review.fixtures_path().exists())
+
+
+class TestTrialCountsSendsWithoutJev(unittest.TestCase):
+    NOW = datetime(2026, 10, 13, tzinfo=timezone.utc).timestamp()
+
+    def write_items(self, out):
+        Path(out).mkdir(parents=True, exist_ok=True)
+        base = {"chat_id": ONE, "p": "x", "approved_at": "2026-10-12T00:00:00+00:00"}
+        items = {
+            "1": {"key": "k1", "status": "approved", "posted": True, "record": {"judge": {"name": "Kev"}},
+                  "sent_base": base, "sent_seen": {"state": "as_is", "at": "2026-10-12T00:05:00+00:00", "ratio": 1.0}},
+            "2": {"key": "k2", "status": "approved", "posted": True, "record": {"judge": {"name": "Jev"}},
+                  "sent_base": base, "sent_seen": {"state": "other", "at": "2026-10-12T00:07:00+00:00", "ratio": 0.1}},
+            "3": {"key": "k3", "status": "approved", "posted": True, "record": {"judge": {"name": "Kev"}}, "sent_base": base},
+        }
+        (Path(out) / "approvals.json").write_text(json.dumps({"next": 4, "items": items}, ensure_ascii=False), encoding="utf-8")
+
+    def test_the_shared_report_counts_only_the_sends_of_a_non_jev_judge(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.write_items(d)
+            shared = trial.measurement_collect(d, [], share=True, now=self.NOW)["local"]
+            self.assertEqual(shared["sent_states"], {"as_is": 1, "edited": 0, "other": 0})
+            self.assertEqual(shared["sent_approval_to_seen"]["eligible"], 2)
+            self.assertEqual(shared["sent_approval_to_seen"]["unknown"], 1)
+            whole = trial.measurement_collect(d, [], share=False, now=self.NOW)["local"]
+            self.assertEqual(whole["sent_states"], {"as_is": 1, "edited": 0, "other": 1})
+
+    def test_the_lines_name_the_sends_only_when_there_are_some(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.write_items(d)
+            lines = "\n".join(trial.measurement_lines(trial.measurement_collect(d, [], share=True, now=self.NOW)))
+            self.assertIn("sent after the OK", lines)
+        with tempfile.TemporaryDirectory() as d:
+            lines = "\n".join(trial.measurement_lines(trial.measurement_collect(d, [], share=True, now=self.NOW)))
+            self.assertNotIn("sent after the OK", lines)
 
 
 if __name__ == "__main__":

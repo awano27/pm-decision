@@ -7,7 +7,7 @@ from datetime import datetime
 from statistics import median
 from pathlib import Path
 
-from . import fsutil, notify, onboarding, review
+from . import fsutil, notify, onboarding, review, sent
 
 _FILE = "trial.json"
 
@@ -248,7 +248,8 @@ def measurement_collect(out, observations, share=False, now=None):
     items = notify.Approvals(out).data.get("items", {})
     groups = {source: {"delivery_wait": [], "approval_latency": [], "total_case_wait": [], "pending_age": [],
                        "arrival_to_ready": [], "arrival_to_approval": [],
-                       "processing": [], "ambiguous_delivery": 0, "human_delivery_confirmations": 0}
+                       "processing": [], "ambiguous_delivery": 0, "human_delivery_confirmations": 0,
+                       "sent_approval_to_seen": [], "sent_states": {state: 0 for state in sent.STATES}}
               for source in ("local", "demo")}
     eligible, valid_cases, readiness, sources = {}, set(), {}, {}
     for case, item in items.items():
@@ -273,6 +274,14 @@ def measurement_collect(out, observations, share=False, now=None):
         elif item.get("status") in ("pending", "held"):
             posted = _timestamp(timing.get("posted_at"))
             group["pending_age"].append(now - posted if confirmed and posted is not None and 0 <= posted <= now else None)
+        base = item.get("sent_base") if isinstance(item.get("sent_base"), dict) else None
+        if base is not None and item.get("status") == "approved":   # R14: an approved reply whose list was watched (sent_watch=1)
+            seen = item.get("sent_seen") if isinstance(item.get("sent_seen"), dict) else {}
+            state = seen.get("state") if seen.get("state") in sent.STATES else None
+            if state is not None:
+                group["sent_states"][state] += 1
+            group["sent_approval_to_seen"].append(_interval({"from": base.get("approved_at"), "to": seen.get("at")}, "from", "to", now)
+                                                  if state is not None else None)
         group["ambiguous_delivery"] += bool(item.get("delivery_unknown"))
         group["human_delivery_confirmations"] += timing.get("posting_source") == "user_confirmation"
         if source == "local" and _eligible_draft(rec):
@@ -369,6 +378,12 @@ def measurement_lines(data):
             seconds = "Unknown" if value["median_seconds"] is None else f"{value['median_seconds']:.3f}s"
             lines.append(f"{label}: {name}: median {seconds}; measured {value['measured']} / eligible {value['eligible']}; Unknown {value['unknown']}")
         lines.append(f"{label}: ambiguous delivery {group['ambiguous_delivery']}; human delivery confirmations {group['human_delivery_confirmations']} (confirmation time, not original posting time)")
+        sends = group["sent_approval_to_seen"]
+        if sends["eligible"]:   # R14: only when sent_watch=1 watched an approved reply; the list shows my message, not that it arrived
+            states = group["sent_states"]
+            median = "" if sends["median_seconds"] is None else f"; approval to seen median {sends['median_seconds']:.3f}s"
+            lines.append(f"{label}: sent after the OK (the self-chat list, not a receipt): as_is {states['as_is']}, edited {states['edited']}, "
+                         f"other {states['other']}; seen {sends['measured']} / eligible {sends['eligible']}; Unknown {sends['unknown']}{median}")
     rate = "Unknown" if data["adoption_rate"] is None else f"{data['adoption_rate']:.1%}"
     correction = "Unknown" if data["correction_rate"] is None else f"{data['correction_rate']:.1%}"
     lines += [f"Explicit draft adoption: {rate}; observed {data['adoption_observed_cases']} / eligible {data['eligible_draft_cases']}; Unknown {data['adoption_unknown_cases']}; repeat observations {data['repeat_observations']}",

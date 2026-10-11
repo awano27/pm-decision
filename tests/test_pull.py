@@ -367,5 +367,19 @@ class TestAlerts(unittest.TestCase):
             self.assertIn(r[0]["node"], ("page_planned", "page"))
 
 
+class TestOwnMessageIsNeverAnEvent(unittest.TestCase):
+    ONE = "19:aaa_bbb@unq.gbl.spaces"
+
+    def test_my_own_new_message_is_no_event_with_or_without_the_request(self):
+        for own_out in (None, []):
+            sec = {}
+            pull.teams_events([chat(self.ONE, "oneOnOne", "明日の件")], sec)                      # baseline
+            evs = pull.teams_events([chat(self.ONE, "oneOnOne", "あなた: 承知しました。", "7:20")], sec, own_out=own_out,
+                                    now=datetime(2026, 10, 12, 7, 20))
+            self.assertEqual(evs, [])
+            self.assertEqual(len(sec["sigs"]), 1)
+            self.assertEqual("own" in sec["sigs"][self.ONE], own_out is not None)
+
+
 if __name__ == "__main__":
     unittest.main()

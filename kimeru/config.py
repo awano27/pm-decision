@@ -67,6 +67,8 @@ SETTINGS = {
     "learn": ("KIMERU_LEARN", "0"),                            # 1 = the reply 違う N / 違う N k labels a decision (reviews.jsonl) and 詳細 N lists the question it was unsure of
     "post_reason": ("KIMERU_POST_REASON", "0"),                # 1 = the approval post and 詳細 N add one line: the question the model was unsure of (explain.py)
     "post_kind_mark": ("KIMERU_POST_KIND_MARK", "0"),          # 1 = a post that waits only for a writer's draft says 下書き: in its first line; brief, toast and digest count it apart (notify.py, brief.py, stats.py)
+    "sent_watch": ("KIMERU_SENT_WATCH", "0"),                  # 1 = after an OK, the self-chat list shows whether the reply went out: as_is / edited / other, kept without the text (sent.py)
+    "sent_watch_days": ("KIMERU_SENT_WATCH_DAYS", "3"),        # days after an OK in which that send is looked for (sent.py)
     "record_event_full": ("KIMERU_RECORD_EVENT_FULL", "0"),   # 1 = decisions.jsonl keeps the whole event (2,000 characters of text), not a summary-length excerpt
     "judge_text_max": ("KIMERU_JUDGE_TEXT_MAX", "1200"),       # characters of `text` the judge sees
     "title_max": ("KIMERU_TITLE_MAX", "100"),                  # characters of an action's title
@@ -81,7 +83,7 @@ SECRET_ENV = ("TYPESAFE_API_KEY", "KEV_API_KEY", "CLM_API_KEY", "KIMERU_PUSH_TEA
 SECRET_KEY = re.compile(r"key|token|secret|passw|credential|auth|hook.*url|push.*url|teams_url", re.I)
 # settings whose value may be written to the daily log (the others are recorded by name and source only)
 LOGGABLE = ("backend", "writer", "writer_model", "codex_model", "codex_effort", "grok_model", "toast", "brief_hour",
-            "push", "push_min_minutes", "execute", "read_full", "record_event_full", "judge_text_max", "priority", "cycle_budget_sec", "plan_lean", "batch_questions", "learn", "post_reason", "post_kind_mark", "hold_stale_days")
+            "push", "push_min_minutes", "execute", "read_full", "record_event_full", "judge_text_max", "priority", "cycle_budget_sec", "plan_lean", "batch_questions", "learn", "post_reason", "post_kind_mark", "hold_stale_days", "sent_watch", "sent_watch_days")
 
 # settings with a fixed set of values: checked by `config set` and again when read. A value is first read forgivingly
 # (case, spaces, on/off, true/false, yes/no); if it is still not allowed, `backend` stops the command (it decides where the
@@ -91,7 +93,7 @@ CHOICES = {
     "backend": ("stub", "jev", "kev", "clm"),
     "writer": ("", "copilot", "codex", "grok", "claude", "cmd", "m365", "m365-auto"),
     "toast": ("0", "1", "detail"),
-    "plan_lean": _ONOFF, "batch_questions": _ONOFF, "learn": _ONOFF, "post_reason": _ONOFF, "post_kind_mark": _ONOFF, "read_full": _ONOFF, "read_click": _ONOFF, "record_event_full": _ONOFF, "open_chat_link": _ONOFF,
+    "plan_lean": _ONOFF, "batch_questions": _ONOFF, "learn": _ONOFF, "post_reason": _ONOFF, "post_kind_mark": _ONOFF, "sent_watch": _ONOFF, "read_full": _ONOFF, "read_click": _ONOFF, "record_event_full": _ONOFF, "open_chat_link": _ONOFF,
     "send_ready_post": _ONOFF, "execute_signature": _ONOFF, "kev_url_remote_ok": _ONOFF, "clm_url_remote_ok": _ONOFF,
 }
 _YES, _NO = ("1", "on", "true", "yes"), ("0", "off", "false", "no")
@@ -325,7 +327,7 @@ def rows():
 # has its default (a constant of kimeru). Any other value that was set (a folder, an organization, a subscription, an
 # address, a model or deployment name) is only reported as set.
 SHARE_VALUES = ("backend", "writer", "toast", "brief_hour", "priority", "cycle_budget_sec", "plan_lean", "batch_questions", "learn", "post_reason", "post_kind_mark",
-                "execute", "execute_signature", "send_ready_post", "open_chat_link", "read_full", "record_event_full",
+                "sent_watch", "sent_watch_days", "execute", "execute_signature", "send_ready_post", "open_chat_link", "read_full", "record_event_full",
                 "read_max_open", "read_budget_sec", "read_messages", "read_min_preview", "read_idle_sec", "read_click", "read_max_defer", "preview_cut_len", "full_text_keep_days", "inbox_done_keep_days", "judge_text_max", "title_max", "push",
                 "push_min_minutes", "idle_sec", "codex_effort", "hold_stale_days")
 

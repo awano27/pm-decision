@@ -1793,6 +1793,9 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
         hold.clear(it)
         if new == "approved":
             measurement_for(it).setdefault("approval_observed_at", measurement_now())
+            from . import sent   # R14: with sent_watch=1, the list signature of the reply's chat is kept, to see the send later (sent.py)
+            if sent.enabled():
+                sent.note_approval(it, sent.list_signatures(out), now)
         if new in ("approved", "rejected"):   # the full text is kept only while the item waits
             from . import fulltext
             fulltext.drop_safe(out, it["key"])   # a failure is noted in warnings.jsonl; the approval goes on, purge deletes the text later

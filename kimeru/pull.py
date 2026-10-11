@@ -379,6 +379,14 @@ def pull_alerts(subscription, inbox, out, http=http_json, token=None, time_range
 OWN_PREFIXES = ("あなた:", "あなた：", "You:")
 
 
+def _own_body(preview):
+    """The text of my own message in a list preview, without the name prefix (R14 compares it in memory and keeps nothing)."""
+    for prefix in OWN_PREFIXES:
+        if preview.startswith(prefix):
+            return preview[len(prefix):].strip()
+    return preview
+
+
 _CLOCK = re.compile(r"\d{1,2}:\d{2}")
 _WEEKDAY = re.compile(r"^(?:[月火水木金土日](?:曜日?)?|mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?$", re.I)
 
@@ -412,7 +420,7 @@ def _resent(old, new):
     return rn <= ro
 
 
-def teams_events(chats, sec, include_existing=False, now=None):
+def teams_events(chats, sec, include_existing=False, now=None, own_out=None):
     """Diff the on-screen chat list against the last poll. Returns teams.chat events.
 
     A chat is remembered as {p: hash of its preview, t: its time label, n: events emitted, seen: when it was last on screen}. A new
@@ -423,6 +431,8 @@ def teams_events(chats, sec, include_existing=False, now=None):
     Only 1:1 chats and chats flagged as mentioning you are emitted; the self chat and your own last messages are ignored.
     With `now` (the observation time), an event carries `_kimeru` {observed_at, last_seen_at}: when the PC saw it and when it saw
     this chat before (None after an empty list or for a first sighting). That is what arrival_of() reads; it is not a judgment input.
+    With `own_out` (a list; R14, the setting sent_watch=1), each new message of mine that the list shows is appended as
+    (chat_id, body) to it, the body in memory only, and the chat's `own` becomes the observation time. Without it nothing changes.
     """
     import hashlib
     chats = list(chats)
@@ -462,7 +472,13 @@ def teams_events(chats, sec, include_existing=False, now=None):
             entry["seen"] = observed
         if not new_msg or (first and not include_existing):
             continue
-        if not preview or preview.startswith(OWN_PREFIXES):
+        if not preview:
+            continue
+        if preview.startswith(OWN_PREFIXES):   # my own message: never an event; R14 hands it over only when asked
+            if own_out is not None:
+                own_out.append((cid, _own_body(preview)))
+                if observed is not None:
+                    entry["own"] = observed
             continue
         if not (kind == "oneOnOne" or c.get("mention")):
             continue
@@ -476,14 +492,15 @@ def teams_events(chats, sec, include_existing=False, now=None):
     return out
 
 
-def pull_teams(inbox, out, bridge=None, include_existing=False, now=None):
-    """Return number of new teams.chat events dropped into the inbox. `now` is the observation time (tests inject it)."""
+def pull_teams(inbox, out, bridge=None, include_existing=False, now=None, own_out=None):
+    """Return number of new teams.chat events dropped into the inbox. `now` is the observation time (tests inject it).
+    `own_out` (R14): see teams_events; the daily cycle passes a list only when sent_watch=1."""
     if bridge is None:
         from .notify import PowerShellBridge
         bridge = PowerShellBridge()
     st = State(out)
     sec = st.section("teams")
-    evs = teams_events(bridge.chats(), sec, include_existing, now=_local_now(now))
+    evs = teams_events(bridge.chats(), sec, include_existing, now=_local_now(now), own_out=own_out)
     for ev in evs:
         _drop(inbox, "teams-" + ev["id"].replace(":", "_").replace("@", "_").replace("#", "_")[-60:], ev)
     st.save()

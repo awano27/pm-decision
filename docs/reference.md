@@ -168,6 +168,8 @@ python -m kimeru config path
 | `KIMERU_CLM_URL` / `KIMERU_CLM_URL_REMOTE_OK` | CLM（試験用）の接続先（既定 `http://127.0.0.1:8700/v1`）と、この PC 以外を許す明示の設定（既定 0） |
 | `KIMERU_EXECUTE` / `KIMERU_EXECUTE_SIGNATURE` | 承認のあとに実行する種類（実装済みは `ado.comment` だけ。既定は無し）と、コメント末尾の kimeru の 1 行（既定 1、`0` で外す）。`--send` を付けない実行で返した OK は承認の記録だけで、ADO へは次の `--send` の実行で 1 回書きます |
 | `KIMERU_SEND_READY` / `KIMERU_OPEN_CHAT_LINK` | 返信を承認したら送る文面だけを自分とのチャットに返す（既定 1）／相手とのチャットを開くリンクも付ける（実験的。既定 0） |
+| `KIMERU_SENT_WATCH` | `1` で、承認した返信が相手へ送られたかを、自分とのチャットの一覧で見届ける。承認のあと、その相手のチャットの一覧に自分の新しい発言が現れたら、承認した文と比べ、`as_is`（同じ）・`edited`（直した）・`other`（別の文）のどれかを、その件に 1 つだけ残す（時刻と一致の度合いも。本文は残さない）。チャットは開かず、クリックも送信もしない。`daily` の定期の実行だけが見る。一覧に出るのは発言の有無で、相手に届いたことの確認ではない（既定 0。0 のときは一覧を見ず、何も残さず、投稿・朝のまとめ・トースト・通知の文も変わらない） |
+| `KIMERU_SENT_WATCH_DAYS` | 承認から送りを見届ける日数（既定 3。1 以上の整数。それ以外の値は 3 として扱う）。この日数を過ぎた件は見ない（`KIMERU_SENT_WATCH=1` のときだけ効く） |
 | `KIMERU_IDLE_SEC` | Teams を操作する前に、キーボード・マウスが止まっているべき秒数（既定: `post`・`send` は 3、teams-copilot は 4。`0` で待たない。他のチャットを開いて読む処理には効かず、そちらは `KIMERU_READ_IDLE_SEC`（既定 30）だけで決まる） |
 | `KIMERU_STATE_DIR` | （`schedule install` が、設定されていれば自動運転の起動行に引き継ぎます）状態フォルダ（設定ファイル、自分とのチャットの目印、writer の休止の印、診断）。未設定なら `%LOCALAPPDATA%\kimeru` |
 | `KIMERU_COPILOT_EXE` / `KIMERU_CLAUDE_EXE` / `KIMERU_CODEX_EXE` / `KIMERU_GROK_EXE` | 各 CLI の場所（PATH に無いとき） |

@@ -10,7 +10,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import actions, brief as brief_mod, config, events, fsutil, fulltext, graph, hold, notify, pull, push
+from . import actions, brief as brief_mod, config, events, fsutil, fulltext, graph, hold, notify, pull, push, sent
 from .backends import BackendUnavailable, is_jev
 
 
@@ -292,7 +292,14 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
             push.begin_cycle(out)
         except Exception as e:   # the phone routes never fail a cycle
             _log(out, {"step": "push_begin", "error": type(e).__name__})
-    _step(out, "pull_teams", lambda: pull.pull_teams(inbox, out, bridge=bridge), r)
+    own_seen = [] if (real and sent.enabled()) else None   # R14: my own new messages the list shows in this cycle (memory only)
+    _step(out, "pull_teams", lambda: pull.pull_teams(inbox, out, bridge=bridge, own_out=own_seen), r)
+    if own_seen:   # R14: a send after an OK is seen on the list; not in the report (a failure is only logged, the cycle goes on)
+        try:
+            if getattr(sent.observe(out, own_seen, now=now), "busy", False):
+                _log(out, {"step": "sent_watch", "busy": "approvals.lock is held by another run; not written this cycle"})
+        except Exception as e:
+            _log(out, {"step": "sent_watch", "error": f"{type(e).__name__}: {str(e)[:120]}"})
     if ado:
         _step(out, "pull_ado", lambda: pull.pull_ado(ado[0], ado[1], inbox, out), r)
     if subscription:

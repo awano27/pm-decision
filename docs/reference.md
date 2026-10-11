@@ -12,6 +12,7 @@ python -m kimeru demo [--pace 1.5] [--fresh]       # 既定の出力先は out/d
 python -m kimeru run <payload.json>...
 python -m kimeru watch inbox/                     # inbox/*.json と議事録 *.txt を常駐処理（処理済みは inbox/done/）
 python -m kimeru digest                           # 今日の判断件数と確認待ち
+python -m kimeru memory <N>                        # #N と同じ相手・チャット・作業項目・規則の前例と経緯（読むだけ。`KIMERU_MEMORY` の 0/1 によらず表示）
 python -m kimeru pull teams|ado|alerts --inbox inbox    # ado: --org <組織 or URL> [--project <名前>] [--login]
 python -m kimeru brief [--post [--send]]
 python -m kimeru daily [--once] [--send]
@@ -148,6 +149,7 @@ python -m kimeru config path
 | `KIMERU_BRIEF_DELTA` | `1` で、朝のまとめに「前回のまとめ以降」の返信数（OK / NG / 保留 / 修正）と「閉じた: n 件」を先頭に出し、番号付きの件に `（新）`・`（継続 N 日目）` を付ける。4 日続けて内容も順位帯も変わらない番号付きの件は名前を出さず `変わらず N 件（#…）` に畳む（通知・重大な件は畳まない。番号の無い手順と未投稿の件は畳まない）。前回と同じ判断モデルが付けた点は再利用し、新しい件だけを尋ねる。数えるのは `brief_history.jsonl`・`approvals.log.jsonl`・`approvals.json` の読み取りだけで、新しく記録しない（既定 0。0 のときは、朝のまとめの文も判断モデルへの問いもこれまでどおり） |
 | `KIMERU_BRIEF_STYLE` | 朝のまとめの並べ方。`rank`（既定）は判断モデルが件ごとに「1 日遅れたときの影響」を付けて並べ、writer が今日の要点を書く。`desk` は固定順（重大・通知 → 期限超過と今日 → 今週 → その他。同じ段の中は集まった順）にし、判断モデルへの順位付けも writer の要点も呼ばない（判断は変わらず、確認待ちは今までどおり PM に回る）。判断モデルが止まっているときは、どちらでも朝のまとめを確定しない |
 | `KIMERU_POST_KIND_MARK` | `1` で、writer の下書きだけを待つ件（規則で人へ回ったのでも、迷ったのでもない件）を分ける。承認の投稿の 1 行目は `[kimeru #N] 下書き: 誰・何の件`、`→` は `文面だけ確認（判断は自動: 提案）`。朝のまとめは `確認待ち N 件` を `判断が必要 n / 下書きの確認 m` と書き、トーストは `確認待ち N 件（うち下書き m）`、`digest --week` は `人に回した件の内訳` に 2 つの数を出す（既定 0。0 のときは、投稿・まとめ・トースト・digest の文はこれまでどおり。push は件数のまま変わりません）。記録の `held_reason`（`draft`）は、設定によらず残ります |
+| `KIMERU_MEMORY` | `1` で、承認の投稿の `→` 行の末尾に前例（同じチャット・相手・作業項目・規則の、直近の OK / NG の日付と番号。例: `（前例: 10/3 #12 OK）`）を付け、`詳細 N` に「これまでの経緯」（最大 3 行。同じチャット → 相手 → 作業項目・規則の順、新しい順。自動決定は日付とラベルだけ）を出し、朝のまとめの確認待ちの行に `（同じ相手 N 件目）`（2 件以上のとき。60 日、今の件を含む）を付ける。読むのは `approvals.json`・`approvals.log.jsonl`・`decisions.jsonl`・`merged.jsonl` だけで、新しく書かない。判断・まとめの材料・朝のまとめの件名・トースト・push の文は変えない（既定 0。0 のときは、投稿・詳細・まとめの文はこれまでどおり）。端末の `kimeru memory N` は、この設定によらず #N の経緯を表示する |
 | `KIMERU_READ_FULL` / `KIMERU_READ_MAX_OPEN` / `KIMERU_READ_BUDGET` / `KIMERU_READ_MESSAGES` | チャットを開いて全文を読む（既定 0）、1 サイクルに開く数（既定 3。0 なら読まない）、読む秒数の上限（既定 60。0 なら読まない）、開いたチャットから読む末尾のメッセージ数（既定 5） |
 | `KIMERU_READ_IDLE_SEC` / `KIMERU_READ_CLICK` / `KIMERU_READ_MAX_DEFER` | 全文を読むために開く前と、開いたあとの操作の直前に、キーボード・マウスが止まっているべき秒数（既定 30、`0` で確かめない。`KIMERU_IDLE_SEC` は読む処理に影響しない。戻す処理は別に 3 秒。`read_idle_sec` が 3 未満ならそれに合わせる）／Teams を前面に出してクリックする経路を使う（既定 0）／人の操作と重なって回せる回数の上限（既定 12。超えたらプレビューで判断。0 は延期しない: 最初の 1 回は読み、読めなければプレビューで判断） |
 | `KIMERU_INBOX_DONE_KEEP_DAYS` | 取り込んだ原本（`inbox/done/*.json`。全文を含む）を残す日数（既定 7。`0` で消さない。`*.error` は対象外）。`daily` の各サイクルで消す |

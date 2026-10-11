@@ -12,7 +12,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import autorun, config, fsutil, hold
+from . import autorun, config, fsutil, hold, memory
 from .backends import judge_name
 
 HARM = ["No real harm", "Minor inconvenience for the team",
@@ -74,7 +74,8 @@ def collect(out, now=None, days=2):
         if it["status"] in ("pending", "held"):
             what = it['record'].get('advice') or it['record'].get('graph')
             head = hold.brief_label(n, it, now) or f"確認待ち #{n}"   # R09: 保留 #N（10/15 に再表示）, 長く保留 (hold_stale_days)
-            add(f"approval:{n}", "approval", f"{head}: {what}", f"Waiting for the PM's approval: {what}", 0, it["record"])
+            same = memory.same_person_note(ap["items"], n, it["record"], now)   # R16 (memory=1): 同じ相手 N 件目; "" otherwise
+            add(f"approval:{n}", "approval", f"{head}: {what}{same}", f"Waiting for the PM's approval: {what}", 0, it["record"])
     for rec in reversed(_rows(out / "queue.jsonl")):
         key = f"{rec.get('graph')}:{rec.get('event_id')}:{rec.get('node')}"
         if key not in queued:

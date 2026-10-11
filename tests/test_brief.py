@@ -4,10 +4,13 @@ except ImportError:
     import isolate  # noqa: F401
 
 import json
+import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from unittest import mock
 
 from kimeru import brief, notify
 from kimeru.backends import StubBackend
@@ -165,6 +168,33 @@ class TestTeamsStatusCheckIsNotCalledAReply(unittest.TestCase):
             self.assertIn(section, text)
             self.assertNotIn("自動返信", text)
             self.assertFalse(any(notify.REPLY.match(l.strip()) for l in section.splitlines()))
+
+
+class TestTheSameCountChangesNoSubject(unittest.TestCase):
+    """R16 (memory=1): the waiting rows of one person say （同じ相手 N 件目）; the subject the judge is asked about, and the one rank call,
+    are the same as with memory=0."""
+
+    def test_rank_is_asked_once_and_the_subjects_are_the_same_with_memory_on_and_off(self):
+        with tempfile.TemporaryDirectory() as d:
+            def rec(eid):
+                return {"graph": "teams-chat-triage", "event_kind": "teams.chat", "event_id": eid, "node": "plan_decision",
+                        "advice": "来週の仕様変更の可否を判断してほしい", "at": NOW.isoformat(),
+                        "event": {"kind": "teams.chat", "author": "佐藤", "chat_id": "19:c1"}, "memo": {"summary": "仕様変更の可否"}}
+            ado = {"graph": "workitem-intake", "event_kind": "ado.workitem.created", "event_id": "4812", "node": "triage_pm",
+                   "advice": "優先度を判定できないチケット", "at": NOW.isoformat()}
+            (Path(d) / "approvals.json").write_text(json.dumps({"next": 4, "items": {
+                "1": {"key": "k1", "status": "pending", "posted": True, "record": rec("19:c1#m-1")},
+                "2": {"key": "k2", "status": "held", "posted": True, "record": rec("19:c1#m-2")},
+                "3": {"key": "k3", "status": "approved", "posted": True, "record": ado},
+            }}, ensure_ascii=False), encoding="utf-8")
+            subjects = {}
+            for flag in ("0", "1"):
+                with mock.patch.dict(os.environ, {"KIMERU_MEMORY": flag}), mock.patch.object(brief, "rank", wraps=brief.rank) as ranked:
+                    brief.build(d, StubBackend(), now=NOW, date="2026-09-25")
+                    self.assertEqual(ranked.call_count, 1)
+                subjects[flag] = [i["subject"] for i in brief.collect(d, now=NOW)]
+            self.assertEqual(subjects["0"], subjects["1"])
+            self.assertEqual(len(subjects["1"]), 2)
 
 
 if __name__ == "__main__":

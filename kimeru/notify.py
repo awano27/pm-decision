@@ -326,10 +326,11 @@ def _draft_mark(rec):
     return config.value("post_kind_mark") == "1" and rec.get("held_reason") == "draft"
 
 
-def format_post(n, rec, full=None, marks=None):
+def format_post(n, rec, full=None, marks=None, precedent=None):
     """The approval post "[kimeru #N]": at most 5 short lines. Everything else (the source text, the memo, every draft, the
     revision, the kinds of action) is in the answer to `詳細 N` (format_detail). `full` is not shown here. `marks` (R09, hold.post_marks):
-    {"day": 2} for an item that came back on the 2nd day of its hold, {"undated": ["3"]} for the undated holds named on this post."""
+    {"day": 2} for an item that came back on the 2nd day of its hold, {"undated": ["3"]} for the undated holds named on this post.
+    `precedent` (R16, memory.precedent): the text that ends the arrow line; None (memory=0) leaves the post as it was."""
     from . import execute
     memo = rec.get("memo") or {}
     plan = rec.get("plan") or {}
@@ -349,9 +350,10 @@ def format_post(n, rec, full=None, marks=None):
         proposal = memo.get("next") or rec.get("advice") or plan.get("summary") or "内容を確認してください"
     if draft_only:
         lead = "文面だけ確認（判断は自動: "
-        lines.append("→ " + lead + _clip(proposal, 100 - len(lead) - 1) + "）")
+        arrow = "→ " + lead + _clip(proposal, 100 - len(lead) - 1) + "）"
     else:
-        lines.append("→ " + _clip(proposal, 100))
+        arrow = "→ " + _clip(proposal, 100)
+    lines.append(arrow + (f" {precedent}" if precedent else ""))   # R16: the precedent ends the arrow line; no line is added
     why = _why(rec)   # R11: one line more, after the arrow line (it replaces nothing)
     if why:
         lines.append(why)
@@ -396,9 +398,10 @@ def format_post(n, rec, full=None, marks=None):
     return "\n".join(lines)
 
 
-def format_detail(n, rec, full=None):
+def format_detail(n, rec, full=None, precedent=None):
     """The full text of an item ("[kimeru 詳細 #N]", the answer to `詳細 N`). `full` is the full text kept while the item waits
-    (fulltext.load): the post then shows it and the earlier messages."""
+    (fulltext.load): the post then shows it and the earlier messages. `precedent` (R16, memory.history): the lines of
+    「これまでの経緯」, shown above the reply line; None or empty (memory=0) adds nothing."""
     from . import execute
     ev = rec.get("event_kind", "")
     memo = rec.get("memo") or {}
@@ -511,6 +514,9 @@ def format_detail(n, rec, full=None):
             lines.append(f"→ OK {n} で、作業項目 {a.get('id')}（取り込み元の組織 {tg.get('org')} / プロジェクト {tg.get('project')}）に、"
                          "次のコメントをそのまま書きます（末尾の 1 行も含みます）:")
             lines.append(a["exec_text"])
+    if precedent:   # R16: the earlier decisions on the same chat, person or work item (at most three lines)
+        lines.append("これまでの経緯:")
+        lines.extend(precedent)
     ask = any(a.get("ask_back") for a in drafts)
     lines.append(f"返信: OK {n} / NG {n} / 保留 {n}" + (f" / 修正 {n} <直してほしい点>" if drafts else "")
                  + (f" / 下書き {n} <Copilot の文面>" if rec.get("copilot_request") else "")
@@ -1134,7 +1140,8 @@ def _notify_locked(out, bridge, send, real):
             ap.add(_key(rec), rec)
     ap.save()   # an item that cannot be posted now must still exist (and be counted as waiting) after a failed post
     posted = []
-    from . import fulltext
+    from . import fulltext, memory
+    past = None   # R16: the earlier decisions, read once when the first item is posted (memory=1 only; never read at 0)
     fulltext.purge_safe(out)   # a full text kept too long is deleted (a failure is noted in warnings.jsonl; the posts go on); the item is then treated as decided from the preview
     ap = Approvals(out)
     for n, it in ap.data["items"].items():
@@ -1149,7 +1156,10 @@ def _notify_locked(out, bridge, send, real):
             ap.save()
             fsutil.refresh(lock_path(out))
             marks = hold.post_marks(it, ap.data["items"])   # R09: a day that came back, and the undated holds not named yet
-            body = format_post(n, it["record"], fulltext.load(out, it["key"]), marks=marks)
+            if past is None and memory.enabled():
+                past = memory.index(out, ap.data["items"])
+            body = format_post(n, it["record"], fulltext.load(out, it["key"]), marks=marks,
+                               precedent=memory.precedent(past, it["record"], n))   # R16: None at memory=0
             if send:
                 attempt = _attempt_record("case", n, "post", body, it.get("revision", 1), it["key"])
                 it.update({"delivery_unknown": True, "delivery_unknown_part": "post",
@@ -1620,7 +1630,7 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
     send=True: what is posted while collecting (results, texts ready to copy) is sent; otherwise it is only pasted.
     real and send together (the first run with --send after an OK without it): the comments of such OKs are written now, once."""
     ap = Approvals(out)
-    from . import execute
+    from . import execute, memory
 
     def waiting(it):   # waiting for an answer, or approved but with an execution that failed / was left unsure (`再実行` / `済`),
         # or approved on a run without --send and not written yet (unwritten: the run with --send writes it)
@@ -1651,6 +1661,14 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
         if r0 and r0[0] == "再実行":
             seen_results[r0[1]] = max(seen_results.get(r0[1], 0), seen)
     redo_done = set()
+    past = {}   # R16: the earlier decisions, read once when a 詳細 asks for them (memory=1 only)
+
+    def history_of(num, it):
+        if not memory.enabled():
+            return None
+        if "idx" not in past:
+            past["idx"] = memory.index(out, ap.data["items"])
+        return memory.history(past["idx"], it["record"], num)
 
     def run_redo(num, it):   # `再実行`: once per number per step, only while something failed or is unknown; the mark is saved before the run
         redo_done.add(num)
@@ -1751,7 +1769,7 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
             if it and it["posted"] and num not in redo_done:   # (redo_done doubles as "handled this step" for the numbers asked about)
                 redo_done.add(num)
                 from . import fulltext
-                text = format_detail(int(num), it["record"], fulltext.load(out, it["key"]))
+                text = format_detail(int(num), it["record"], fulltext.load(out, it["key"]), precedent=history_of(num, it))
                 if real and labels.enabled():   # the question the route was unsure of, numbered: kept for `違う N k`
                     text = labels.attach(it, int(num), text)
                 post(text)

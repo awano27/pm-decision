@@ -601,6 +601,8 @@ def _main(argv=None):
     p_dg = sub.add_parser("digest", help="summary of the decisions; --week for the last 7 days in numbers")
     p_dg.add_argument("--week", action="store_true", help="the last 7 days: counts, shares, approvals, agreement")
     p_dg.add_argument("--share", action="store_true", help="with --week: numbers and environment only, safe to paste into an issue")
+    p_mem = sub.add_parser("memory", help="the earlier decisions on the same chat, person or work item as #N (read only; the setting memory is not needed)")
+    p_mem.add_argument("n", type=int)
     p_rv = sub.add_parser("review", help="say in the terminal whether automatic decisions were right (Teams is not used)")
     p_rv.add_argument("--limit", type=int, default=20)
     p_cal = sub.add_parser("calibrate", help="tune the threshold coefficients on your reviewed decisions (the model is not called)")
@@ -899,6 +901,11 @@ def _main(argv=None):
                 print(f"ok  {g['name']} ({kind}, {len(g['nodes'])} nodes)")
         return 0
 
+    if a.cmd == "memory":   # R16: the earlier decisions of #N, in the terminal (nothing is written, nothing is posted)
+        from . import memory
+        print(memory.show(out, a.n))
+        return 0
+
     if a.cmd == "digest":
         if a.week or a.share:
             from . import stats
@@ -1087,7 +1094,7 @@ def config_cmd(a):
 
 TASK = "kimeru-daily"
 # commands that never write records into --out (the demo manages its own mark)
-READ_ONLY = ("demo", "validate", "config", "report", "digest", "push", "diagnose", "--help")
+READ_ONLY = ("demo", "validate", "config", "report", "digest", "push", "diagnose", "memory", "--help")
 SCHEDULE_SENDS_NOTE = ("note: このタスクは自分とのチャットへ実際に投稿します（daily --once --send）。"
                        "貼り付けだけにしたいときは手動で daily --once を使ってください。"
                        "止めるときは python -m kimeru schedule remove")

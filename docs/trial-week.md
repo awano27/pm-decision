@@ -87,7 +87,7 @@ Teams は使いません。確かめた結果は、状態フォルダの `fixtur
 ## 1 週間後
 
 ```powershell
-python -m kimeru digest --week           # 件数、前の 7 日との比較、自動と人の割合、重大な通知、承認の結果、「違う」の件数、変わらなかった OK、中央値、一致率
+python -m kimeru digest --week           # 件数、前の 7 日との比較、自動と人の割合、重大な通知、承認の結果、「違う」の件数、変わらなかった OK、同じ修正指示の繰り返し、中央値、一致率
 python -m kimeru digest --week --share   # Issue に貼れる形（数値と環境だけ。追加したグラフの名前は伏せます）
 python -m kimeru trial report --share    # 集計のみ。Jev と判断モデル不明の試行は除外
 python -m kimeru calibrate               # 係数を調整できるか（モデルは呼びません）

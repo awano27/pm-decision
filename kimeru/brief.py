@@ -273,8 +273,8 @@ TEAMS_OUTCOME = {"log_fyi": "返信不要", "reply_status": "状況の確認（�
 
 
 def teams_section(out, now=None, days=1, since=None):
-    """Teams chats the graph settled by itself in the last `days` day(s) (a thanks or an OK recorded as FYI, a status question
-    answered with the fixed reply): one line with the counts and up to five chat names. Nothing went to the PM for these,
+    """Teams chats the graph settled by itself in the last `days` day(s): a thanks or an OK recorded as FYI, and a status question
+    the rule closed with no reply sent. One line with the counts and up to five chat names. Nothing went to the PM for these,
     so this is where the PM sees that they were not lost. "" when none."""
     since, known = window_start(now, days, since)
     seen, counts, names = set(), {}, []

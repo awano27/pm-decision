@@ -17,6 +17,7 @@ from kimeru import cli, daily, events, notify, push, pull
 from kimeru.backends import StubBackend
 from tests.test_daily import GRAPHS, PBS, FakeTeams, one_on_one
 from tests.test_pull import ALERT, NOW, WI, FakeHttp
+from tests.test_writer import FakeWriter
 
 JST = timezone(timedelta(hours=9))
 ARRIVAL_KEYS = ("arrived_at", "arrival_source", "arrival_window_s")
@@ -100,6 +101,13 @@ class TeamsArrival(unittest.TestCase):
         self.poll(at(10, 37), [chat("おはようございます", "9:00")])
         self.poll(at(10, 40), [])                                        # Teams was not on screen
         (payload,) = self.poll(at(10, 42), [chat("承認お願いします", "10:42")])
+        self.assertEqual(arrival_of_record(self.judged(payload)), UNKNOWN)
+
+    def test_the_first_pull_of_a_new_state_folder_with_include_existing_has_no_arrival_time(self):
+        self.teams.chat_list = [chat("承認お願いします", "10:42")]
+        pull.pull_teams(self.inbox, self.out, bridge=self.teams, include_existing=True, now=at(10, 47))
+        (payload,) = taken(self.inbox)
+        self.assertIsNone(payload["_kimeru"]["last_seen_at"])                # the first sighting: nothing to measure from
         self.assertEqual(arrival_of_record(self.judged(payload)), UNKNOWN)
 
     def test_a_window_longer_than_fifteen_minutes_is_unknown_and_exactly_fifteen_is_not(self):
@@ -232,6 +240,31 @@ class BrokenNotesNeverChangeAJudgment(unittest.TestCase):
                 self.assertNotIn(value, sent)
             self.assertNotIn("arrival", sent)
             self.assertNotIn("到着", sent)
+
+
+class SpyWriter(FakeWriter):
+    """Records the event the writer is handed (what the drafting model would read)."""
+
+    def __init__(self):
+        super().__init__()
+        self.events = []
+
+    def draft(self, res, event, instruction=None):
+        self.events.append(json.dumps(event, sort_keys=True, ensure_ascii=False))
+        return super().draft(res, event, instruction)
+
+
+class WriterNeverSeesTheNote(unittest.TestCase):
+    def test_a_valid_note_is_measured_but_never_reaches_the_writer_or_the_material(self):
+        note = {"observed_at": "2026-10-12T10:42:00+09:00", "last_seen_at": "2026-10-12T10:37:00+09:00"}
+        spy = SpyWriter()
+        with tempfile.TemporaryDirectory() as d:
+            res = cli.process({**TEAMS_EVENT, "_kimeru": note}, GRAPHS, StubBackend(), Path(d), PBS, writer=spy)[0]
+        self.assertEqual(len(spy.events), 1)                                          # the writer did work on this event
+        self.assertEqual(res["measurement"]["arrival_source"], "label")                # the note was valid and was used
+        for text in spy.events + [json.dumps(res.get("material_event") or {}, sort_keys=True, ensure_ascii=False)]:
+            for word in ("_kimeru", "observed_at", "last_seen_at"):
+                self.assertNotIn(word, text)
 
 
 def scenario():

@@ -232,7 +232,7 @@ def _fold_acknowledgement(out, it, ev, ap):
     rows = (rec.get("followups") or []) + [{"text": text, "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}]
     rec["followups"] = rows[-FOLLOWUPS_MAX:]
     revision = int(it.get("revision") or rec.get("revision") or 1)
-    ap.save(compact=True)   # no backup of the stored record
+    ap.save()   # a thanks or OK replaces no sensitive text, so the backup of the previous file is kept as usual
     _append(out / "merged.jsonl", {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                                    "into": it["key"], "event_id": ev.get("id"), "revision": revision})
     return True

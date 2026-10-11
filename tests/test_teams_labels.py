@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from kimeru import calibrate, config, execute, graph, labels, notify, plan, review, stats
+from kimeru import calibrate, config, execute, fsutil, graph, labels, notify, plan, review, stats
 from kimeru.backends import JevBackend
 
 try:
@@ -153,6 +153,7 @@ class TestWrongFinalResult(Base):
         s = stats.collect(self.out)
         self.assertEqual(s["reviewed_wrong"], 0)
         self.assertNotIn("最終結果が違う", stats.render(s))
+        self.assertNotIn("最終結果が違う", stats.render(s, share=True))
 
     def test_a_kev_wrong_answer_counts_in_the_stats(self):
         self.queue(decision(judge="Kev"))
@@ -290,6 +291,48 @@ class TestWithLearningOff(Base):
         self.say("詳細 1")
         self.assertEqual(self.detail_text(), notify.format_detail(1, decision(), None))
         self.assertNotIn("detail_question", self.item())
+
+
+class TestNothingIsWrittenOnTheOtherPaths(Base):
+    """A label or a detail request is acted on only by the daily and approvals paths (real=True), only when the lock is free, and a
+    reply under a test post (`[kimeru 試験 #N]`) is never read by the real reader."""
+
+    def assert_nothing_written(self):
+        self.assertEqual(self.reviews(), [])
+        self.assertEqual(self.fixtures(), [])
+        self.assertEqual(self.log(), [])
+        self.assertNotIn("labeled", self.item())
+        self.assertNotIn("detail_question", self.item())
+
+    def say_replies(self):
+        self.chat.say("詳細 1")
+        self.chat.say("違う 1 2")
+        self.chat.say("違う 1")
+
+    def test_a_run_that_is_not_real_reads_the_detail_and_the_labels_and_writes_nothing(self):
+        self.queue(decision())
+        self.say_replies()
+        notify.collect(self.out, self.chat, real=False, send=True)
+        self.assertTrue([t for t in self.chat.sent() if t.startswith("[kimeru 詳細 #1]")])   # the reply was read: the detail went out
+        self.assert_nothing_written()
+
+    def test_a_label_while_another_run_holds_the_lock_writes_nothing_and_posts_no_detail(self):
+        self.queue(decision())
+        self.say_replies()
+        with fsutil.exclusive(notify.lock_path(self.out)) as got:
+            self.assertTrue(got)
+            res = notify.collect(self.out, self.chat, real=True, send=True)
+        self.assertTrue(res.busy)
+        self.assertFalse([t for t in self.chat.sent() if t.startswith("[kimeru 詳細")])
+        self.assert_nothing_written()
+
+    def test_a_label_under_a_test_post_of_the_same_number_is_not_read(self):
+        self.queue(decision())
+        self.chat.timeline.append("T:1")          # "[kimeru 試験 #1]" as tools/check.ps1 posts it: the replies under it are its own
+        self.chat.say("違う 1")
+        self.chat.say("違う 1 2")
+        notify.collect(self.out, self.chat, real=True, send=True)
+        self.assert_nothing_written()
 
 
 class TestTheDetailSection(unittest.TestCase):

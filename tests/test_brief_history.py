@@ -201,6 +201,7 @@ class TestHistoryAfterDelivery(Briefed):
             self.assertTrue(got)
             r = self.cycle()
         self.assertFalse((self.out / "brief_history.jsonl").exists())
+        self.assertIn("brief_history", r["busy"])
         self.assertEqual(r["brief"], 3)
 
     def test_the_row_holds_no_text_or_name_of_the_event(self):

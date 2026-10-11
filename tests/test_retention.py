@@ -141,6 +141,23 @@ class TestInstructionFingerprint(Base):
         row = next(json.loads(l) for l in log.splitlines() if "instruction_len" in l)
         self.assertEqual(row["instruction_sig"], notify.instruction_sig("もっと短く", self.EVENT))
 
+    def test_an_instruction_that_shares_two_characters_with_the_original_text_leaves_no_fingerprint_in_the_log(self):
+        try:
+            from .test_writer import GRAPHS, MSG, PBS, FakeTeams, FakeWriter
+        except ImportError:
+            from test_writer import GRAPHS, MSG, PBS, FakeTeams, FakeWriter
+        from kimeru.backends import StubBackend
+        from kimeru.cli import process
+        out, w, t = Path(self.dir.name) / "out", FakeWriter(), FakeTeams()
+        process(MSG, GRAPHS, StubBackend(), out, PBS, writer=w)
+        notify.notify(out, t, send=True)
+        t.timeline.append("R:修正 1 判断を短く")                                  # 判断 is in the colleague's own sentence (record.event)
+        notify.collect(out, t, writer=w)
+        log = (out / "approvals.log.jsonl").read_text(encoding="utf-8")
+        row = next(json.loads(l) for l in log.splitlines() if "instruction_len" in l)
+        self.assertEqual(row["instruction_len"], len("判断を短く"))
+        self.assertNotIn("instruction_sig", row)
+
 
 if __name__ == "__main__":
     unittest.main()

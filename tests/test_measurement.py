@@ -99,6 +99,20 @@ class MeasurementTests(unittest.TestCase):
         self.assertIsNone(item["measurement"].get("posted_at"))
         self.assertEqual(result["measurement"]["case_key"], "g:e:n")
 
+    def test_a_thanks_folded_into_a_posted_item_keeps_its_generation_and_posting_time(self):
+        self.post()
+        before = dict(notify.Approvals(self.out).data["items"]["1"]["measurement"])
+        ack = {"graph": "g", "event_id": "ack", "node": "log_fyi", "outcome": "decide", "needs_human": False,
+               "notify": False, "advice": "", "actions": [{"type": "log.only"}],
+               "path": [{"node": "critical_incident", "answer": {}, "edge": "no"},
+                        {"node": "ack_only", "answer": {}, "edge": "yes"}],
+               "event": {"kind": "teams.chat", "id": "ack", "chat_id": "chat", "author": "A", "text": "ありがとうございます"}}
+        self.assertTrue(cli._merge_locked(self.out, ack["event"], ack, notify))
+        item = notify.Approvals(self.out).data["items"]["1"]
+        self.assertEqual(item["measurement"], before)
+        self.assertEqual(item["measurement"]["generation"], 1)
+        self.assertEqual(item["measurement"]["posted_at"], POST)
+
     def test_report_uses_explicit_adoption_not_approval_and_exposes_coverage(self):
         self.post()
         self.approve()

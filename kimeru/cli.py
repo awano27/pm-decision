@@ -169,11 +169,17 @@ def _no_action(res):
             and all(a.get("type") == "log.only" for a in res.get("actions") or []))
 
 
+def _acknowledgement(res):
+    """The rule `ack_only` took the message: a thanks, OK, greeting or emoji only, which needs no reply (graphs/teams_chat.json)."""
+    return any(s.get("node") == "ack_only" and s.get("edge") == "yes" for s in res.get("path") or [])
+
+
 def _merge_into_pending(out, ev, res, source_event=None, source_request=None, source_key=None, source_material=None):
     """A new message in a chat whose earlier message still waits for the PM joins that item (posted again under the same
-    number) instead of becoming a second one, but only when all of these hold; otherwise it is a matter of its own:
-    the same sender as the waiting item, a result that raises no notice, and a result that goes to the same place as the
-    waiting item or needs nothing. `res` is the judgment of the new message. Returns True when it was merged."""
+    number, or, for a thanks or OK, only as a followup line) instead of becoming a second one, but only when all of these
+    hold; otherwise it is a matter of its own: the same sender as the waiting item, a result that raises no notice, and a
+    result that goes to the same place as the waiting item or needs nothing. `res` is the judgment of the new message.
+    Returns True when it was merged."""
     if ev.get("kind") != "teams.chat" or not ev.get("chat_id") or not ev.get("author") or res.get("notify"):
         return False
     from . import notify
@@ -204,6 +210,28 @@ def _severity_rank(value):
     return None
 
 
+FOLLOWUPS_MAX = 20   # the newest followup lines an item keeps
+
+
+def _fold_acknowledgement(out, it, ev, ap):
+    """A thanks or OK joins the waiting item as one more followup line (cut like every followup: 120 characters by default,
+    the newest 20 kept). The record, the revision, the posting, the status, the measurement and the full text stay as they
+    are, and nothing is asked or written except the approval file and one merge line, which keeps the item's current
+    revision. Returns True."""
+    rec = it["record"]
+    limit = _record_limit()
+    text = " ".join(str(ev.get("text", "")).split())
+    if len(text) > limit:
+        text = _cut(text, limit)
+    rows = (rec.get("followups") or []) + [{"text": text, "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}]
+    rec["followups"] = rows[-FOLLOWUPS_MAX:]
+    revision = int(it.get("revision") or rec.get("revision") or 1)
+    ap.save(compact=True)   # no backup of the stored record
+    _append(out / "merged.jsonl", {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                   "into": it["key"], "event_id": ev.get("id"), "revision": revision})
+    return True
+
+
 def _merge_locked(out, ev, res, notify, source_event=None, source_request=None, source_key=None, source_material=None):
     ap = notify.Approvals(out)
     for it in ap.data["items"].values():
@@ -217,6 +245,8 @@ def _merge_locked(out, ev, res, notify, source_event=None, source_request=None, 
         new_severity = _severity_rank((res.get("event") or {}).get("severity") or ev.get("severity"))
         if old_severity is not None and new_severity is not None and new_severity > old_severity:
             continue
+        if res.get("node") != rec.get("node") and _acknowledgement(res):
+            return _fold_acknowledgement(out, it, ev, ap)   # a thanks or OK is only one more followup line
         if not (_no_action(res) or res.get("node") == rec.get("node")):
             continue
         revision = int(it.get("revision") or rec.get("revision") or 1)

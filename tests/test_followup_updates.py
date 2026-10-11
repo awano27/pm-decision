@@ -1,4 +1,5 @@
-"""A follow-up replaces stale pending material under the same case identity."""
+"""A follow-up replaces stale pending material under the same case identity; a thanks or OK after a waiting item is only a
+followup line (rule `ack_only`), and nothing else about the item changes."""
 try:   # isolation from the real state folder, whichever way the tests are started
     from . import isolate  # noqa: F401
 except ImportError:
@@ -9,7 +10,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from kimeru import cli, fulltext, notify
+from kimeru import cli, fulltext, graph, notify, plan
+from kimeru.backends import ReplayBackend
+from tests.test_notify import FakeBridge
+from tests.test_writer import FakeWriter
+
+ROOT = Path(__file__).resolve().parent.parent
+PBS = plan.load_playbooks(ROOT / "playbooks")
+GRAPHS = graph.load_dir(ROOT / "graphs", PBS)
 
 
 class TestFollowupMerge(unittest.TestCase):
@@ -124,6 +132,117 @@ class TestApprovalPostContext(unittest.TestCase):
             self.assertEqual(len(scrubbed["material_event"]["repro_steps"]), 2000)
             held = fulltext.load(d, "g:1:n")
             self.assertEqual(len(held["material"]["repro_steps"]), len(long))
+
+
+class NoModel:
+    """A judge that must not be asked anything: a thanks or OK is settled by the rule before any question."""
+
+    def ask(self, state, questions):
+        raise AssertionError(f"the model was asked {sorted(questions)}")
+
+
+UNSURE_DECISION = ReplayBackend({"intent": {"choice": "decision", "confidence": 0.3, "probabilities": {}}})
+CONFIDENT_FYI = ReplayBackend({"intent": {"choice": "fyi", "confidence": 0.9, "probabilities": {}}})
+ASKED = "リリース日を決めてください"
+THANKS = "ありがとうございます！"
+
+
+class TestAcknowledgementFold(unittest.TestCase):
+    """A thanks or OK from the same person after a waiting item joins that item as one followup line. The record, the
+    revision, the posting, the status, the measurement and the full text stay as they were; nothing is asked or written."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.out = Path(tmp.name)
+        self.bridge, self.writer = FakeBridge(), FakeWriter()
+
+    def ev(self, i, text, author="田中"):
+        return {"kind": "teams.chat", "id": str(i), "chat_id": "19:same@thread.v2", "author": author, "text": text,
+                "mentions_me": True}
+
+    def process(self, ev, backend):
+        return cli.process(ev, GRAPHS, backend, self.out, PBS, writer=self.writer, dedup=True)[0]
+
+    def ask_pm(self):
+        """The first request: the model is unsure, so it waits for the PM and is posted under #1."""
+        self.process(self.ev(1, ASKED), UNSURE_DECISION)
+        notify.notify(self.out, self.bridge, send=True)
+
+    def item(self, n="1"):
+        return notify.Approvals(self.out).data["items"][n]
+
+    def test_thanks_after_a_waiting_request_only_adds_a_followup_line(self):
+        self.ask_pm()
+        before = self.item()
+        posts, calls, short_post = len(self.bridge.posts), len(self.writer.calls), notify.format_post(1, before["record"])
+        self.assertTrue(self.process(self.ev(2, THANKS), NoModel()).get("merged"))
+        after = self.item()
+        self.assertEqual(after["record"]["node"], "ask_pm")
+        self.assertEqual([a["type"] for a in after["record"]["actions"]], ["teams.reply", "ado.create"])
+        self.assertEqual(after["record"]["event"]["text"], ASKED)
+        self.assertEqual([f["text"] for f in after["record"]["followups"]], [THANKS])
+        for field in ("status", "revision", "posted", "toasted", "measurement"):
+            self.assertEqual(after.get(field), before.get(field), field)
+        notify.notify(self.out, self.bridge, send=True)
+        self.assertEqual(len(self.bridge.posts), posts)                 # nothing is posted again
+        self.assertEqual(len(self.writer.calls), calls)                 # the writer is not called
+        self.assertEqual(notify.format_post(1, after["record"]), short_post)   # the short post the PM sees is byte-identical
+
+    def test_thanks_after_a_hold_keeps_the_item_held(self):
+        self.ask_pm()
+        notify.collect(self.out, FakeBridge(["保留 1"]), send=False)
+        self.assertEqual(self.item()["status"], "held")
+        self.assertTrue(self.process(self.ev(2, THANKS), NoModel()).get("merged"))
+        self.assertEqual(self.item()["status"], "held")
+        self.assertEqual([f["text"] for f in self.item()["record"]["followups"]], [THANKS])
+
+    def test_a_substantive_fyi_from_the_same_person_is_still_posted_again_under_the_same_number(self):
+        self.ask_pm()
+        self.process(self.ev(2, "資料を共有しました"), CONFIDENT_FYI)
+        item = self.item()
+        self.assertEqual(item["status"], "pending")
+        self.assertFalse(item["posted"])                                # replaced, so it is shown again under #1
+        self.assertEqual(item["revision"], 2)
+        self.assertEqual([f["text"] for f in item["record"]["followups"]], ["資料を共有しました"])
+        notify.notify(self.out, self.bridge, send=True)
+        self.assertIn("（更新）", self.bridge.posts[-1][0])
+
+    def test_thanks_calls_no_model_and_no_writer_and_keeps_the_full_text_waiting(self):
+        self.ask_pm()
+        long_text = "田中さんの長いメッセージ " * 40
+        fulltext.save(self.out, self.item()["key"], {"text": long_text, "author": "田中"})
+        calls = len(self.writer.calls)
+        self.process(self.ev(2, THANKS), NoModel())                    # NoModel fails the test if it is asked
+        self.assertEqual(len(self.writer.calls), calls)
+        self.assertEqual(fulltext.load(self.out, self.item()["key"])["text"], long_text)
+
+    def test_thanks_does_not_join_an_item_the_pm_already_approved(self):
+        self.ask_pm()
+        notify.collect(self.out, FakeBridge(["OK 1"]), send=False)
+        self.assertEqual(self.item()["status"], "approved")
+        self.assertFalse(self.process(self.ev(2, THANKS), NoModel()).get("merged"))
+        self.assertNotIn("followups", self.item()["record"])
+        self.assertEqual(self.item()["status"], "approved")
+
+    def test_a_continuation_that_notifies_is_not_folded_even_with_thanks_in_it(self):
+        self.ask_pm()
+        res = self.process(self.ev(2, "ありがとうございます。本番で決済が通りません"), NoModel())
+        self.assertFalse(res.get("merged"))
+        self.assertTrue(res["notify"])
+        self.assertNotIn("followups", self.item()["record"])
+
+    def test_the_followups_keep_the_newest_twenty_lines_and_cut_each_at_120_characters(self):
+        self.ask_pm()
+        texts = [f"ありがとうございます{'！' * i}" for i in range(1, 24)]
+        for i, text in enumerate(texts, start=2):
+            self.process(self.ev(i, text), NoModel())
+        followups = [f["text"] for f in self.item()["record"]["followups"]]
+        self.assertEqual(followups, texts[-20:])
+        self.process(self.ev(30, "ありがとうございます" * 13), NoModel())
+        last = self.item()["record"]["followups"][-1]["text"]
+        self.assertLessEqual(len(last), 120)
+        self.assertTrue(last.endswith("…"))
 
 
 if __name__ == "__main__":

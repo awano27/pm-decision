@@ -326,11 +326,12 @@ def _draft_mark(rec):
     return config.value("post_kind_mark") == "1" and rec.get("held_reason") == "draft"
 
 
-def format_post(n, rec, full=None, marks=None, precedent=None):
+def format_post(n, rec, full=None, marks=None, precedent=None, promise=None):
     """The approval post "[kimeru #N]": at most 5 short lines. Everything else (the source text, the memo, every draft, the
     revision, the kinds of action) is in the answer to `詳細 N` (format_detail). `full` is not shown here. `marks` (R09, hold.post_marks):
     {"day": 2} for an item that came back on the 2nd day of its hold, {"undated": ["3"]} for the undated holds named on this post.
-    `precedent` (R16, memory.precedent): the text that ends the arrow line; None (memory=0) leaves the post as it was."""
+    `precedent` (R16, memory.precedent): the text that ends the arrow line; None (memory=0) leaves the post as it was.
+    `promise` (R18, promises.post_note): the open promise of the same chat, at the end of the arrow line too; None (promises=0) adds nothing."""
     from . import execute
     memo = rec.get("memo") or {}
     plan = rec.get("plan") or {}
@@ -353,7 +354,7 @@ def format_post(n, rec, full=None, marks=None, precedent=None):
         arrow = "→ " + lead + _clip(proposal, 100 - len(lead) - 1) + "）"
     else:
         arrow = "→ " + _clip(proposal, 100)
-    lines.append(arrow + (f" {precedent}" if precedent else ""))   # R16: the precedent ends the arrow line; no line is added
+    lines.append(arrow + (f" {precedent}" if precedent else "") + (f" {promise}" if promise else ""))   # R16 / R18: they end the arrow line; no line is added
     why = _why(rec)   # R11: one line more, after the arrow line (it replaces nothing)
     if why:
         lines.append(why)
@@ -398,10 +399,11 @@ def format_post(n, rec, full=None, marks=None, precedent=None):
     return "\n".join(lines)
 
 
-def format_detail(n, rec, full=None, precedent=None):
+def format_detail(n, rec, full=None, precedent=None, promise=None):
     """The full text of an item ("[kimeru 詳細 #N]", the answer to `詳細 N`). `full` is the full text kept while the item waits
     (fulltext.load): the post then shows it and the earlier messages. `precedent` (R16, memory.history): the lines of
-    「これまでの経緯」, shown above the reply line; None or empty (memory=0) adds nothing."""
+    「これまでの経緯」, shown above the reply line; None or empty (memory=0) adds nothing. `promise` (R18, promises.detail_lines): the
+    chat's open promises, under 「この相手の約束」 above the reply line; None (promises=0) adds nothing."""
     from . import execute
     ev = rec.get("event_kind", "")
     memo = rec.get("memo") or {}
@@ -517,6 +519,9 @@ def format_detail(n, rec, full=None, precedent=None):
     if precedent:   # R16: the earlier decisions on the same chat, person or work item (at most three lines)
         lines.append("これまでの経緯:")
         lines.extend(precedent)
+    if promise:   # R18: the chat's open promises (promises=1 only; the lines are kept out of the reply line)
+        lines.append("この相手の約束:")
+        lines.extend(promise)
     ask = any(a.get("ask_back") for a in drafts)
     lines.append(f"返信: OK {n} / NG {n} / 保留 {n}" + (f" / 修正 {n} <直してほしい点>" if drafts else "")
                  + (f" / 下書き {n} <Copilot の文面>" if rec.get("copilot_request") else "")
@@ -1154,8 +1159,9 @@ def _notify_locked(out, bridge, send, real):
             ap.add(_key(rec), rec)
     ap.save()   # an item that cannot be posted now must still exist (and be counted as waiting) after a failed post
     posted = []
-    from . import fulltext, memory
+    from . import fulltext, memory, promises
     past = None   # R16: the earlier decisions, read once when the first item is posted (memory=1 only; never read at 0)
+    promise_snap = None   # R18: the open promises, read once when the first item is posted (promises=1 only; never read at 0)
     fulltext.purge_safe(out)   # a full text kept too long is deleted (a failure is noted in warnings.jsonl; the posts go on); the item is then treated as decided from the preview
     ap = Approvals(out)
     for n, it in ap.data["items"].items():
@@ -1172,8 +1178,11 @@ def _notify_locked(out, bridge, send, real):
             marks = hold.post_marks(it, ap.data["items"])   # R09: a day that came back, and the undated holds not named yet
             if past is None and memory.enabled():
                 past = memory.index(out, ap.data["items"])
+            if promise_snap is None and promises.enabled():
+                promise_snap = promises.snapshot(out)
             body = format_post(n, it["record"], fulltext.load(out, it["key"]), marks=marks,
-                               precedent=memory.precedent(past, it["record"], n))   # R16: None at memory=0
+                               precedent=memory.precedent(past, it["record"], n),   # R16: None at memory=0
+                               promise=promises.post_note(promise_snap, it["record"], n))   # R18: None at promises=0
             if send:
                 attempt = _attempt_record("case", n, "post", body, it.get("revision", 1), it["key"])
                 it.update({"delivery_unknown": True, "delivery_unknown_part": "post",
@@ -1684,6 +1693,12 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
             past["idx"] = memory.index(out, ap.data["items"])
         return memory.history(past["idx"], it["record"], num)
 
+    def promise_of(num, it):   # R18 (promises=1 only): the chat's open promises in 詳細 N; None at promises=0 (nothing is read)
+        from . import promises
+        if not promises.enabled():
+            return None
+        return promises.detail_lines(promises.snapshot(out, now), it["record"], num)
+
     def run_redo(num, it):   # `再実行`: once per number per step, only while something failed or is unknown; the mark is saved before the run
         redo_done.add(num)
         it["redo_mark"] = int(it.get("x_seq", 0))   # the results made so far; those of this redo come after
@@ -1783,7 +1798,8 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
             if it and it["posted"] and num not in redo_done:   # (redo_done doubles as "handled this step" for the numbers asked about)
                 redo_done.add(num)
                 from . import fulltext
-                text = format_detail(int(num), it["record"], fulltext.load(out, it["key"]), precedent=history_of(num, it))
+                text = format_detail(int(num), it["record"], fulltext.load(out, it["key"]), precedent=history_of(num, it),
+                                     promise=promise_of(num, it))
                 if real and labels.enabled():   # the question the route was unsure of, numbered: kept for `違う N k`
                     text = labels.attach(it, int(num), text)
                 post(text)

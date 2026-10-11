@@ -7,6 +7,7 @@ except ImportError:
 import json
 import contextlib
 import io
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -103,6 +104,13 @@ class TestWorkProgress(unittest.TestCase):
         self.assertIn("- #1 ", text)
         self.assertNotIn("Unknown", text)          # what nobody recorded is left out of the brief (work list still shows it)
         self.assertNotIn("改訂", text)
+        rank.assert_called_once()
+
+    def test_the_brief_with_promises_on_asks_the_rank_once_too(self):   # R18: the 約束 section adds no rank call and no item
+        with mock.patch.dict(os.environ, {"KIMERU_PROMISES": "1"}), mock.patch.object(brief, "rank", return_value=[]) as rank:
+            text, ranked = brief.build(self.out, object(), now=None, date="2026-10-03")
+        self.assertEqual(ranked, [])
+        self.assertIn("承認済み・未完了の作業:", text)
         rank.assert_called_once()
 
     def test_outbox_handoff_requires_identity_backed_bridge_readback(self):

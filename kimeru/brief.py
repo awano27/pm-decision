@@ -534,6 +534,11 @@ def build(out, backend, top=TOP, now=None, date=None, since=None):
     unsure = unsure_section(out, now=now, since=since)
     if unsure:
         text += "\n" + unsure
+    from . import promises   # R18: the 約束 section (promises=1 only; nothing is read at 0)
+    if promises.enabled():
+        section = promises.brief_section(out, now=now)
+        if section:
+            text += "\n" + section
     # Progress is a local, explicit fact (or Unknown for legacy approvals). It is
     # appended separately and does not create another model/ranking call.
     if unfinished:

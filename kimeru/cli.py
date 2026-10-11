@@ -24,7 +24,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import actions, attention, config, events, execute, fsutil, graph, pull
+from . import actions, attention, config, events, execute, fsutil, graph, promises, pull
 from . import writer as writer_mod
 from . import plan as planner
 from .backends import BackendUnavailable, ClmBackend, JevBackend, KevBackend, StubBackend, judge_name
@@ -384,10 +384,11 @@ class _PreviewJudgments:
             fsutil.write_atomic(self.path, json.dumps(self.data, ensure_ascii=False))
 
 
-def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=False, reader=None, measurement_source="local"):
+def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=False, reader=None, measurement_source="local", now=None):
     """Judge every event in `payload`. dedup=True (inbox/daily) skips an event already decided
     by the same graph version, so a retried or re-dropped file does not decide twice.
-    `reader` (fulltext.Reader) opens a chat to read it in full, only when needed (see fulltext.py)."""
+    `reader` (fulltext.Reader) opens a chat to read it in full, only when needed (see fulltext.py).
+    `now` (R18, promises.status_guard) is the time the open promises are counted at; None is the current time."""
     from . import fulltext
     if playbooks is None:
         playbooks = planner.load_playbooks(DEFAULT_PLAYBOOKS)
@@ -447,6 +448,7 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
                         res = _judge(g, ev_run, meter, playbooks)      # the whole text may change the judgment
             if pend:
                 pend.drop(key)
+            res = promises.status_guard(res, ev_run, out, now)        # R18 (promises=1): a status question from a chat with an overdue promise goes to the PM
             res, held = _draft(res, ev_run, meter, writer)            # the draft is written once, for the judgment that stands
             if read_info:
                 res["read_full"] = read_info

@@ -247,12 +247,14 @@ def _begin_cycle_locked(out, now=None):
         _save(out, data)
 
 
-def run(out, now=None, sender=None):
+def run(out, now=None, sender=None, hold=None):
     """Announce what is new to each enabled route. Returns {route: result}. Never raises for a route's failure.
 
     What a route has been told: `sent` = the item keys it announced (only keys still pending are kept, so the list is
     bounded by the pending items and never cut short), `notice_n` = how many of the notices (an append-only list) it has
-    been told about. A route's first run only records the baseline and sends nothing."""
+    been told about. A route's first run only records the baseline and sends nothing.
+    `hold` (R17, interrupt=sittings): {route: the item numbers that wait for the next sitting for that route}, or one collection of
+    numbers for every route. A held item is not sent now and is not recorded as sent, so it is sent by a later run that does not hold it."""
     routes = enabled_routes()
     gate = _push_gate(out)
     if not gate.acquire(blocking=False):
@@ -261,12 +263,19 @@ def run(out, now=None, sender=None):
         with fsutil.exclusive(_push_lock_path(out)) as got:
             if not got:
                 return {route: "busy; retry later" for route in routes}
-            return _run_locked(out, now, sender, routes)
+            return _run_locked(out, now, sender, routes, hold)
     finally:
         gate.release()
 
 
-def _run_locked(out, now=None, sender=None, routes=None):
+def _held_for(hold, route):
+    """The item numbers held for `route` (see run)."""
+    if isinstance(hold, dict):
+        return set(hold.get(route) or ())
+    return set(hold or ())
+
+
+def _run_locked(out, now=None, sender=None, routes=None, hold=None):
     routes = enabled_routes() if routes is None else routes
     data = _load(out)
     if not routes:
@@ -293,13 +302,15 @@ def _run_locked(out, now=None, sender=None, routes=None):
             continue
         new = everything - set(st["sent"])
         new_notices = len(notices) - st["notice_n"]
-        if not new and not new_notices:
-            result[route] = "nothing new"
+        held = {k for n, k in posted if n in _held_for(hold, route)}   # R17: waits for the next sitting (not sent, not recorded as sent)
+        new_send = new - held
+        if not new_send and not new_notices:
+            result[route] = "waiting for the next sitting" if held & new else "nothing new"
             continue
         if now - st.get("last_at", 0) < min_interval():
             result[route] = "waiting for the minimum interval"
             continue
-        text = message([n for n, k in posted if k in new], new_notices, sum(1 for n in unposted if f"unposted:{n}" in new))
+        text = message([n for n, k in posted if k in new_send], new_notices, sum(1 for n in unposted if f"unposted:{n}" in new_send))
         try:
             if sender is None:
                 _sender(route)(text)
@@ -313,13 +324,69 @@ def _run_locked(out, now=None, sender=None, routes=None):
                 st["rest_until"] = now + min(REST_MAX, REST_BASE * 2 ** (st["fails"] - FAILS_BEFORE_REST))
             result[route] = f"failed: {st['last_error']}"
             continue
-        st["sent"] = sorted(set(st["sent"]) | new)
+        st["sent"] = sorted(set(st["sent"]) | new_send)
         st["notice_n"] = len(notices)
         st.update({"fails": 0, "last_at": now, "last_ok": now, "last_error": ""})
         st.pop("rest_until", None)
         result[route] = "sent"
     _save(out, data)
     return result
+
+
+def sitting_state(out, at):
+    """R17 (interrupt=sittings): {route: True} for the routes whose sitting `at` is still to be announced. A route is due unless the
+    last sitting it announced (push_state.json `sitting_at`) is `at`. A route with no record yet takes `at` as announced
+    now, so what waits is told at the next sitting. A busy lock returns every route as due: nothing is held, and the run after it is
+    busy as well."""
+    routes = enabled_routes()
+    if not routes:
+        return {}
+    gate = _push_gate(out)
+    if not gate.acquire(blocking=False):
+        return {route: True for route in routes}
+    try:
+        with fsutil.exclusive(_push_lock_path(out)) as got:
+            if not got:
+                return {route: True for route in routes}
+            data = _load(out)
+            due, changed = {}, False
+            for route in routes:
+                st = data["routes"].setdefault(route, {})
+                last = st.get("sitting_at")
+                if last is None:
+                    st["sitting_at"], due[route], changed = at, False, True
+                else:
+                    due[route] = str(last) != at
+            if changed:
+                _save(out, data)
+            return due
+    finally:
+        gate.release()
+
+
+def sitting_done(out, at, routes):
+    """R17: the sitting `at` was announced to these routes (their send went out, or there was nothing left to send). A busy lock records
+    nothing: the sitting is due again, and what was sent is not sent twice (it is recorded as sent)."""
+    routes = list(routes)
+    if not routes:
+        return
+    gate = _push_gate(out)
+    if not gate.acquire(blocking=False):
+        return
+    try:
+        with fsutil.exclusive(_push_lock_path(out)) as got:
+            if not got:
+                return
+            data = _load(out)
+            changed = False
+            for route in routes:
+                if route in data["routes"]:
+                    data["routes"][route]["sitting_at"] = at
+                    changed = True
+            if changed:
+                _save(out, data)
+    finally:
+        gate.release()
 
 
 def test(sender=None):

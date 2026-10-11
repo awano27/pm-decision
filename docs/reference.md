@@ -166,6 +166,9 @@ python -m kimeru config path
 | `KIMERU_PUSH` / `KIMERU_PUSH_MIN_MINUTES` | 通知の経路（`teams_webhook,webhook,outlook` のコンマ区切り）と、同じ経路への最小の間隔（分、既定 5）。経路を有効にした最初のサイクルの始めに、それまでの確認待ちと通知は「通知済み」として記録するだけで送りません（そのサイクルで新しく投稿された分からは送ります。経路を外していた間の分は、有効にし直しても送りません）。一覧の名前は、環境変数と設定ファイルでは、大文字小文字と前後の空白を読み替えます（`config set push` は、正確な経路名だけを受け付けます）。経路名でないものは無視して警告し、残りの経路は使います |
 | `KIMERU_PUSH_TEAMS_URL` / `KIMERU_PUSH_WEBHOOK_URL` / `KIMERU_PUSH_WEBHOOK_KEY` | 経路の URL（https だけ）と鍵。秘密なので、環境変数だけ。表示にも記録にも出ません |
 | `KIMERU_PUSH_WEBHOOK_BODY` | 汎用の webhook の本文の形（JSON、`{text}` と `{key}`）。`config show` は中身を出しません |
+| `KIMERU_INTERRUPT` | `sittings` で、確認待ちの件を PC の通知（トースト）と通知の経路（push）へ、時刻のまとめ（`KIMERU_SIT_HOURS`）で知らせる。緊急でない件は、投稿のあとの最初のまとめの時刻に `daily` の最初のサイクルで 1 回だけ知らせ、それまでは知らせない（自分とのチャットへの投稿は今までどおりその場で行う）。緊急の件はすぐ知らせる: 重大（Sev0/1 の警報、優先度 1 の ADO 作業項目。判断で人に回ったものを含む）、規則（`critical_incident`・`critical_bug`・`critical_outage` が当たったもの）、判断で通知が付いたもの、監視の警報、`KIMERU_URGENT_WORDS` の語を含むもの。通知（自動決定）、投稿できなかった件の数、返信の受け付けの通知は、今までどおりすぐ。まとめは経路ごとに記録し、知らせたあとに限って記録する（失敗したら次のサイクルで再度知らせる。`KIMERU_TOAST=0` の間は PC の通知のまとめを記録しない）。既定 `all`（すべてすぐ知らせる。今までと同じ）。`schedule status` に「次のまとめ」と待っている件の数を出す |
+| `KIMERU_SIT_HOURS` | `KIMERU_INTERRUPT=sittings` のまとめの時刻（0 から 23 の時を、コンマで区切る。既定 `9,13,17`）。時の一覧として読めない値（25 や `9,abc`）のときは、まとめを使わず、すべてすぐ知らせ、警告を出す。`config set sit_hours` は、そうした値を受け付けず終了コード 2 |
+| `KIMERU_URGENT_WORDS` | `KIMERU_INTERRUPT=sittings` で、件の全文（NFKC に揃え、大文字と小文字を区別しない）がこの正規表現（既定 `至急\|本日中\|今日中\|大至急\|緊急\|ASAP`）に当たると、まとめを待たずにすぐ知らせる。正規表現として読めないときは既定の語を使い、警告を出す。語そのものは記録にも表示にも出さない（記録には「語に当たった」という印だけ） |
 | `KIMERU_AZ` | `az.cmd` の場所（`kimeru` の隣の `az`、`C:\az` も探します） |
 | `KIMERU_SELF_MARKER` | 自分とのチャットの表示が「(あなた)」でないときの言葉（例: `自分`） |
 | `KIMERU_BRIEF_HOUR` / `KIMERU_ADO_ORG` / `KIMERU_ADO_PROJECT` / `KIMERU_SUBSCRIPTION` | 朝のまとめの時刻（既定 8）、ADO の組織とプロジェクト、Azure Monitor のサブスクリプション（`daily` の引数の既定値） |

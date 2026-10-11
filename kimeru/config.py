@@ -78,6 +78,9 @@ SETTINGS = {
     "push": ("KIMERU_PUSH", ""),                                   # comma list of: teams_webhook, webhook, outlook
     "push_min_minutes": ("KIMERU_PUSH_MIN_MINUTES", "5"),
     "push_webhook_body": ("KIMERU_PUSH_WEBHOOK_BODY", ""),           # JSON template with {text}; empty = {"text": "{text}"}
+    "interrupt": ("KIMERU_INTERRUPT", "all"),                      # sittings = the PC notification and the push wait for the next sitting (sit_hours) unless the item is urgent (attention.py); all = at once
+    "sit_hours": ("KIMERU_SIT_HOURS", "9,13,17"),                  # the hours of the sittings, 0 to 23, comma list (used with interrupt=sittings)
+    "urgent_words": ("KIMERU_URGENT_WORDS", "至急|本日中|今日中|大至急|緊急|ASAP"),   # a regular expression: an item whose text has one of these is urgent (interrupt=sittings)
 }
 # command-line flag -> setting, for the "source: arg" record
 FLAGS = {"--backend": "backend", "--ado-org": "ado_org", "--ado-project": "ado_project",
@@ -86,7 +89,7 @@ SECRET_ENV = ("TYPESAFE_API_KEY", "KEV_API_KEY", "CLM_API_KEY", "KIMERU_PUSH_TEA
 SECRET_KEY = re.compile(r"key|token|secret|passw|credential|auth|hook.*url|push.*url|teams_url", re.I)
 # settings whose value may be written to the daily log (the others are recorded by name and source only)
 LOGGABLE = ("backend", "writer", "writer_model", "codex_model", "codex_effort", "grok_model", "toast", "brief_hour",
-            "push", "push_min_minutes", "execute", "read_full", "record_event_full", "judge_text_max", "priority", "cycle_budget_sec", "plan_lean", "batch_questions", "learn", "post_reason", "post_kind_mark", "hold_stale_days", "sent_watch", "sent_watch_days", "brief_delta", "brief_style", "memory")
+            "push", "push_min_minutes", "execute", "read_full", "record_event_full", "judge_text_max", "priority", "cycle_budget_sec", "plan_lean", "batch_questions", "learn", "post_reason", "post_kind_mark", "hold_stale_days", "sent_watch", "sent_watch_days", "brief_delta", "brief_style", "memory", "interrupt", "sit_hours")
 
 # settings with a fixed set of values: checked by `config set` and again when read. A value is first read forgivingly
 # (case, spaces, on/off, true/false, yes/no); if it is still not allowed, `backend` stops the command (it decides where the
@@ -99,6 +102,7 @@ CHOICES = {
     "plan_lean": _ONOFF, "batch_questions": _ONOFF, "learn": _ONOFF, "post_reason": _ONOFF, "post_kind_mark": _ONOFF, "sent_watch": _ONOFF, "read_full": _ONOFF, "read_click": _ONOFF, "record_event_full": _ONOFF, "open_chat_link": _ONOFF,
     "send_ready_post": _ONOFF, "execute_signature": _ONOFF, "kev_url_remote_ok": _ONOFF, "clm_url_remote_ok": _ONOFF,
     "brief_delta": _ONOFF, "brief_style": ("rank", "desk"), "memory": _ONOFF,
+    "interrupt": ("all", "sittings"),
 }
 _YES, _NO = ("1", "on", "true", "yes"), ("0", "off", "false", "no")
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
@@ -116,6 +120,16 @@ def normalize(key, raw):
     if allowed == _ONOFF or key == "toast":
         v = "1" if v in _YES else "0" if v in _NO else v
     return v, v in allowed
+
+
+def sit_hours_list(raw):
+    """The hours of a comma list (0 to 23), sorted and without repeats; None when `raw` is not one (an empty list is not one).
+    Empty entries are skipped: "9,13," is 9 and 13."""
+    try:
+        hours = sorted({int(x) for x in (p.strip() for p in str(raw).split(",")) if x})
+    except ValueError:
+        return None
+    return hours if hours and all(0 <= h <= 23 for h in hours) else None
 
 
 PUSH_ROUTES = ("teams_webhook", "webhook", "outlook")   # the only values of `push` (a URL written here by mistake is refused, never echoed)
@@ -232,6 +246,18 @@ def apply(argv=None):
             if not ok and key != "backend":   # only backend stops the command (see problems())
                 WARNINGS.append(f"{key}={str(raw).strip()!r} ({_where(key)}) is not allowed: the default {default!r} is used")
                 v = default
+        elif key == "sit_hours":   # not hours: the sittings do not apply (every item is announced at once, as with interrupt=all)
+            if sit_hours_list(raw) is None:
+                WARNINGS.append(f"sit_hours={str(raw).strip()!r} ({_where(key)}) is not a list of hours from 0 to 23: "
+                                "interrupt=sittings does not apply and every item is announced at once")
+            v = raw
+        elif key == "urgent_words":   # not a regular expression: the default words are used
+            try:
+                re.compile(raw)
+                v = raw
+            except re.error:
+                WARNINGS.append(f"urgent_words ({_where(key)}) is not a valid regular expression: the default words are used")
+                v = default
         elif key == "push":   # the names that are not routes are ignored, the others are used; never print a value: it may be a URL
             routes, ignored = push_read(raw)
             if ignored:
@@ -333,7 +359,7 @@ def rows():
 SHARE_VALUES = ("backend", "writer", "toast", "brief_hour", "priority", "cycle_budget_sec", "plan_lean", "batch_questions", "learn", "post_reason", "post_kind_mark",
                 "sent_watch", "sent_watch_days", "execute", "execute_signature", "send_ready_post", "open_chat_link", "read_full", "record_event_full",
                 "read_max_open", "read_budget_sec", "read_messages", "read_min_preview", "read_idle_sec", "read_click", "read_max_defer", "preview_cut_len", "full_text_keep_days", "inbox_done_keep_days", "judge_text_max", "title_max", "push",
-                "push_min_minutes", "idle_sec", "codex_effort", "hold_stale_days", "brief_delta", "brief_style", "memory")
+                "push_min_minutes", "idle_sec", "codex_effort", "hold_stale_days", "brief_delta", "brief_style", "memory", "interrupt", "sit_hours")
 
 
 def share_rows():
@@ -383,6 +409,13 @@ def set_value(key, val):
         if not ok:
             raise ConfigError(f"brief_hour must be a whole number from 0 to 23" if key == "brief_hour" else
                               f"{key} must be one of: {', '.join(a for a in CHOICES[key] if a)}")
+    if key == "sit_hours" and sit_hours_list(val) is None:
+        raise ConfigError("sit_hours must be a list of hours from 0 to 23, separated by commas (for example 9,13,17)")
+    if key == "urgent_words":
+        try:
+            re.compile(val)
+        except re.error:
+            raise ConfigError("urgent_words must be a regular expression (for example 至急|ASAP)") from None
     if key == "push" and not push_valid(val):   # the message never repeats the value: a URL must not reach the screen or a record
         raise ConfigError(f"push must be route names only, separated by commas: {', '.join(PUSH_ROUTES)} "
                           "(the URL goes in the environment variable, see docs/push-notification.md)")

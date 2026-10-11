@@ -628,13 +628,24 @@ def lock_path(out):
     return Path(out) / "approvals.lock"
 
 
-def mark_toasted(out, nums, notice_keys, unposted=None):
-    """Record what the PC notification announced. False (nothing changed, so it is announced again next time) when the lock is held."""
+def mark_toasted(out, nums, notice_keys, unposted=None, sitting=None):
+    """Record what the PC notification announced. False (nothing changed, so it is announced again next time) when the lock is held.
+    `sitting` (R17, interrupt=sittings): the sitting whose announcement this is, recorded as announced."""
     with fsutil.exclusive(lock_path(out)) as got:
         if not got:
             return False
-        _mark_toasted_locked(out, nums, notice_keys, unposted)
+        _mark_toasted_locked(out, nums, notice_keys, unposted, sitting)
         return True
+
+
+def sitting_toast_due(out, at):
+    """R17: True unless the PC notification has already announced the sitting `at` (approvals.json `sitting_toast` holds the last one it
+    did). A PC with no record yet takes the sitting that is current as announced: what waits is told at the next one. When that cannot
+    be written (the lock is held), the sitting counts as due, so nothing waits forever."""
+    last = Approvals(out).data.get("sitting_toast")
+    if last is None:
+        return not mark_toasted(out, [], [], sitting=at)
+    return str(last) != at
 
 
 def delivery_pending(out):
@@ -969,13 +980,15 @@ def close_delivery(out, kind, target, source="reconcile"):
         return {"status": "closed", "kind": kind, "target": str(target)}
 
 
-def _mark_toasted_locked(out, nums, notice_keys, unposted=None):
+def _mark_toasted_locked(out, nums, notice_keys, unposted=None, sitting=None):
     ap = Approvals(out)
     if unposted is not None:
         if unposted:
             ap.data["unposted_announced"] = unposted
         else:
             ap.data.pop("unposted_announced", None)
+    if sitting is not None:
+        ap.data["sitting_toast"] = str(sitting)
     for n in nums:
         if str(n) in ap.data["items"]:
             ap.data["items"][str(n)]["toasted"] = True
@@ -1003,9 +1016,10 @@ def _posted_drafts(out, posted):
     return sum(1 for n in posted if ((items.get(str(n)) or {}).get("record") or {}).get("held_reason") == "draft")
 
 
-def toast_text(out, posted, notices, unposted=0):
+def toast_text(out, posted, notices, unposted=0, sitting=False):
     """Title and body for the PC notification. Counts and numbers only; KIMERU_TOAST=detail adds the
-    first item's one-line summary (on this PC only: the routes that leave it never carry a summary)."""
+    first item's one-line summary (on this PC only: the routes that leave it never carry a summary).
+    `sitting` (R17): the title says that this is the sitting's summary (（まとめ）)."""
     import os
     parts = []
     if posted:
@@ -1019,7 +1033,7 @@ def toast_text(out, posted, notices, unposted=0):
     if config.value("toast") == "detail" and posted:
         rec = (Approvals(out).data["items"].get(str(posted[0])) or {}).get("record", {})
         body += " " + str(rec.get("summary") or rec.get("advice") or rec.get("graph") or "")[:60]
-    return "kimeru: " + " / ".join(parts), body
+    return "kimeru: " + " / ".join(parts) + ("（まとめ）" if sitting and parts else ""), body
 
 
 ACK = {"approved": "承認", "rejected": "却下", "held": "保留", "ask_back": "聞き返し",

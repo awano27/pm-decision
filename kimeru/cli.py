@@ -24,7 +24,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import actions, config, events, execute, fsutil, graph, pull
+from . import actions, attention, config, events, execute, fsutil, graph, pull
 from . import writer as writer_mod
 from . import plan as planner
 from .backends import BackendUnavailable, ClmBackend, JevBackend, KevBackend, StubBackend, judge_name
@@ -464,6 +464,8 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
                 res["material_event"].pop("直前のやり取り", None)
             res["judge"] = _judge_info(backend)
             res["graph_key"] = key
+            if attention.enabled():   # R17: whether this item may reach the PC and the phone at once (off: no field, the records are unchanged)
+                res["attn"] = attention.judge(g, res, ev_run)
             source_key = f"{res.get('graph')}:{res.get('event_id')}:{res.get('node')}"
             source_request = None
             source_material = {}

@@ -10,7 +10,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import actions, brief as brief_mod, config, events, fsutil, fulltext, graph, hold, notify, pull, push, sent
+from . import actions, attention, brief as brief_mod, config, events, fsutil, fulltext, graph, hold, notify, pull, push, sent
 from .backends import BackendUnavailable, is_jev
 
 
@@ -76,6 +76,7 @@ def status_lines(out):
     pending = sum(1 for it in data.get("items", {}).values() if it.get("posted") and it.get("status") in ("pending", "held"))
     lines.append(f"waiting for your answer: {pending}")
     lines += push.status_lines(out)
+    lines += attention.status_lines(out)   # R17: the next sitting and what waits for it (nothing unless interrupt=sittings)
     if cfg:
         eff = cfg.get("effective", {})
         lines.append("settings in effect (source): " + (", ".join(f"{k}={v['source']}" for k, v in eff.items()) or "defaults only"))
@@ -202,6 +203,15 @@ def process_inbox(inbox, out, graphs, backend, playbooks, process, deadline=None
             _log(out, {"step": "judge", "file": f.name, "error": f"{type(e).__name__}: {e}"})
             f.replace(done / (f.name + ".error"))
     return n
+
+
+def _sittings(out, now):
+    """R17: the sittings of this cycle (attention.plan). A failure reads as no sitting: the items are announced at once, as before."""
+    try:
+        return attention.plan(out, now)
+    except Exception as e:
+        _log(out, {"step": "attention", "error": f"{type(e).__name__}: {str(e)[:120]}"})
+        return {"sitting_at": None, "hold": set()}
 
 
 def _alert_left_open(out, alerts, toaster, bridge=None, send=False):
@@ -350,6 +360,8 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
     _step(out, "waiting", lambda: max(0, len(events.inbox_files(Path(inbox))) - left), r)   # (an inbox that cannot be listed: "error: ...", and the cycle goes on)
     if left:
         r["left_for_next_cycle"] = left
+    sit = _sittings(out, now) if send else {"sitting_at": None, "hold": set()}   # R17: read after this cycle's posts, so they are in it
+    at = sit["sitting_at"]   # the last sitting at or before now; None unless interrupt=sittings
     if send and toaster and notify.toast_enabled():
         # self-chat posts never notify the PM's own devices: a Windows notification on this PC does. It is built
         # from what is posted and not yet announced, so a failure on item 2 never loses the announcement of item 1.
@@ -365,19 +377,42 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
         unposted = unposted_now if unposted_now != announced else 0
         if announced and not unposted_now:
             _step(out, "toast_clear", lambda: notify.mark_toasted(out, [], [], unposted=0), r)   # (busy or a folder that cannot be written: the next cycle does it)
+        # R17 (interrupt=sittings): a posted item that is not urgent waits for the next sitting, which is announced once. The sitting
+        # is recorded only when it was announced (or there was nothing to announce), so a failed toast is tried again next cycle.
+        due, held = False, set()
+        if at:
+            try:
+                due = notify.sitting_toast_due(out, at)
+            except Exception as e:   # approvals.json cannot be written now: the waiting items are announced, and recorded when it can be
+                due = True
+                _log(out, {"step": "toast", "sitting": f"{type(e).__name__}: {str(e)[:120]}"})
+            held = set() if due else sit["hold"]
+            nums = [n for n in nums if n not in held]
+        sitting = bool(at and due)
         if nums or keys or unposted:
             def do_toast():
                 try:
-                    toaster(*notify.toast_text(out, nums, len(keys), unposted))
+                    toaster(*notify.toast_text(out, nums, len(keys), unposted, sitting=sitting))
                 except Exception as e:   # a missing notification must not turn the cycle into a failure
                     return f"failed: {type(e).__name__}: {str(e)[:120]}"
-                if not notify.mark_toasted(out, nums, keys, unposted=unposted_now):
+                if not notify.mark_toasted(out, nums, keys, unposted=unposted_now, sitting=at if sitting else None):
                     return "shown (not recorded: approvals.json is in use; announced again next cycle)"
                 return "shown"
             _step(out, "toast", do_toast, r)
+        elif sitting:   # the sitting passes with nothing to announce: it is used up (busy: the next cycle records it)
+            try:
+                notify.mark_toasted(out, [], [], sitting=at)
+            except Exception as e:
+                _log(out, {"step": "toast", "sitting": f"{type(e).__name__}: {str(e)[:120]}"})
     if send:   # the routes that reach a phone (counts and numbers only); each has its own state
         def do_push():
-            res = push.run(out)
+            due, hold = {}, None
+            if at:   # R17: a route whose sitting is due announces what waits; the others keep it for their own next sitting
+                due = push.sitting_state(out, at)
+                hold = {route: (set() if due.get(route) else sit["hold"]) for route in push.enabled_routes()}
+            res = push.run(out, hold=hold)
+            if at:   # recorded only for the routes that announced it (sent, or nothing was left to send)
+                push.sitting_done(out, at, [route for route, d in due.items() if d and res.get(route) in ("sent", "nothing new")])
             return {k: v for k, v in res.items() if v != "nothing new"} or "nothing new"
         if push.enabled_routes():
             _step(out, "push", do_push, r)

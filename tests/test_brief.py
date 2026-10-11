@@ -123,6 +123,32 @@ class TestRankAndFormat(unittest.TestCase):
             self.assertIn("1. 障害対応の取りまとめ", text)
 
 
+class TestTheDefaultBriefTextStaysTheSame(unittest.TestCase):
+    """R15: with brief_delta and brief_style at their defaults (0 and rank) the morning brief text is the one captured before the
+    delta existed. The fixture is captured from the unchanged code; a change to the default text must show here first."""
+    GOLDEN = ("[kimeru brief 2026-09-25] 今日の進め方\n"
+              "1. 確認待ち #1: 顧客への一次回答の内容を確認してください\n"
+              "2. 確認待ち #2: リリース日の判断が必要です\n"
+              "3. 障害対応の取りまとめ: 責任者を指名（今日）\n"
+              "ほか 1 件\n"
+              "確認待ち 2 件（OK 番号 / NG 番号 / 詳細 番号 で返信）")
+
+    def test_build_with_the_default_settings_gives_the_golden_text_and_the_judge_is_asked_once(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "approvals.json").write_text(json.dumps({"items": {
+                "1": {"key": "g:e1:n1", "status": "pending", "posted": True, "record": {
+                    "graph": "g", "event_id": "e1", "node": "n1", "advice": "顧客への一次回答の内容を確認してください", "notify": True}},
+                "2": {"key": "g:e2:n2", "status": "pending", "posted": True, "record": {
+                    "graph": "g", "event_id": "e2", "node": "n2", "advice": "リリース日の判断が必要です"}},
+            }}, ensure_ascii=False), encoding="utf-8")
+            write(d, "decisions.jsonl", [decision("e4", [step(1, "責任者を指名", 0), step(2, "影響確認", 1)])])
+            text, ranked = brief.build(d, StubBackend(), now=NOW, date="2026-09-25")
+            self.assertEqual(text, self.GOLDEN)
+            self.assertEqual([i["key"] for i in ranked], ["approval:1", "approval:2", "step:e4:incident:s1", "step:e4:incident:s2"])
+            self.assertNotIn("（新）", text)
+            self.assertNotIn("変わらず", text)
+
+
 class TestTeamsStatusCheckIsNotCalledAReply(unittest.TestCase):
     """teams.reply is never sent (the text goes back to the self chat, to copy), so the brief must not call a status check a reply."""
 

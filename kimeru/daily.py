@@ -420,8 +420,8 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
             def do_brief():
                 built_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
                 text, ranked = brief_mod.build(out, backend, date=today, since=st.get("brief_at"))   # unknown: the last 24 hours
-                shown = ranked[:brief_mod.TOP]   # the post names the first three; the history keeps every item
-                if len(shown) >= 2:   # a one-line day needs no summary, and an empty one must not invent one
+                shown = brief_mod.named(ranked)   # the post names the first three; the history keeps every item
+                if len(shown) >= 2 and not brief_mod.is_desk():   # a one-line day needs no summary, and an empty one must not invent one; desk: no writer
                     text = _with_key_points(text)
                 result = notify.deliver_brief(out, bridge, text, send, today, built_at=built_at)
                 status = result["status"]

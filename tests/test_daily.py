@@ -4,10 +4,12 @@ except ImportError:
     import isolate  # noqa: F401
 
 import json
+import os
 import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest import mock
 
 from kimeru import daily, events, graph, notify, plan
 from kimeru.backends import BackendUnavailable, StubBackend
@@ -244,6 +246,23 @@ class TestKnownIssues(unittest.TestCase):
             self.assertEqual(r["waiting"], 1)
             self.assertNotIn("brief", r)                                       # not final for the day
             r = self.cycle(d, t, now=datetime(2026, 9, 28, 9, 5))             # judge is back
+            self.assertEqual(r["waiting"], 0)
+            self.assertIn("brief", r)
+
+    def test_a_desk_brief_waits_while_the_judge_is_down_too(self):   # R15: brief_style=desk keeps the same wait (no fixed order is final)
+        class Down(StubBackend):
+            def ask(self, state, questions):
+                raise BackendUnavailable("Kev not reachable")
+        with mock.patch.dict(os.environ, {"KIMERU_BRIEF_STYLE": "desk"}), tempfile.TemporaryDirectory() as d:
+            t = FakeTeams()
+            inbox = Path(d) / "inbox"
+            inbox.mkdir()
+            (inbox / "m.json").write_text(json.dumps({"id": "m1", "chatId": "19:c", "createdDateTime": "2026-09-28T08:00:00Z",
+                                                    "from": {"user": {"displayName": "X"}}, "body": {"contentType": "text", "content": "これは何ですか"}}), encoding="utf-8")
+            r = self.cycle(d, t, backend=Down())
+            self.assertEqual(r["waiting"], 1)
+            self.assertNotIn("brief", r)
+            r = self.cycle(d, t, now=datetime(2026, 9, 28, 9, 5))
             self.assertEqual(r["waiting"], 0)
             self.assertIn("brief", r)
 

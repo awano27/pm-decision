@@ -63,6 +63,8 @@ SETTINGS = {
     "preview_cut_len": ("KIMERU_PREVIEW_CUT_LEN", "0"),        # a preview at least this long counts as cut off even without an ellipsis (0 = the ellipsis only; set it from the T23 result)
     "full_text_keep_days": ("KIMERU_FULL_TEXT_KEEP_DAYS", "7"),   # days a full text is kept for an item that still waits for the PM
     "hold_stale_days": ("KIMERU_HOLD_STALE_DAYS", "0"),          # 1 or more: a hold without a day that is older than this many days is named "長く保留" in the morning brief (0 = not named)
+    "brief_delta": ("KIMERU_BRIEF_DELTA", "0"),                  # 1 = the morning brief says what changed since the last one: replies and closed rows, 新 / 継続 N 日目, unchanged rows folded (brief.py)
+    "brief_style": ("KIMERU_BRIEF_STYLE", "rank"),               # desk = a fixed order and no judge call or writer call for the brief (brief.py, daily.py)
     "inbox_done_keep_days": ("KIMERU_INBOX_DONE_KEEP_DAYS", "7"),   # days a judged original (inbox/done/*.json, the full text) is kept; 0 = never deleted
     "learn": ("KIMERU_LEARN", "0"),                            # 1 = the reply 違う N / 違う N k labels a decision (reviews.jsonl) and 詳細 N lists the question it was unsure of
     "post_reason": ("KIMERU_POST_REASON", "0"),                # 1 = the approval post and 詳細 N add one line: the question the model was unsure of (explain.py)
@@ -83,7 +85,7 @@ SECRET_ENV = ("TYPESAFE_API_KEY", "KEV_API_KEY", "CLM_API_KEY", "KIMERU_PUSH_TEA
 SECRET_KEY = re.compile(r"key|token|secret|passw|credential|auth|hook.*url|push.*url|teams_url", re.I)
 # settings whose value may be written to the daily log (the others are recorded by name and source only)
 LOGGABLE = ("backend", "writer", "writer_model", "codex_model", "codex_effort", "grok_model", "toast", "brief_hour",
-            "push", "push_min_minutes", "execute", "read_full", "record_event_full", "judge_text_max", "priority", "cycle_budget_sec", "plan_lean", "batch_questions", "learn", "post_reason", "post_kind_mark", "hold_stale_days", "sent_watch", "sent_watch_days")
+            "push", "push_min_minutes", "execute", "read_full", "record_event_full", "judge_text_max", "priority", "cycle_budget_sec", "plan_lean", "batch_questions", "learn", "post_reason", "post_kind_mark", "hold_stale_days", "sent_watch", "sent_watch_days", "brief_delta", "brief_style")
 
 # settings with a fixed set of values: checked by `config set` and again when read. A value is first read forgivingly
 # (case, spaces, on/off, true/false, yes/no); if it is still not allowed, `backend` stops the command (it decides where the
@@ -95,6 +97,7 @@ CHOICES = {
     "toast": ("0", "1", "detail"),
     "plan_lean": _ONOFF, "batch_questions": _ONOFF, "learn": _ONOFF, "post_reason": _ONOFF, "post_kind_mark": _ONOFF, "sent_watch": _ONOFF, "read_full": _ONOFF, "read_click": _ONOFF, "record_event_full": _ONOFF, "open_chat_link": _ONOFF,
     "send_ready_post": _ONOFF, "execute_signature": _ONOFF, "kev_url_remote_ok": _ONOFF, "clm_url_remote_ok": _ONOFF,
+    "brief_delta": _ONOFF, "brief_style": ("rank", "desk"),
 }
 _YES, _NO = ("1", "on", "true", "yes"), ("0", "off", "false", "no")
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
@@ -329,7 +332,7 @@ def rows():
 SHARE_VALUES = ("backend", "writer", "toast", "brief_hour", "priority", "cycle_budget_sec", "plan_lean", "batch_questions", "learn", "post_reason", "post_kind_mark",
                 "sent_watch", "sent_watch_days", "execute", "execute_signature", "send_ready_post", "open_chat_link", "read_full", "record_event_full",
                 "read_max_open", "read_budget_sec", "read_messages", "read_min_preview", "read_idle_sec", "read_click", "read_max_defer", "preview_cut_len", "full_text_keep_days", "inbox_done_keep_days", "judge_text_max", "title_max", "push",
-                "push_min_minutes", "idle_sec", "codex_effort", "hold_stale_days")
+                "push_min_minutes", "idle_sec", "codex_effort", "hold_stale_days", "brief_delta", "brief_style")
 
 
 def share_rows():

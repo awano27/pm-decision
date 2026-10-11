@@ -12,7 +12,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import config, fsutil, hold
+from . import autorun, config, fsutil, hold
 from .backends import judge_name
 
 HARM = ["No real harm", "Minor inconvenience for the team",
@@ -20,6 +20,10 @@ HARM = ["No real harm", "Minor inconvenience for the team",
 MAX_ITEMS = 30  # keep a single Jev call small
 TOP = 3         # the items the post names; the rest are counted
 HISTORY_KEEP_DAYS = 90   # out/brief_history.jsonl keeps a row this many days back (the next brief compares with it)
+FOLD_DAYS = 4            # brief_delta=1: a numbered row that stays the same (sig and rank band) this many days in a row is folded
+RANK_BAND = TOP          # rank bands are this wide (1-3, 4-6, ...): a row that stays in its band has not moved
+APPROVAL_PREFIX = "approval:"                                  # the key of a numbered approval row (a number the PM answers)
+REPLY_STATUSES = ("approved", "rejected", "held", "redrafted")   # the replies the window line counts (autorun.REPLY_NAMES)
 STUB_HINTS = {"3": ["障害", "incident", "顧客", "customer"], "2": ["スケジュール", "リリース", "判断"], "1": ["確認待ち"]}
 
 
@@ -135,24 +139,52 @@ def collect(out, now=None, days=2):
     return items[:MAX_ITEMS]
 
 
-def rank(items, backend, top=None):
-    """Every item, best first, with its harm (one score per item, one call) and its `rank` (1 = first). `top` keeps the first N."""
+def rank(items, backend, top=None, reuse=None):
+    """Every item, best first, with its harm (one score per item, one call) and its `rank` (1 = first). `top` keeps the first N.
+    reuse (R15, brief_delta=1): {sig: harm} from the previous brief made by the same judge. An item whose sig is there keeps that
+    harm and is not asked again; with nothing new to ask, the backend is not called."""
     if not items:
         return []
-    state = {"items": [i["subject"] for i in items]}
-    qs = {f"h{i}": {"type": "score", "criteria": HARM, "hints": STUB_HINTS,
-                    "instructions": f"How much harm would a one-day delay of item `items[{i}]` cause?"}
-          for i in range(len(items))}
-    ans = backend.ask(state, qs)
-    keyed = [((-it["due_level"], ans[f"h{i}"]["score"], -i), it) for i, it in enumerate(items)]  # tie -> newer first
+    reuse = reuse or {}
+    harm = {i: reuse[_sig(it["subject"])] for i, it in enumerate(items) if _sig(it["subject"]) in reuse}
+    fresh = [i for i in range(len(items)) if i not in harm]
+    if fresh:
+        state = {"items": [items[i]["subject"] for i in fresh]}
+        qs = {f"h{j}": {"type": "score", "criteria": HARM, "hints": STUB_HINTS,
+                        "instructions": f"How much harm would a one-day delay of item `items[{j}]` cause?"}
+              for j in range(len(fresh))}
+        ans = backend.ask(state, qs)
+        for j, i in enumerate(fresh):
+            harm[i] = ans[f"h{j}"]["score"]
+    keyed = [((-it["due_level"], harm[i], -i), it) for i, it in enumerate(items)]  # tie -> newer first
     keyed.sort(key=lambda t: t[0], reverse=True)
     ranked = [{**it, "harm": round(k[1], 2), "rank": n} for n, (k, it) in enumerate(keyed, 1)]
     return ranked if top is None else ranked[:top]
 
 
-def format_post(ranked, total, pending, date=None, empty_message="対応が必要な項目はありません", drafts=None):
+def desk_order(items):
+    """brief_style=desk (R15): a fixed order with no judge call. The severe and the notify rows come first, then the overdue and
+    today's, then this week's, then the rest; each group keeps the order the items were collected in. harm is None (not judged)."""
+    def group(it):
+        if it["severe"] or it["notify"]:
+            return 0
+        return 1 if it["due_level"] == 0 else 2 if it["due_level"] == 1 else 3
+    return [{**it, "harm": None, "rank": n} for n, it in enumerate(sorted(items, key=group), 1)]
+
+
+def is_desk():
+    """brief_style=desk: the fixed order, and the brief is not summarised by the writer (daily.py)."""
+    return config.value("brief_style") == "desk"
+
+
+def named(ranked, top=TOP):
+    """The items the post names: the first `top` that are not folded (brief_delta=1); all of them are kept in the history."""
+    return [i for i in ranked if not i.get("folded")][:top]
+
+
+def format_post(ranked, total, pending, date=None, empty_message="対応が必要な項目はありません", drafts=None, unchanged=None):
     """drafts (R12, post_kind_mark=1): how many of the `pending` waiting items only need their draft checked; None (the default) keeps
-    the one count."""
+    the one count. unchanged (R15, brief_delta=1): the numbers of the folded rows, named by number; None or empty adds no line."""
     date = date or datetime.now().strftime("%Y-%m-%d")
     lines = [f"[kimeru brief {date}] 今日の進め方"]
     if not ranked:
@@ -161,6 +193,8 @@ def format_post(ranked, total, pending, date=None, empty_message="対応が必�
         lines.append(f"{i}. {it['text']}")
     if total > len(ranked):
         lines.append(f"ほか {total - len(ranked)} 件")
+    if unchanged:
+        lines.append(f"変わらず {len(unchanged)} 件（{', '.join('#' + n for n in unchanged)}）")
     if pending and drafts is None:
         lines.append(f"確認待ち {pending} 件（OK 番号 / NG 番号 / 詳細 番号 で返信）")
     elif pending:
@@ -339,19 +373,150 @@ def unsure_section(out, now=None, days=1, since=None):
     return "\n".join(lines)
 
 
+# --- brief_delta=1 (R15): what changed since the last brief. Read only: the history rows (brief_history.jsonl), the reply log
+# (approvals.log.jsonl) and the approval statuses (approvals.json). Nothing is written here.
+
+def _sig(subject):
+    """The first 12 hex digits of the sha1 of a subject: the identity of a row in brief_history (no text is kept)."""
+    return hashlib.sha1(subject.encode("utf-8")).hexdigest()[:12]
+
+
+def _band(rank):
+    """The rank band of a rank: 0 for 1-3, 1 for 4-6, ... (None when the rank is not a number)."""
+    return (rank - 1) // RANK_BAND if isinstance(rank, int) and rank >= 1 else None
+
+
+def _day(date, now):
+    """The local day of the brief (`date` as given, else the day of `now`)."""
+    return date or (now or datetime.now(timezone.utc)).astimezone().strftime("%Y-%m-%d")
+
+
+def _previous(out, today):
+    """The brief rows dated before `today`, newest first: [(date, backend name, {key: row})]. A damaged line is skipped."""
+    found = []
+    for line in _lines(history_path(out)):
+        d = _row_date(line)
+        if d is None or d >= today:
+            continue
+        rec = json.loads(line)
+        rows = rec.get("rows") if isinstance(rec.get("rows"), list) else []
+        found.append((d, rec.get("backend"), {r["key"]: r for r in rows if isinstance(r, dict) and "key" in r}))
+    return sorted(found, key=lambda t: t[0], reverse=True)
+
+
+def _reuse(prev, name):
+    """{sig: harm} of the previous brief, when the same judge (by name) made its points. Another judge's points are not reused."""
+    if not prev or prev[0][1] != name:
+        return {}
+    return {r["sig"]: r["harm"] for r in prev[0][2].values()
+            if isinstance(r.get("harm"), (int, float)) and isinstance(r.get("sig"), str)}
+
+
+def _run(prev, key, sig, band):
+    """(days, same): how many brief rows in a row, from the newest, hold this key; and how many of those, from the newest, have the same
+    sig and rank band as today's row (the count stops at the first one that differs)."""
+    days = same = 0
+    differed = False
+    for _, _, rows in prev:
+        row = rows.get(key)
+        if row is None:
+            break
+        days += 1
+        if not differed and row.get("sig") == sig and _band(row.get("rank")) == band:
+            same += 1
+        else:
+            differed = True
+    return days, same
+
+
+def _mark(ranked, prev):
+    """The numbered rows get 新 or 継続 N 日目 in their text, and are folded when unchanged for FOLD_DAYS days (not when notify or
+    severe). Steps and queue rows have no number: they are never labelled or folded. Returns (ranked, folded numbers)."""
+    marked, folded = [], []
+    for it in ranked:
+        if not it["key"].startswith(APPROVAL_PREFIX):
+            marked.append(it)
+            continue
+        days, same = _run(prev, it["key"], _sig(it["subject"]), _band(it["rank"]))
+        label = "新" if days == 0 else f"継続 {days + 1} 日目"
+        fold = same + 1 >= FOLD_DAYS and not it["notify"] and not it["severe"]
+        if fold:
+            folded.append(it["key"][len(APPROVAL_PREFIX):])
+        marked.append({**it, "text": f"{it['text']}（{label}）", "folded": fold})
+    return marked, folded
+
+
+def _when(value):
+    """A record time as an aware datetime (None when it cannot be read)."""
+    try:
+        t = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return t if t.tzinfo else t.astimezone()
+
+
+def _replies(out, start):
+    """How many replies of each kind were written to approvals.log.jsonl since `start`. The trial's fictional item is left out."""
+    counts = {status: 0 for status in REPLY_STATUSES}
+    for r in autorun._rows(Path(out) / "approvals.log.jsonl"):
+        t = _when(r.get("at"))
+        if t is None or t < start or autorun._key_is_sample(r.get("key")):
+            continue
+        if r.get("status") in counts:
+            counts[r["status"]] += 1
+    return counts
+
+
+def _closed(out, prev):
+    """How many numbered rows of the last brief are no longer waiting (approved, rejected or closed in approvals.json)."""
+    if not prev:
+        return 0
+    ap = fsutil.read_json(Path(out) / "approvals.json", {"items": {}})
+    items = ap.get("items") if isinstance(ap, dict) and isinstance(ap.get("items"), dict) else {}
+    closed = 0
+    for key in prev[0][2]:
+        if key.startswith(APPROVAL_PREFIX):
+            item = items.get(key[len(APPROVAL_PREFIX):])
+            if isinstance(item, dict) and item.get("status") not in ("pending", "held"):
+                closed += 1
+    return closed
+
+
+def _summary(out, prev, now, since):
+    """The two lines under the header: the replies since the last brief (or the last 24 hours) and the rows that closed."""
+    start, known = window_start(now, 1, since)
+    counts = _replies(out, start)
+    words = " / ".join(f"{autorun.REPLY_NAMES[s]} {n}" for s, n in counts.items())
+    return [f"{_window_name(known, 1)}: {words}", f"閉じた: {_closed(out, prev)} 件"]
+
+
 def build(out, backend, top=TOP, now=None, date=None, since=None):
     """now: aware datetime for the collection window; date: "YYYY-MM-DD" shown in the header; since: when the last brief was
     built (ISO text or datetime): the ADO / Teams / unsure sections count from there instead of the last 24 hours.
     Returns (text, ranked): the text names the first `top` items; `ranked` is every item with its harm and rank (the history)."""
     items = collect(out, now=now)
-    ranked = rank(items, backend)
+    delta = config.value("brief_delta") == "1"
+    prev = _previous(out, _day(date, now)) if delta else []
+    if is_desk():
+        ranked = desk_order(items)
+    else:
+        ranked = rank(items, backend, reuse=_reuse(prev, judge_name(backend)) if delta else None)
+    folded = []
+    if delta:
+        ranked, folded = _mark(ranked, prev)
     pending = sum(1 for i in items if i["kind"] == "approval")
     drafts = sum(1 for i in items if i["kind"] == "approval" and i["draft"]) if config.value("post_kind_mark") == "1" else None
     from . import work
     unfinished = [row for row in work.list_work(out) if row["state"] != "done"]
     empty_message = ("実行候補はありません。未完了作業の状況は下記を確認してください"
                      if unfinished else "対応が必要な項目はありません")
-    text = format_post(ranked[:top], len(items), pending, date, empty_message, drafts=drafts)
+    shown = named(ranked, top)
+    if folded and not shown:
+        empty_message = "前回から変わった件はありません"
+    text = format_post(shown, len(items) - len(folded), pending, date, empty_message, drafts=drafts, unchanged=folded)
+    if delta:   # the two lines under the header: the replies and the closed rows since the last brief
+        head, *rest = text.split("\n", 1)
+        text = "\n".join([head, *_summary(out, prev, now, since)] + rest)
     quiet = quiet_reads(out, now=now)
     if quiet:
         text += (f"\n開いて読みましたが、対応は不要でした: {len(quiet)} 件（{'、'.join(quiet[:5])}{' ほか' if len(quiet) > 5 else ''}）"
@@ -418,7 +583,7 @@ def _write(path, lines):
 
 def _history_row(it):
     return {"key": it["key"], "kind": it["kind"],
-            "sig": hashlib.sha1(it["subject"].encode("utf-8")).hexdigest()[:12],
+            "sig": _sig(it["subject"]),
             "harm": it.get("harm"), "rank": it.get("rank"), "notify": bool(it.get("notify")),
             "severe": bool(it.get("severe")), "due_level": it["due_level"]}
 

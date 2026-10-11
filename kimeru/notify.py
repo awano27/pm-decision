@@ -341,7 +341,7 @@ def format_post(n, rec, full=None):
     if writes:   # where it will be written: the organization and the project it was pulled from (execute.freeze)
         tg = writes[0].get("exec_origin") or writes[0].get("exec_target") or {}
         where = f"（{tg['org']} / {tg['project']}）" if tg.get("org") and tg.get("project") else ""
-        lines.append(f"OK で ADO{where}の #{writes[0].get('id')} にコメントを書きます（上の文面そのまま）")
+        lines.append(f"OK で ADO{where}の #{writes[0].get('id')} にコメントを書きます（上の文面そのまま）。--send 無しの実行では次の --send で書きます")
     elif any(a.get("exec_skip") for a in actions):
         lines.append("OK は記録だけです（ADO の取り込み元が記録されていません）")
     if rec.get("copilot_request"):
@@ -1541,16 +1541,27 @@ def collect(out, bridge, writer=None, real=False, send=False):
         return Changes(_collect(out, bridge, writer, real, send))
 
 
+def unwritten(it):
+    """An approved ADO comment that was never written (R13): its OK came on a run without --send, so the approval was recorded and
+    nothing was executed. The post had shown the text and the target, and `exec` is still empty. The first run with --send writes it."""
+    from . import execute
+    return bool(it.get("posted")) and it.get("status") == "approved" and not it.get("exec") and any(
+        execute.is_gated(a) and a.get("exec_text") for a in (it.get("record") or {}).get("actions", []))
+
+
 def _collect(out, bridge, writer=None, real=False, send=False):
     """The body of collect (the lock is held).
     real=True (the daily and approvals paths only): an approval carries out the switched-on kinds, and `再実行 N` / `済 N` work.
-    send=True: what is posted while collecting (results, texts ready to copy) is sent; otherwise it is only pasted."""
+    send=True: what is posted while collecting (results, texts ready to copy) is sent; otherwise it is only pasted.
+    real and send together (the first run with --send after an OK without it): the comments of such OKs are written now, once."""
     ap = Approvals(out)
     from . import execute
 
-    def waiting(it):   # waiting for an answer, or approved but with an execution that failed / was left unsure (`再実行` / `済`)
+    def waiting(it):   # waiting for an answer, or approved but with an execution that failed / was left unsure (`再実行` / `済`),
+        # or approved on a run without --send and not written yet (unwritten: the run with --send writes it)
         return it["posted"] and (it["status"] in ("pending", "held") or (
-            real and it["status"] == "approved" and any(execute.unresolved(v) for v in (it.get("exec") or {}).values())))
+            real and it["status"] == "approved" and (any(execute.unresolved(v) for v in (it.get("exec") or {}).values())
+                                                     or (send and unwritten(it)))))
     flushed = True
     if send and ap.data.get("outbox"):
         flushed = flush_outbox(ap, bridge, True)   # results that could not be posted last time
@@ -1560,6 +1571,10 @@ def _collect(out, bridge, writer=None, real=False, send=False):
     post = make_post(ap, bridge, send)
     if real:
         execute.report_unknown(ap, post)
+    if real and send:
+        for num, it in ap.data["items"].items():
+            if unwritten(it):   # the run's write: saved before each call, so a second run never writes it again
+                execute.run_approved(out, ap, int(num), it, post)
     writer = writer if writer is not None else writer_mod.get_writer()
     changes = []
     read = bridge.read()

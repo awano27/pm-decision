@@ -234,8 +234,9 @@ class TestRoutesThatNeverExecute(Safety):
                     for kw in node.keywords:
                         if kw.arg == "real" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
                             found.append((path.name, ast.unparse(node.func)))
-        # daily command, notify command, approvals command: nothing else (the demo, eval/, run and watch never ask)
-        self.assertEqual(sorted(found), [("cli.py", "daily.cycle"), ("cli.py", "nt.collect"), ("cli.py", "nt.notify")])
+        # daily command and notify command ask with a constant True; approvals asks with real=a.send (R13: without --send it writes
+        # nothing); nothing else (the demo, eval/, run and watch never ask)
+        self.assertEqual(sorted(found), [("cli.py", "daily.cycle"), ("cli.py", "nt.notify")])
 
     def test_collect_without_real_records_and_writes_nothing(self):
         self.enable()
@@ -582,7 +583,7 @@ class TestTheApprovalsCommand(Safety):
         with mock.patch.object(notify, "PowerShellBridge") as pb, mock.patch.object(notify, "collect", return_value=[]) as col:
             self.assertEqual(cli.main(["--out", str(self.out), "approvals"]), 0)
             self.assertEqual(cli.main(["--out", str(self.out), "approvals", "--send"]), 0)
-        self.assertEqual([c.kwargs for c in col.call_args_list], [{"real": True, "send": False}, {"real": True, "send": True}])
+        self.assertEqual([c.kwargs for c in col.call_args_list], [{"real": False, "send": False}, {"real": True, "send": True}])
 
 
 class TestAVerdictIsNotAnApproval(Safety):
@@ -603,3 +604,114 @@ class TestAVerdictIsNotAnApproval(Safety):
         self.assertEqual(self.rows(), rows_before)                                        # nothing recorded as executed
         self.assertEqual(self.state()["status"], "approved")
         self.assertEqual([r["verdict"] for r in review.read_jsonl(review.reviews_path())], ["wrong"])
+
+
+NO_SEND_NOTE = "。--send 無しの実行では次の --send で書きます"
+
+
+class TestTheWriteWaitsForARunWithSend(Safety):
+    """R13: an OK given on a run without --send (approvals, daily) records the approval and writes nothing. The write waits for the
+    first run with --send, which writes it once; the post says so."""
+
+    def test_an_ok_without_send_writes_nothing_and_the_post_says_when_it_is_written(self):
+        self.enable()
+        bridge = self.decide_and_post()
+        self.assertIn("の #7002 にコメントを書きます（上の文面そのまま）" + NO_SEND_NOTE, bridge.posts[0])
+        ch = self.cycle(bridge, real=False, send=False, reply="OK 1")                    # approvals without --send
+        self.assertEqual(ch[0]["status"], "approved")
+        self.assertEqual(self.calls, [])
+        self.assertFalse((self.out / "executions.jsonl").exists())
+        self.assertFalse(self.state().get("exec"))
+
+    def test_the_first_run_with_send_writes_it_once_and_later_runs_never_do(self):
+        self.enable()
+        bridge = self.decide_and_post()
+        self.cycle(bridge, real=False, send=False, reply="OK 1")
+        self.assertEqual(self.calls, [])
+        self.cycle(bridge)                                                             # the first run with --send; the OK is still on screen
+        self.assertEqual(len(self.posts_of("POST")), 1)
+        self.assertEqual(self.state()["exec"]["0"]["state"], "done")
+        self.assertEqual([r["state"] for r in self.rows()], ["running", "done"])
+        for _ in range(3):
+            self.cycle(bridge)
+        self.assertEqual(len(self.posts_of("POST")), 1)                                 # never twice
+
+    def test_a_daily_run_without_send_writes_nothing_and_the_next_daily_run_with_send_writes_it_once(self):
+        self.enable()
+        inbox = self.out / "inbox"
+        inbox.mkdir(parents=True)
+        (inbox / "w.json").write_text(json.dumps(WI), encoding="utf-8")
+        bridge = Bridge()
+
+        def run(send, reply=None):
+            if reply:
+                bridge.replies.append(reply)
+            with mock.patch.object(pull, "pull_teams", lambda *a, **k: 0), \
+                    mock.patch.object(pull, "http_json", self.http()), \
+                    mock.patch.object(execute, "_token", lambda org: SECRET_TOKEN), \
+                    mock.patch.object(pull, "ado_tenant", lambda org: TENANT):
+                return daily.cycle(self.out, inbox, GRAPHS, NoCriteria(), PBS, cli.process, bridge=bridge, send=send, real=True,
+                                   now=datetime(2026, 10, 1, 7, 0))   # before the brief hour: no brief in these runs
+        run(send=True)                                                                 # the approval post goes out
+        self.assertEqual(len(bridge.posts), 1)
+        run(send=False, reply="OK 1")                                                  # daily without --send
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.state()["status"], "approved")
+        r = run(send=True)                                                             # the next daily run with --send writes it, once
+        self.assertEqual(len(self.posts_of("POST")), 1)
+        self.assertFalse(any(isinstance(v, str) and v.startswith("error:") for v in r.values()), r)
+        run(send=True)
+        self.assertEqual(len(self.posts_of("POST")), 1)
+
+
+class TestTheWordsThatDoNotChangeStayTheSame(Safety):
+    """Golden texts of the approval post, and the PC notification, before and after R13: only the one line that says when an
+    approved comment is written is different, and only for an item whose comment would be written."""
+
+    OLD_GATED = ("[kimeru #1] ADO #7002 [Task] レポート画面の並び順を変えたい\n"
+                 "→ 情報不足: 追記依頼のコメント案あり\n"
+                 "コメント: 着手に必要な情報が不足しています。受け入れ条件（何ができれば完了か）が書かれていません。追記してください。\n"
+                 "\n（kimeru の定型文を、本人が承認した文面です）\n"
+                 "https://dev.azure.com/contoso-not-real/Proj/_workitems/edit/7002\n"
+                 "OK で ADO（contoso-not-real / Proj）の #7002 にコメントを書きます（上の文面そのまま）\n"
+                 "OK 1 / NG 1 / 詳細 1")
+    GATED = ("[kimeru #1] ADO #7002 [Task] レポート画面の並び順を変えたい\n"
+             "→ 情報不足: 追記依頼のコメント案あり\n"
+             "コメント: 着手に必要な情報が不足しています。受け入れ条件（何ができれば完了か）が書かれていません。追記してください。\n"
+             "\n（kimeru の定型文を、本人が承認した文面です）\n"
+             "https://dev.azure.com/contoso-not-real/Proj/_workitems/edit/7002\n"
+             "OK で ADO（contoso-not-real / Proj）の #7002 にコメントを書きます（上の文面そのまま）。--send 無しの実行では次の --send で書きます\n"
+             "OK 1 / NG 1 / 詳細 1")
+    PLAIN = ("[kimeru #1] ADO #7002 [Task] レポート画面の並び順を変えたい\n"
+             "→ 情報不足: 追記依頼のコメント案あり\n"
+             "案: 着手に必要な情報が不足しています。受け入れ条件（何ができれば完了か）が書かれていません。追記してください。— kimeru\n"
+             "OK は記録だけです（ADO の取り込み元が記録されていません）\n"
+             "OK 1 / NG 1 / 詳細 1")
+
+    def test_the_approval_post_for_an_ado_comment_differs_only_in_the_send_note(self):
+        self.enable()
+        bridge = self.decide_and_post()
+        self.assertEqual(bridge.posts[0], self.GATED)
+        self.assertEqual(self.GATED.replace(NO_SEND_NOTE, ""), self.OLD_GATED)     # the only difference is the note
+
+    def test_the_approval_post_without_an_origin_is_byte_for_byte_what_it_was(self):
+        self.enable()
+        plain = json.loads(json.dumps(WI))
+        del plain["kimeru_origin"]
+        cli.process(plain, GRAPHS, NoCriteria(), self.out, PBS)
+        bridge = Bridge()
+        notify.notify(self.out, bridge, send=True, real=True)
+        self.assertEqual(bridge.posts[0], self.PLAIN)
+
+    def test_the_pc_notification_text_is_unchanged(self):
+        from pathlib import Path
+        self.assertEqual(notify.toast_text(Path("x"), [1, 2], 1, 0), ("kimeru: 確認待ち 2 件 / 自動決定の通知 1 件", "#1, #2"))
+        self.assertEqual(notify.toast_text(Path("x"), [], 0, 2),
+                         ("kimeru: 投稿できていない確認待ち 2 件", "Teams の自分とのチャットを確認してください"))
+
+    def test_the_docs_say_that_an_ok_without_send_is_written_by_the_next_send(self):
+        for doc in ("SECURITY.md", "docs/execute-ado-comment.md"):
+            with self.subTest(doc=doc):
+                text = (ROOT / doc).read_text(encoding="utf-8")
+                self.assertIn("--send", text)
+                self.assertIn("次の `--send` で", text)

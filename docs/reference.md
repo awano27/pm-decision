@@ -163,7 +163,7 @@ python -m kimeru config path
 | `KIMERU_SELF_MARKER` | 自分とのチャットの表示が「(あなた)」でないときの言葉（例: `自分`） |
 | `KIMERU_BRIEF_HOUR` / `KIMERU_ADO_ORG` / `KIMERU_ADO_PROJECT` / `KIMERU_SUBSCRIPTION` | 朝のまとめの時刻（既定 8）、ADO の組織とプロジェクト、Azure Monitor のサブスクリプション（`daily` の引数の既定値） |
 | `KIMERU_CLM_URL` / `KIMERU_CLM_URL_REMOTE_OK` | CLM（試験用）の接続先（既定 `http://127.0.0.1:8700/v1`）と、この PC 以外を許す明示の設定（既定 0） |
-| `KIMERU_EXECUTE` / `KIMERU_EXECUTE_SIGNATURE` | 承認のあとに実行する種類（実装済みは `ado.comment` だけ。既定は無し）と、コメント末尾の kimeru の 1 行（既定 1、`0` で外す） |
+| `KIMERU_EXECUTE` / `KIMERU_EXECUTE_SIGNATURE` | 承認のあとに実行する種類（実装済みは `ado.comment` だけ。既定は無し）と、コメント末尾の kimeru の 1 行（既定 1、`0` で外す）。`--send` を付けない実行で返した OK は承認の記録だけで、ADO へは次の `--send` の実行で 1 回書きます |
 | `KIMERU_SEND_READY` / `KIMERU_OPEN_CHAT_LINK` | 返信を承認したら送る文面だけを自分とのチャットに返す（既定 1）／相手とのチャットを開くリンクも付ける（実験的。既定 0） |
 | `KIMERU_IDLE_SEC` | Teams を操作する前に、キーボード・マウスが止まっているべき秒数（既定: `post`・`send` は 3、teams-copilot は 4。`0` で待たない。他のチャットを開いて読む処理には効かず、そちらは `KIMERU_READ_IDLE_SEC`（既定 30）だけで決まる） |
 | `KIMERU_STATE_DIR` | （`schedule install` が、設定されていれば自動運転の起動行に引き継ぎます）状態フォルダ（設定ファイル、自分とのチャットの目印、writer の休止の印、診断）。未設定なら `%LOCALAPPDATA%\kimeru` |

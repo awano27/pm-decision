@@ -257,7 +257,8 @@ def purge_inbox_done(inbox, now=None, days=None):
 def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=False,
           ado=None, subscription=None, brief_hour=8, now=None, toaster=None, budget=None, real=False):
     """Run one cycle. Returns a small report dict (also written to daily.log.jsonl).
-    real=True (the `daily` command only): approvals carry out the kinds switched on with `config set execute`. Anything else
+    real=True (the `daily` command only): approvals carry out the kinds switched on with `config set execute`, and only in a
+    cycle with send=True (an OK on a cycle without --send records the approval; the write waits for the next one). Anything else
     that calls this (the eval scripts, tests) only records."""
     now = now or datetime.now()
     out = Path(out)
@@ -376,7 +377,7 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
     changes = []
 
     def do_collect():
-        got = notify.collect(out, bridge, real=real, send=send)
+        got = notify.collect(out, bridge, real=real and send, send=send)   # R13: an OK on a run without --send writes nothing
         if getattr(got, "busy", False):
             _busy(r, "approvals", "another run holds approvals.lock, nothing was applied this cycle")
             return []

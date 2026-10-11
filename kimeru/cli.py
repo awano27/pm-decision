@@ -595,7 +595,8 @@ def _main(argv=None):
     p_n = sub.add_parser("notify", help="post human-queue items to Teams self chat")
     p_n.add_argument("--send", action="store_true", help="actually press Enter (default: paste only)")
     p_ap = sub.add_parser("approvals", help="read OK/NG/保留/再実行/済 replies from Teams self chat; carries out approved kinds that are switched on")
-    p_ap.add_argument("--send", action="store_true", help="send the results and texts ready to copy (default: paste only)")
+    p_ap.add_argument("--send", action="store_true", help="send the results and texts ready to copy, and write the ADO comments of OKs given "
+                      "without it (default: paste only; those OKs are written by the first run with --send)")
     p_b = sub.add_parser("brief", help="rank today's work; print or post to Teams self chat")
     p_b.add_argument("--top", type=int, default=3)
     p_b.add_argument("--post", action="store_true", help="paste into Teams self chat")
@@ -852,7 +853,7 @@ def _main(argv=None):
                     return 1
                 print(f"{'posted' if a.send else 'pasted (not sent)'}: {list(ids)}")
             else:
-                res = nt.collect(out, bridge, real=True, send=a.send)
+                res = nt.collect(out, bridge, real=a.send, send=a.send)   # without --send an OK records only; the write waits for --send
                 if getattr(res, "busy", False):
                     print(busy.format("nothing was read or applied"))
                     return 1

@@ -24,7 +24,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import actions, config, events, execute, fsutil, graph
+from . import actions, config, events, execute, fsutil, graph, pull
 from . import writer as writer_mod
 from . import plan as planner
 from .backends import BackendUnavailable, ClmBackend, JevBackend, KevBackend, StubBackend, judge_name
@@ -383,7 +383,11 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
             _append(out / "warnings.jsonl", {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), key: msg})
     seen = _processed(out) if dedup else set()
     results = []
-    for ev in events.normalize(payload):
+    # the pull's note on when the PC saw the event (R01) is read here and kept out of the event: a measurement, not a judgment input
+    note = payload.get("_kimeru") if isinstance(payload, dict) else None
+    body = {k: v for k, v in payload.items() if k != "_kimeru"} if isinstance(payload, dict) else payload
+    for ev in events.normalize(body):
+        arrival = pull.arrival_of(ev, note)
         for g in graphs.get(ev["kind"], []):
             key = f"{g['name']}@{_graph_version(g)}:{ev['kind']}:{ev.get('id')}".replace(" ", "_")
             if key in seen:
@@ -435,7 +439,7 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
             res["executed"] = [actions.execute(a, dry_run=True) for a in now]
             res["at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
             res["measurement"] = {"schema": 1, "source": measurement_source, "generation": 1,
-                                  "ready_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds")}
+                                  "ready_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds"), **arrival}
             res["summary"] = events.summary(ev_run)
             kept = fulltext.persistable(ev_run)   # a full text is kept only while the item waits (full_text.json)
             res["event"] = _recorded_event(kept)   # local only: lets `kimeru review` build a labeled example

@@ -242,7 +242,8 @@ def summary(event, limit=120):
     return s if len(s) <= limit else s[:limit - 1] + "…"
 
 
-JUDGE_HIDDEN = ("raw", "thread", "full", "chat_title", "origin")   # origin: where `pull ado` took it from (execute.py), not for the judge
+JUDGE_HIDDEN = ("raw", "thread", "full", "chat_title", "origin", "_kimeru")   # origin: where `pull ado` took it from (execute.py), not for the judge;
+# _kimeru: when the PC saw the event (pull.arrival_of), a measurement that the judge never reads
 
 
 def state_of(event):

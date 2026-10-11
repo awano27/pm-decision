@@ -364,5 +364,85 @@ class MeasurementTests(unittest.TestCase):
         self.assertEqual(trial.collect(out)["measurement"]["local"]["approval_latency"]["measured"], 0)
 
 
+ARRIVED = "2026-01-01T00:00:00+00:00"
+
+
+class ArrivalMeasurementTests(unittest.TestCase):
+    """R01: the arrival of a pulled event is kept with its proposal, through every new generation, revision and merged followup,
+    and it is counted only for an approval that was read back. It never changes what is posted or approved. Fakes only."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.out = Path(self.temp.name)
+        self.rec = record()
+        self.rec["measurement"].update({"arrived_at": ARRIVED, "arrival_source": "label", "arrival_window_s": 60})
+        write_queue(self.out, self.rec)
+        (self.out / "decisions.jsonl").write_text(json.dumps(self.rec) + "\n", encoding="utf-8")
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def post(self):
+        with mock.patch("kimeru.notify.measurement_now", return_value=POST, create=True):
+            notify.notify(self.out, FakeBridge(), send=True)
+
+    def approve(self):
+        with mock.patch("kimeru.notify.measurement_now", return_value=OK, create=True):
+            notify.collect(self.out, FakeBridge(["OK 1"]), send=False)
+
+    def item(self):
+        return notify.Approvals(self.out).data["items"]["1"]
+
+    def test_the_arrival_is_kept_with_the_proposal_when_it_is_posted(self):
+        self.post()
+        self.assertEqual((self.item()["measurement"]["arrived_at"], self.item()["measurement"]["arrival_source"]), (ARRIVED, "label"))
+
+    def test_a_new_generation_keeps_the_first_arrival(self):
+        self.post()
+        notify.collect(self.out, FakeBridge(["下書き 1 確認のうえ回答します。"]), send=False)
+        self.assertEqual(self.item()["measurement"]["generation"], 2)
+        self.assertEqual((self.item()["measurement"]["arrived_at"], self.item()["measurement"]["arrival_window_s"]), (ARRIVED, 60))
+
+    def test_a_revision_keeps_the_first_arrival(self):
+        self.post()
+        notify.collect(self.out, FakeBridge(["修正 1 短く"]), send=False)
+        self.assertEqual(self.item()["measurement"]["arrived_at"], ARRIVED)
+
+    def test_a_followup_merged_into_the_item_keeps_the_first_arrival(self):
+        self.post()
+        result = record()
+        result["event_id"] = "new"
+        result["measurement"].update({"arrived_at": "2026-01-02T00:00:00+00:00", "arrival_source": "observed", "arrival_window_s": 300})
+        with mock.patch("kimeru.notify.measurement_now", return_value=OK, create=True):
+            self.assertTrue(cli._merge_locked(self.out, result["event"], result, notify))
+        self.assertEqual((self.item()["measurement"]["arrived_at"], self.item()["measurement"]["arrival_source"]), (ARRIVED, "label"))
+
+    def test_only_an_approval_that_was_read_back_counts_its_arrival_and_the_text_says_so(self):
+        self.post()
+        self.approve()
+        data = trial.collect(self.out)
+        local = data["measurement"]["local"]
+        self.assertEqual(local["arrival_to_approval"]["median_seconds"], 70)          # 00:00:00 -> OK 00:01:10
+        self.assertEqual(local["arrival_to_ready"]["median_seconds"], 0)              # arrival -> first ready (READY 00:00:00)
+        self.assertIn("Event-arrival-to-approval: median 70.000s; measured 1 / eligible 1", trial.render(data))
+
+    def test_an_approval_that_was_not_read_back_adds_no_arrival(self):
+        self.post()
+        ap = notify.Approvals(self.out)
+        ap.data["items"]["1"]["measurement"]["posting_source"] = "user_confirmation"
+        ap.data["items"]["1"]["status"] = "approved"
+        ap.save()
+        local = trial.collect(self.out)["measurement"]["local"]["arrival_to_approval"]
+        self.assertEqual((local["measured"], local["unknown"]), (0, 1))
+        self.assertIn("Event-arrival-to-approval: Unknown (reliable arrival evidence not recorded)", trial.render(trial.collect(self.out)))
+
+    def test_a_proposal_from_before_the_arrival_was_recorded_stays_unknown(self):
+        write_queue(self.out, record())
+        self.post()
+        self.assertNotIn("arrived_at", self.item()["measurement"])
+        self.approve()
+        self.assertEqual(trial.collect(self.out)["measurement"]["local"]["arrival_to_approval"]["measured"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

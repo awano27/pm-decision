@@ -16,10 +16,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from kimeru import calibrate, cli, config, demo, fulltext, graph, profiles, review, stats
+from kimeru import calibrate, cli, config, demo, fulltext, graph, notify, profiles, review, stats, trial
 from kimeru.backends import StubBackend, is_jev, judge_name
 from tests.test_daily import FakeTeams
-from tests.test_review_stats import GRAPHS, MARK_NAME, MARK_PATH, PBS, ROOT, Base
+from tests.test_review_stats import GRAPHS, MARK_ID, MARK_NAME, MARK_PATH, PBS, ROOT, Base
 
 
 def load(name, path):
@@ -452,6 +452,60 @@ class TestEvalScripts(Reviewing):
             ms.main(["--n", "4", "--user-thresholds"])
         self.assertEqual(seen[0]["conf_scale"], profiles.PROFILES["kev"]["conf_scale"])
         self.assertEqual(seen[1]["conf_scale"], 2.5)
+
+
+MARK_NOTE = "NOTE-ZZNOTE-7"   # a value the pull's note must never carry into a record
+
+
+class TestArrivalTimesStayLocal(Reviewing):
+    """R01: an arrival time is a measurement. A Jev decision's arrival is left out of what is shared, and the pull's note keeps
+    the two times only: nothing else from it reaches a record or a file under out/ or the state folder."""
+
+    ARRIVED = "2026-01-01T00:00:00+00:00"
+
+    def approved_item(self, n, judge):
+        ap = notify.Approvals(self.out)
+        rec = {"graph": "teams-chat-triage", "event_id": f"{MARK_ID}-{n}", "event_kind": "teams.chat", "node": "n", "outcome": "advise",
+               "needs_human": True, "advice": "確認します", "path": [], "summary": "確認します", "judge": {"name": judge},
+               "event": {"kind": "teams.chat", "id": f"{MARK_ID}-{n}", "author": "Sato", "text": "確認します"},
+               "actions": [{"type": "teams.reply", "text": "確認します。"}],
+               "measurement": {"schema": 1, "source": "local", "generation": 1, "ready_at": self.ARRIVED,
+                               "arrived_at": self.ARRIVED, "arrival_source": "label", "arrival_window_s": 60},
+               "at": self.ARRIVED}
+        number = ap.add(f"teams-chat-triage:{MARK_ID}-{n}:n", rec)
+        item = ap.data["items"][str(number)]
+        item.update({"posted": True, "status": "approved"})
+        item["measurement"].update({"posted_at": "2026-01-01T00:00:10+00:00", "approval_observed_at": "2026-01-01T00:01:10+00:00",
+                                    "posting_source": "bridge_readback"})
+        ap.save()
+
+    def test_a_jev_arrival_is_left_out_of_the_shared_measurement_and_the_text_has_no_marks(self):
+        self.approved_item(1, "Jev")
+        self.approved_item(2, "Kev")
+        shared = trial.collect(self.out, share=True)
+        self.assertEqual(shared["measurement"]["local"]["arrival_to_approval"]["measured"], 1)
+        self.assertEqual(trial.collect(self.out)["measurement"]["local"]["arrival_to_approval"]["measured"], 2)
+        text = trial.render(shared, share=True)
+        self.assertIn("Event-arrival-to-approval: median 70.000s; measured 1 / eligible 1", text)
+        for mark in (MARK_ID, MARK_NAME, self.ARRIVED):
+            self.assertNotIn(mark, text)
+
+    def test_the_pulls_note_keeps_only_its_two_times_in_the_records_and_the_files(self):
+        payload = {"kind": "teams.chat", "source": "teams-ui", "id": "19:a_b#1-x-1", "chat_id": "19:a_b@unq.gbl.spaces",
+                   "chat_kind": "oneOnOne", "author": "Sato", "chat_title": "Sato", "ts": "10:42", "mentions_me": False,
+                   "unread": True, "text": "承認お願いします",
+                   "_kimeru": {"observed_at": "2026-10-12T10:42:00+09:00", "last_seen_at": "2026-10-12T10:37:00+09:00",
+                               "note": MARK_NOTE, "who": MARK_ID, "path": MARK_PATH}}
+        cli.process(payload, GRAPHS, StubBackend(), self.out, PBS, dedup=True)
+        found = [p for p in Path(self.dir.name).rglob("*") if p.is_file()]
+        self.assertTrue(found)
+        for p in found:
+            text = p.read_text(encoding="utf-8", errors="replace")
+            for mark in (MARK_NOTE, MARK_ID, MARK_PATH):
+                self.assertNotIn(mark, text, p.name)
+        decision = json.loads((self.out / "decisions.jsonl").read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(set(decision["measurement"]) & {"arrived_at", "arrival_source", "arrival_window_s"},
+                         {"arrived_at", "arrival_source", "arrival_window_s"})
 
 
 if __name__ == "__main__":

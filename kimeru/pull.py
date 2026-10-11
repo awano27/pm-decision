@@ -163,6 +163,86 @@ def _aware_utc(value):
     return dt.astimezone(timezone.utc)
 
 
+# When an event reached the PC (R01): a measurement only. It never changes a judgment, a post or a state, and a note that cannot
+# be read gives Unknown, never an estimate.
+ARRIVAL_WINDOW_MAX = 15 * 60                      # a longer window (the PC slept, Teams was not on screen) gives no time
+UNKNOWN_ARRIVAL = {"arrived_at": None, "arrival_source": "unknown", "arrival_window_s": None}
+_LABEL_HM = re.compile(r"(\d{1,2}):(\d{2})")       # a chat label of a message from today
+_SECONDS_FRACTION = re.compile(r"(\d{2}:\d{2}:\d{2})\.(\d+)")
+
+
+def _arrival_time(value):
+    """A timestamp from a source or from the PC: ISO 8601 with an offset (Z included) and a fraction of any length (ADO writes
+    seven digits, Python 3.10 reads three or six). An aware datetime, or None for anything else."""
+    if not isinstance(value, str) or not 0 < len(value) <= 40:
+        return None
+    text = _SECONDS_FRACTION.sub(lambda m: f"{m[1]}.{(m[2] + '000000')[:6]}", value.strip(), count=1)
+    if text[-1:] in ("Z", "z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return dt if dt.tzinfo is not None and dt.utcoffset() is not None else None
+
+
+def _utc_iso(dt):
+    return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def _label_time(label, observed, seen):
+    """The clock time of a chat label `HH:MM` (a message of today), on the day of the observation or the day before, when it lies
+    in [seen, observed]. Any other label (yesterday, a weekday, a date) gives None."""
+    m = _LABEL_HM.fullmatch(label.strip()) if isinstance(label, str) else None
+    if not m or int(m[1]) > 23 or int(m[2]) > 59:
+        return None
+    for day in (observed.date(), observed.date() - timedelta(days=1)):
+        when = datetime(day.year, day.month, day.day, int(m[1]), int(m[2]), tzinfo=observed.tzinfo)
+        if seen <= when <= observed:
+            return when
+    return None
+
+
+def _arrival(ev, kimeru):
+    kind = ev.get("kind") if isinstance(ev, dict) else None
+    if kind in ("ado.workitem.created", "monitor.alert"):           # the source's own time: created, or fired
+        when, source = _arrival_time(ev.get("ts")), ev.get("source")
+        if when is None or not isinstance(source, str):
+            return None
+        return {"arrived_at": _utc_iso(when), "arrival_source": source, "arrival_window_s": 0}
+    if kind != "teams.chat" or not isinstance(kimeru, dict):
+        return None
+    observed, seen = _arrival_time(kimeru.get("observed_at")), _arrival_time(kimeru.get("last_seen_at"))
+    if observed is None or seen is None:                             # the first sighting, or the list was empty before
+        return None
+    window = (observed - seen).total_seconds()
+    if not 0 <= window <= ARRIVAL_WINDOW_MAX:
+        return None
+    label = _label_time(ev.get("ts"), observed, seen)
+    if label is not None:
+        return {"arrived_at": _utc_iso(label), "arrival_source": "label", "arrival_window_s": 60}
+    return {"arrived_at": _utc_iso(observed), "arrival_source": "observed", "arrival_window_s": int(window)}
+
+
+def arrival_of(ev, kimeru=None):
+    """When an event reached the PC: {arrived_at (UTC ISO or None), arrival_source, arrival_window_s}. ADO and alerts use the source's
+    own time (System.CreatedDate, firedDateTime). Teams uses what the pull saw (`kimeru`: observed_at, last_seen_at): the label's
+    clock time when it lies in that window, else the observation time with the window's width. Unknown when a time cannot be read,
+    or the window is missing, reversed or longer than fifteen minutes. Never raises, never estimates."""
+    try:
+        found = _arrival(ev, kimeru)
+    except Exception:   # a broken note or an out-of-range time must not fail the event
+        found = None
+    return dict(found) if found else dict(UNKNOWN_ARRIVAL)
+
+
+def _local_now(now=None):
+    """The observation time with the PC's own offset: a chat label (HH:MM) is on the PC's clock, so it is read in the same zone."""
+    if now is None:
+        return datetime.now().astimezone()
+    return now.astimezone() if now.tzinfo is None else now
+
+
 def _drop(inbox, name, payload):
     inbox = Path(inbox)
     inbox.mkdir(parents=True, exist_ok=True)
@@ -214,7 +294,8 @@ def pull_ado(org, project, inbox, out, http=http_json, token=None, now=None, fir
         for wi in items.get("value", []):
             _drop(inbox, f"ado-{org}-{wi['id']}", {"eventType": "workitem.created",
                                                    "resource": {"id": wi["id"], "fields": wi.get("fields", {})},
-                                                   "kimeru_origin": {"org": org, "project": project}})
+                                                   "kimeru_origin": {"org": org, "project": project},
+                                                   "_kimeru": {"observed_at": _iso(now)}})
             sec["seen"].append(wi["id"])
             created = _aware_utc((wi.get("fields") or {}).get("System.CreatedDate"))
             if created:
@@ -284,7 +365,7 @@ def pull_alerts(subscription, inbox, out, http=http_json, token=None, time_range
             ess = (a.get("properties") or {}).get("essentials") or {}
             if a.get("id") in sec["seen"] or ess.get("alertState") == "Closed":
                 continue
-            _drop(inbox, "alert-" + a["id"].rsplit("/", 1)[-1], alert_payload(a))
+            _drop(inbox, "alert-" + a["id"].rsplit("/", 1)[-1], {**alert_payload(a), "_kimeru": {"observed_at": _iso(now)}})
             sec["seen"].append(a["id"])
             n += 1
         sec["seen"] = sec["seen"][-2000:]
@@ -331,22 +412,28 @@ def _resent(old, new):
     return rn <= ro
 
 
-def teams_events(chats, sec, include_existing=False):
+def teams_events(chats, sec, include_existing=False, now=None):
     """Diff the on-screen chat list against the last poll. Returns teams.chat events.
 
-    A chat is remembered as {p: hash of its preview, t: its time label, n: events emitted}. A new event comes when the preview
-    changes (A, B, A is three events) or when the same preview comes with a time label that cannot be the old one aged
-    (the same words sent again). Only the label aging (10:42 -> yesterday) is not an event. The event id carries a per-state
-    token and the count, so a repeated text is not taken for one already decided.
+    A chat is remembered as {p: hash of its preview, t: its time label, n: events emitted, seen: when it was last on screen}. A new
+    event comes when the preview changes (A, B, A is three events) or when the same preview comes with a time label that cannot be
+    the old one aged (the same words sent again). Only the label aging (10:42 -> yesterday) is not an event. The event id carries a
+    per-state token and the count, so a repeated text is not taken for one already decided.
     First poll (no baseline) only records; so does the first poll of a chat remembered in the old format (a string).
     Only 1:1 chats and chats flagged as mentioning you are emitted; the self chat and your own last messages are ignored.
+    With `now` (the observation time), an event carries `_kimeru` {observed_at, last_seen_at}: when the PC saw it and when it saw
+    this chat before (None after an empty list or for a first sighting). That is what arrival_of() reads; it is not a judgment input.
     """
     import hashlib
+    chats = list(chats)
     first = not sec.get("sigs")
     sigs = sec.setdefault("sigs", {})
     gen = sec.get("gen")
     if not gen:
         gen = sec["gen"] = uuid.uuid4().hex[:6]
+    listed_before = sec.get("listed")     # the chats the previous poll saw: none (or an old state) means no last-seen time
+    sec["listed"] = len(chats)
+    observed = now.isoformat(timespec="seconds") if now is not None else None
     out = []
     for c in chats:
         cid, kind = c.get("id"), c.get("kind")
@@ -356,10 +443,11 @@ def teams_events(chats, sec, include_existing=False):
         sig = hashlib.sha1(preview.encode("utf-8")).hexdigest()[:16]
         t = str(c.get("time") or "").strip()
         prev = sigs.get(cid)
+        last_seen = prev.get("seen") if isinstance(prev, dict) and listed_before else None
         if isinstance(prev, str):                      # saved by an older version: take a new baseline, emit nothing
-            sigs[cid] = {"p": sig, "t": t, "n": 0, "mention": bool(c.get("mention"))}
-            continue
-        if prev is None:
+            entry = sigs[cid] = {"p": sig, "t": t, "n": 0, "mention": bool(c.get("mention"))}
+            new_msg = False
+        elif prev is None:
             new_msg = True
             entry = sigs[cid] = {"p": sig, "t": t, "n": 0, "mention": bool(c.get("mention"))}
         else:
@@ -370,6 +458,8 @@ def teams_events(chats, sec, include_existing=False):
             if kind == "group" and old_mention is False and bool(c.get("mention")):
                 new_msg = True
             entry["mention"] = bool(c.get("mention"))
+        if observed is not None:                       # on screen now: the next poll's last-seen time
+            entry["seen"] = observed
         if not new_msg or (first and not include_existing):
             continue
         if not preview or preview.startswith(OWN_PREFIXES):
@@ -377,20 +467,23 @@ def teams_events(chats, sec, include_existing=False):
         if not (kind == "oneOnOne" or c.get("mention")):
             continue
         entry["n"] = int(entry.get("n", 0)) + 1
-        out.append({"kind": "teams.chat", "source": "teams-ui", "id": f"{cid}#{sig}-{gen}-{entry['n']}", "chat_id": cid,
-                    "chat_kind": kind, "author": c.get("title"), "chat_title": c.get("title"), "ts": c.get("time"),
-                    "mentions_me": bool(c.get("mention")), "unread": bool(c.get("unread")), "text": preview})
+        ev = {"kind": "teams.chat", "source": "teams-ui", "id": f"{cid}#{sig}-{gen}-{entry['n']}", "chat_id": cid,
+              "chat_kind": kind, "author": c.get("title"), "chat_title": c.get("title"), "ts": c.get("time"),
+              "mentions_me": bool(c.get("mention")), "unread": bool(c.get("unread")), "text": preview}
+        if observed is not None:
+            ev["_kimeru"] = {"observed_at": observed, "last_seen_at": last_seen}
+        out.append(ev)
     return out
 
 
-def pull_teams(inbox, out, bridge=None, include_existing=False):
-    """Return number of new teams.chat events dropped into the inbox."""
+def pull_teams(inbox, out, bridge=None, include_existing=False, now=None):
+    """Return number of new teams.chat events dropped into the inbox. `now` is the observation time (tests inject it)."""
     if bridge is None:
         from .notify import PowerShellBridge
         bridge = PowerShellBridge()
     st = State(out)
     sec = st.section("teams")
-    evs = teams_events(bridge.chats(), sec, include_existing)
+    evs = teams_events(bridge.chats(), sec, include_existing, now=_local_now(now))
     for ev in evs:
         _drop(inbox, "teams-" + ev["id"].replace(":", "_").replace("@", "_").replace("#", "_")[-60:], ev)
     st.save()

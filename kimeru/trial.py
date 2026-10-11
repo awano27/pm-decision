@@ -245,6 +245,7 @@ def measurement_collect(out, observations, share=False):
     now = time.time()
     items = notify.Approvals(out).data.get("items", {})
     groups = {source: {"delivery_wait": [], "approval_latency": [], "total_case_wait": [], "pending_age": [],
+                       "arrival_to_ready": [], "arrival_to_approval": [],
                        "processing": [], "ambiguous_delivery": 0, "human_delivery_confirmations": 0}
               for source in ("local", "demo")}
     eligible, valid_cases, readiness, sources = {}, set(), {}, {}
@@ -262,9 +263,11 @@ def measurement_collect(out, observations, share=False):
         valid = measurement_valid(item, timing, reference)
         confirmed = valid and timing.get("posting_source") == "bridge_readback" and not item.get("delivery_unknown")
         group["delivery_wait"].append(_interval(timing, "ready_at", "posted_at", now) if confirmed else None)
+        group["arrival_to_ready"].append(_interval(timing, "arrived_at", "first_ready_at", now) if valid else None)
         if item.get("status") == "approved":
             group["approval_latency"].append(_interval(timing, "posted_at", "approval_observed_at", now) if confirmed else None)
             group["total_case_wait"].append(_interval(timing, "first_ready_at", "approval_observed_at", now) if confirmed else None)
+            group["arrival_to_approval"].append(_interval(timing, "arrived_at", "approval_observed_at", now) if confirmed else None)
         elif item.get("status") in ("pending", "held"):
             posted = _timestamp(timing.get("posted_at"))
             group["pending_age"].append(now - posted if confirmed and posted is not None and 0 <= posted <= now else None)
@@ -308,21 +311,28 @@ def measurement_collect(out, observations, share=False):
               "adoption_unknown_cases": len(eligible) - len(latest), "repeat_observations": explicit - len(latest),
               "adoption_rate": used / len(latest) if latest else None,
               "correction_rate": edited / used if used else None,
-              "adopted_cases": used, "edited_cases": edited, "arrival_to_approval": None}
+              "adopted_cases": used, "edited_cases": edited}
     for source, group in groups.items():
         result[source] = {key: _coverage(value) if isinstance(value, list) else value for key, value in group.items()}
     return result
 
 
 def measurement_lines(data):
-    lines = ["Manual review: explicit active minutes; excludes unattended waiting; descriptive, not causal",
-             "Event-arrival-to-approval: Unknown (reliable arrival evidence not recorded)"]
+    lines = ["Manual review: explicit active minutes; excludes unattended waiting; descriptive, not causal"]
+    arrival = data["local"]["arrival_to_approval"]
+    if arrival["measured"]:
+        lines.append(f"Event-arrival-to-approval: median {arrival['median_seconds']:.3f}s; measured {arrival['measured']} / "
+                     f"eligible {arrival['eligible']}; Unknown {arrival['unknown']} "
+                     "(when the PC saw the event: a chat label or the observation time, ADO and alert source times; not the sender's time)")
+    else:
+        lines.append("Event-arrival-to-approval: Unknown (reliable arrival evidence not recorded)")
     for source in ("local", "demo"):
         group = data[source]
         label = "synthetic demo (not pilot/business evidence)" if source == "demo" else "local observations"
         for key, name in (("processing", "model/writer component runtime"), ("delivery_wait", "Draft delivery wait"),
                           ("approval_latency", "Observed approval latency (includes reply polling and holds)"),
-                          ("total_case_wait", "First-ready-to-approval case wait"), ("pending_age", "Pending age (open interval)")):
+                          ("total_case_wait", "First-ready-to-approval case wait"), ("pending_age", "Pending age (open interval)"),
+                          ("arrival_to_ready", "PC-observed arrival to first ready")):
             value = group[key]
             seconds = "Unknown" if value["median_seconds"] is None else f"{value['median_seconds']:.3f}s"
             lines.append(f"{label}: {name}: median {seconds}; measured {value['measured']} / eligible {value['eligible']}; Unknown {value['unknown']}")

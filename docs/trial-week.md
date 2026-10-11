@@ -98,14 +98,14 @@ python -m kimeru config show --share     # Issue に貼れる設定の一覧（�
 
 ### 出力で確かめる計測範囲
 
-`out/decisions.jsonl` の `measurement` は schema、出所（`local` / `demo`）、計測用 generation、下書き準備時刻を持ちます。追加情報で既存 case に統合した判断には、元の case と照合する `case_key` が付きます。`approvals.json` と `approvals.log.jsonl` の計測情報には、同じ提案の本文を読み戻せた時刻と `OK` を受け付けた時刻が残ります。後者は外部実行より前の観測です。計測メタデータは承認・送信の条件には使いません。
+`out/decisions.jsonl` の `measurement` は schema、出所（`local` / `demo`）、計測用 generation、下書き準備時刻、到着の時刻 3 欄（`arrived_at`・`arrival_source`・`arrival_window_s`。時刻と出所だけ）を持ちます。追加情報で既存 case に統合した判断には、元の case と照合する `case_key` が付きます。`approvals.json` と `approvals.log.jsonl` の計測情報には、同じ提案の本文を読み戻せた時刻と `OK` を受け付けた時刻が残ります。後者は外部実行より前の観測です。計測メタデータは承認・送信の条件には使いません。
 
 `python -m kimeru report` が既存の `out/report.html` に表示する Measurement coverage は次を別々に示します。
 
 - 手動の確認分数は `trial.json` の明示観測で、モデル・writer の処理秒数とは別です。
 - 下書き採用は利用可能な下書きがある case を対象とし、明示観測した現在の提案の最新記録だけで採用率を計算します。観測済み / 対象 / Unknown と、重複観測数を表示します。修正率は `edited / (unchanged + edited)` です。対象となる下書きが無い件や、古い計測世代の利用状況は採用の分母に混ぜません。
 - Draft delivery wait は下書き準備から本文の正の読み戻し確認までです。Observed approval latency はその確認からアプリによる `OK` 受理までで、ポーリング・保留を含みます。Pending age は未承認の開いた区間で、完了した承認待ちとは区別します。
-- Event-arrival-to-approval は信頼できる到着時刻がないため **Unknown** です。古い記録・不正・未来・逆転・世代不一致の時刻も推定しません。
+- Event-arrival-to-approval は、PC がイベントを見た時刻から決めた到着から承認（読み戻しで確認した件だけ）までです。Teams は、前回見た時刻と今回見た時刻の 15 分以内の窓にチャットの時刻ラベル（HH:MM）が入るときだけそのラベルを到着とし、それ以外は観測の時刻を使い、窓の幅を残します（`arrival_source`: `label` / `observed`）。ADO は作成時刻、アラートは発生時刻です。初回・一覧が空だった直後・窓が 15 分を超えた件は **Unknown** のままで、推定しません。送信者が送った時刻ではありません。古い記録・不正・未来・逆転・世代不一致の時刻も推定しません。
 - `delivery confirm` は人が確認した時刻・出所を残すだけで、元の投稿時刻を補いません。通知の端末受信、承認、下書き採用、ADO の作業完了はそれぞれ別の証拠です。
 
 HTML の各判断には出所・generation と対応する時刻を示し、ローカルの元記録を追えます。通常の HTML / JSONL には本文が含まれるので共有しないでください。`trial report --share` は本文・名前・URL・パス・case ID を含まない集計のみで、Jev / 判断元不明の計測を除外します。合成 demo の値・試行観測は業務効果として数えません。実利用の時間短縮・採用率・承認待ち短縮は未測定です。

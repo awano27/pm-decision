@@ -501,6 +501,9 @@ def measurement_now():
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
+ARRIVAL_KEYS = ("arrived_at", "arrival_source", "arrival_window_s")   # when the PC saw the event (pull.arrival_of): carried, never estimated
+
+
 def measurement_for(item):
     """Additive metadata only: never consulted for approval or execution eligibility."""
     current = item.get("measurement")
@@ -511,6 +514,7 @@ def measurement_for(item):
                    "generation": original.get("generation", 1), "ready_at": original.get("ready_at"),
                    "case_key": item.get("key")}
         current["first_ready_at"] = current["ready_at"]
+        current.update({k: original[k] for k in ARRIVAL_KEYS if k in original})
         item["measurement"] = current
     return current
 
@@ -535,6 +539,7 @@ def next_measurement(item, ready_at=None, source=None):
     current = {"schema": 1, "source": source or previous.get("source", "legacy"),
                "generation": generation + 1, "ready_at": ready_at or measurement_now(),
                "first_ready_at": previous.get("first_ready_at"), "case_key": item.get("key")}
+    current.update({k: previous[k] for k in ARRIVAL_KEYS if k in previous})   # the first arrival stays through every generation
     item["measurement"] = current
     item["record"]["measurement"] = dict(current)
 

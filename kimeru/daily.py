@@ -377,7 +377,7 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
     changes = []
 
     def do_collect():
-        got = notify.collect(out, bridge, real=real and send, send=send, now=now)   # R13: an OK on a run without --send writes nothing
+        got = notify.collect(out, bridge, real=real and send, send=send, now=now, brief_hour=brief_hour)   # R13: an OK on a run without --send writes nothing
         if getattr(got, "busy", False):
             _busy(r, "approvals", "another run holds approvals.lock, nothing was applied this cycle")
             return []

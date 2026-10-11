@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
-from kimeru import brief, config, daily, fsutil, hold, notify, push
+from kimeru import brief, cli, config, daily, fsutil, hold, notify, push
 from kimeru.backends import StubBackend
 from kimeru.cli import process
 from tests.test_daily import GRAPHS, PBS, FakeTeams
@@ -42,8 +42,9 @@ def put_item(out, **fields):
     (Path(out) / "approvals.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
 
-def cycle(d, t, now, send=True):
-    return daily.cycle(Path(d) / "out", Path(d) / "inbox", GRAPHS, StubBackend(), PBS, process, bridge=t, send=send, now=now)
+def cycle(d, t, now, send=True, brief_hour=8):
+    return daily.cycle(Path(d) / "out", Path(d) / "inbox", GRAPHS, StubBackend(), PBS, process, bridge=t, send=send, now=now,
+                       brief_hour=brief_hour)
 
 
 def posts_of(t, number):
@@ -130,6 +131,36 @@ class TestTheHoldFollowsTheReplies(unittest.TestCase):
         self.assertIsNone(item(self.out).get("held_until"))
         self.assertEqual(hold.resurface(self.out, datetime(2026, 10, 20, 9, 0)), [])   # nothing comes back on its own
 
+    def test_a_plain_hold_after_a_merge_does_not_come_back_at_once(self):
+        self.t.timeline.append("R:保留 1 明日")
+        notify.collect(self.out, self.t, send=True, now=WED)
+        ap = notify.Approvals(self.out)
+        ap.data["items"]["1"]["hold_round"] = 1                  # it came back once before
+        ap.data["items"]["1"]["record"]["event"] = {"kind": "teams.chat", "id": "c1", "chat_id": "chat-1", "author": "A"}
+        ap.save()
+        before = item(self.out)
+        ev = {"kind": "teams.chat", "id": "c2", "chat_id": "chat-1", "author": "A", "text": "続きの依頼"}
+        res = {"graph": "workitem-intake", "event_id": "c2", "node": "triage_pm", "outcome": "advise", "needs_human": True,
+               "advice": "続きの判断", "event": ev, "actions": []}
+        self.assertTrue(cli._merge_locked(self.out, ev, res, notify, source_event=ev))   # the followup joins the held item
+        merged = item(self.out)
+        self.assertEqual((merged["status"], merged["posted"]), ("pending", False))
+        self.assertNotIn("held_until", merged)                   # the day goes with the merge; the counts stay
+        self.assertEqual((merged["held_at"], merged["hold_count"], merged["hold_round"]), (before["held_at"], 1, 1))
+        notify.notify(self.out, self.t, send=True)               # posted again under #1
+        self.assertEqual(len(posts_of(self.t, 1)), 2)
+        self.t.timeline.append("R:保留 1")                        # a plain hold after the merge
+        self.assertEqual(notify.collect(self.out, self.t, send=True, now=datetime(2026, 10, 15, 9, 0)), [{"id": 1, "status": "held"}])
+        self.assertEqual(item(self.out)["status"], "held")
+        self.assertNotIn("held_until", item(self.out))
+        self.assertEqual(hold.resurface(self.out, datetime(2026, 10, 15, 9, 0)), [])   # nothing comes back at once
+        self.assertEqual(len(posts_of(self.t, 1)), 2)            # and no post for it
+
+    def test_a_day_hold_lasts_until_the_hour_the_cycles_brief_runs_at(self):
+        self.t.timeline.append("R:保留 1 明日")
+        cycle(self.tmp.name, self.t, WED, brief_hour=9)
+        self.assertEqual(item(self.out)["held_until"], "2026-10-15T09:00")
+
     def test_a_day_beyond_the_keep_days_is_a_hold_without_a_date_and_it_is_noted(self):
         self.t.timeline.append("R:保留 1 8日後")
         self.assertEqual(notify.collect(self.out, self.t, send=True, now=WED), [{"id": 1, "status": "held", "until": None}])
@@ -195,12 +226,12 @@ class TestTheHoldFollowsTheReplies(unittest.TestCase):
 class TestTheResurfacedPost(unittest.TestCase):
     def test_the_first_line_says_which_day_of_the_hold_it_is_and_nothing_else_changes(self):
         plain = notify.format_post(3, REC)
-        again = notify.format_post(3, REC, hold={"day": 2})
+        again = notify.format_post(3, REC, marks={"day": 2})
         self.assertEqual(again.splitlines()[0], plain.splitlines()[0] + " （保留から・2 日目）")
         self.assertEqual(again.splitlines()[1:], plain.splitlines()[1:])
 
     def test_the_undated_note_is_on_the_first_line(self):
-        self.assertEqual(notify.format_post(5, REC, hold={"undated": ["3"]}).splitlines()[0],
+        self.assertEqual(notify.format_post(5, REC, marks={"undated": ["3"]}).splitlines()[0],
                          "[kimeru #5] ADO #4812 （保留（日付なし）: #3）")
 
 

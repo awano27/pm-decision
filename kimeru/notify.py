@@ -312,9 +312,9 @@ def _draft_line(rec):
     return ""
 
 
-def format_post(n, rec, full=None, hold=None):
+def format_post(n, rec, full=None, marks=None):
     """The approval post "[kimeru #N]": at most 5 short lines. Everything else (the source text, the memo, every draft, the
-    revision, the kinds of action) is in the answer to `詳細 N` (format_detail). `full` is not shown here. `hold` (R09, hold.post_marks):
+    revision, the kinds of action) is in the answer to `詳細 N` (format_detail). `full` is not shown here. `marks` (R09, hold.post_marks):
     {"day": 2} for an item that came back on the 2nd day of its hold, {"undated": ["3"]} for the undated holds named on this post."""
     from . import execute
     memo = rec.get("memo") or {}
@@ -323,9 +323,9 @@ def format_post(n, rec, full=None, hold=None):
     drafts = [a for a in actions if a.get("drafted_by")]
     update = "（更新）" if int(rec.get("revision") or 1) > 1 else ""
     held_mark = " （前回 保留）" if rec.get("held_before") else ""   # R08: a continued item that was on hold before, until OK or NG
-    day = (hold or {}).get("day")
+    day = (marks or {}).get("day")
     resurfaced = f" （保留から・{day} 日目）" if day else ""
-    undated = (hold or {}).get("undated")
+    undated = (marks or {}).get("undated")
     named = f" （保留（日付なし）: {', '.join('#' + str(x) for x in undated)}）" if undated else ""
     lines = [f"[kimeru #{n}] {update}{_who(rec)}{held_mark}{resurfaced}{named}"]
     if str(rec.get("event_kind") or "").startswith("ado.") and any(a.get("type") == "ado.comment" for a in actions) and not memo:
@@ -1115,7 +1115,7 @@ def _notify_locked(out, bridge, send, real):
             ap.save()
             fsutil.refresh(lock_path(out))
             marks = hold.post_marks(it, ap.data["items"])   # R09: a day that came back, and the undated holds not named yet
-            body = format_post(n, it["record"], fulltext.load(out, it["key"]), hold=marks)
+            body = format_post(n, it["record"], fulltext.load(out, it["key"]), marks=marks)
             if send:
                 attempt = _attempt_record("case", n, "post", body, it.get("revision", 1), it["key"])
                 it.update({"delivery_unknown": True, "delivery_unknown_part": "post",
@@ -1559,16 +1559,17 @@ def _naive_now():
     return datetime.now()
 
 
-def collect(out, bridge, writer=None, real=False, send=False, now=None):
+def collect(out, bridge, writer=None, real=False, send=False, now=None, brief_hour=None):
     """Read replies from the self chat and apply them. Returns applied changes. Only one collect runs at a time (a lock file in
     the state folder): the daily cycle and a hand-typed `approvals` could otherwise approve the same "OK N" twice and write twice.
-    When the lock is held, nothing is done and the result has `busy` set."""
+    When the lock is held, nothing is done and the result has `busy` set. `brief_hour` (R09): the hour a day hold lasts until, the
+    one the cycle's brief runs at (None: the setting brief_hour)."""
     with fsutil.exclusive(lock_path(out)) as got:
         if not got:
             res = Changes()
             res.busy = True
             return res
-        return Changes(_collect(out, bridge, writer, real, send, now))
+        return Changes(_collect(out, bridge, writer, real, send, now, brief_hour))
 
 
 def unwritten(it):
@@ -1579,7 +1580,7 @@ def unwritten(it):
         execute.is_gated(a) and a.get("exec_text") for a in (it.get("record") or {}).get("actions", []))
 
 
-def _collect(out, bridge, writer=None, real=False, send=False, now=None):
+def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_hour=None):
     """The body of collect (the lock is held).
     real=True (the daily and approvals paths only): an approval carries out the switched-on kinds, and `再実行 N` / `済 N` work.
     send=True: what is posted while collecting (results, texts ready to copy) is sent; otherwise it is only pasted.
@@ -1694,7 +1695,7 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None):
             if last_hold.get(num) == idx and it and it["posted"] and it["status"] in ("pending", "held"):
                 entering = it["status"] != "held"
                 it["status"] = "held"
-                info = hold.apply(it, day_word, now, entering)
+                info = hold.apply(it, day_word, now, entering, brief_hour=brief_hour)
                 if entering or info is not None:
                     changes.append({"id": int(num), "status": "held", **(info or {})})
             continue

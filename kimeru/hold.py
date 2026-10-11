@@ -112,10 +112,11 @@ def _sig(word):
     return hashlib.sha1(word.encode("utf-8")).hexdigest()[:8]
 
 
-def apply(it, word, now, entering):
+def apply(it, word, now, entering, brief_hour=None):
     """A `保留 N` (word None) or `保留 N <いつ>` on an item that is held now (the caller has set its status); `entering`: it was
     pending before. Returns {"until": "YYYY-MM-DD" or None} when a dated reply changed the hold (the change to log), else None.
-    A plain 保留 clears a date. A date already read stays: the same reply is on the screen in every cycle, and is not read again."""
+    A plain 保留 clears a date. A date already read stays: the same reply is on the screen in every cycle, and is not read again.
+    `brief_hour`: the hour of the cycle's brief (None: the setting), so a day hold comes back when the brief runs."""
     if entering:
         it["held_at"] = _stamp(_local(now))
     if word is None:
@@ -127,7 +128,7 @@ def apply(it, word, now, entering):
     sig = _sig(word)
     if it.get("hold_word") == sig and not entering:
         return None
-    when = parse_when(word, now, _brief_hour())
+    when = parse_when(word, now, _brief_hour() if brief_hour is None else brief_hour)
     it["hold_word"] = sig
     it["hold_note"] = when is None
     if when is None:

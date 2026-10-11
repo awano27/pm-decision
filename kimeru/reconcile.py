@@ -183,7 +183,7 @@ def dispatch(argv, out, print_fn=print, bridge=None, folders=None, now=None):
         a = p.parse_args(list(argv))
     except SystemExit as e:
         return int(e.code or 0)
-    if os.name != "nt" and bridge is None:
+    if os.name != "nt" and bridge is None and notify.delivery_pending(out):   # nothing to settle: fine anywhere
         print_fn("配信の整理: 自分とのチャットを読めるのは Windows だけです。何も変えていません")
         return 1
     result = reconcile(out, bridge, now)

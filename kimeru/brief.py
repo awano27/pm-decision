@@ -263,7 +263,7 @@ def ado_section(out, now=None, days=1, since=None):
     return "\n".join(lines)
 
 
-TEAMS_OUTCOME = {"log_fyi": "返信不要", "reply_status": "状況の自動返信"}
+TEAMS_OUTCOME = {"log_fyi": "返信不要", "reply_status": "状況の確認（返信は送っていません）"}
 
 
 def teams_section(out, now=None, days=1, since=None):

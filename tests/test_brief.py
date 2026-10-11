@@ -123,5 +123,23 @@ class TestRankAndFormat(unittest.TestCase):
             self.assertIn("1. 障害対応の取りまとめ", text)
 
 
+class TestTeamsStatusCheckIsNotCalledAReply(unittest.TestCase):
+    """teams.reply is never sent (the text goes back to the self chat, to copy), so the brief must not call a status check a reply."""
+
+    def chat(self, eid, node, name):
+        return {"graph": "teams_chat", "event_kind": "teams.chat", "event_id": eid, "node": node, "outcome": "decide",
+                "needs_human": False, "notify": False, "at": NOW.isoformat(), "event": {"chat_title": name, "author": name}}
+
+    def test_status_check_is_labelled_as_a_check_and_no_line_looks_like_a_reply(self):
+        with tempfile.TemporaryDirectory() as d:
+            write(d, "decisions.jsonl", [self.chat("c1", "reply_status", "佐藤 花子"), self.chat("c2", "log_fyi", "高橋 健")])
+            text, _ = brief.build(d, StubBackend(), now=NOW)
+            section = brief.teams_section(d, now=NOW)
+            self.assertEqual(section, "Teams の自動判断（直近 24 時間）: 2 件（状況の確認（返信は送っていません） 1 件 / 返信不要 1 件）: 高橋 健、佐藤 花子")
+            self.assertIn(section, text)
+            self.assertNotIn("自動返信", text)
+            self.assertFalse(any(notify.REPLY.match(l.strip()) for l in section.splitlines()))
+
+
 if __name__ == "__main__":
     unittest.main()

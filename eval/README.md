@@ -92,3 +92,9 @@ python eval/draft_quality.py --fixtures fixtures_holdout.jsonl --per-kind 2
 ```
 
 下書きごとに、日本語・英語の混入・定型文の複製・不自然な言い回し・材料にない権限者や完了・具体性・材料にない日付や数値を数えます（判定は LLM ではなく決まった規則なので、プロンプトの変更の前後で比べられます）。`--show` で、定型文と下書きを並べて読めます。最終的な確認は、読んで行ってください。
+
+## 期待経路（`eval/golden.json`）
+
+`python eval/golden.py` は、ラベルだけで各 fixture がどこへ行くかを `eval/golden.json` と比べ、動いた件を `id: 前 -> 後` で出します（モデルは呼びません）。
+グラフを意図して変えたら、差分を読んでから `python eval/golden.py --write` で書き直し、`eval/golden.json` も一緒に commit してください。
+`tests/test_golden_paths.py` は、書き直さずに変えたときに落ちます。

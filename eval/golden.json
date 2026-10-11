@@ -1,0 +1,1538 @@
+{
+ "ado-1": {
+  "actions_sha1": "6a84d81f74c3084e7b954969eaaa228a4a4d9d22",
+  "node": "set_p2",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[no]",
+   "has_repro[yes]",
+   "priority[<1.6]"
+  ]
+ },
+ "ado-2": {
+  "actions_sha1": "a13b160e65469757f062f9a5671b87e961b46ebf",
+  "node": "request_info",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[no]",
+   "has_repro[no]",
+   "has_steps[no]",
+   "ready[no]",
+   "info_steps[no]",
+   "info_bug[yes]"
+  ]
+ },
+ "ado-3": {
+  "actions_sha1": "c0687f95913b0af4d47177fe61f75d91da5ec0cd",
+  "node": "set_p2",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[yes]",
+   "priority[<1.6]"
+  ]
+ },
+ "ado-4": {
+  "actions_sha1": "3af25c07cf48e56b661b56c9a6fbeca3b66e256a",
+  "node": "set_p1_critical",
+  "path": [
+   "critical_bug[yes]"
+  ]
+ },
+ "ado-5": {
+  "actions_sha1": "e3a35ad2b4a5eb2223c5448bdf55ee797be5cff1",
+  "node": "request_info_ac",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[no]",
+   "has_repro[no]",
+   "has_steps[no]",
+   "ready[no]",
+   "info_steps[no]",
+   "info_bug[no]"
+  ]
+ },
+ "ado-6": {
+  "actions_sha1": "5f615dc0202f3353d81316aeeb77076d360da3a3",
+  "node": "request_info_ac",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[no]",
+   "has_repro[no]",
+   "has_steps[no]",
+   "ready[no]",
+   "info_steps[no]",
+   "info_bug[no]"
+  ]
+ },
+ "ado-7": {
+  "actions_sha1": "8137720e2c0d18a1c1d64bfba22ac6ad1787c06e",
+  "node": "set_p2",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[no]",
+   "has_repro[no]",
+   "has_steps[no]",
+   "ready[yes]",
+   "priority[<1.6]"
+  ]
+ },
+ "ado-8": {
+  "actions_sha1": "186cd359f29386fb5ebea1fe2164accb498bfe28",
+  "node": "set_p2",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[yes]",
+   "priority[<1.6]"
+  ]
+ },
+ "ado-b01": {
+  "actions_sha1": "b4bcb295bd9f7af3e094d9b2435a165a8003ee18",
+  "node": "set_p1_critical",
+  "path": [
+   "critical_bug[yes]"
+  ]
+ },
+ "ado-b02": {
+  "actions_sha1": "3f471bdd1236dacc0f14844c7db97e0d86547e54",
+  "node": "request_info_ac",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[no]",
+   "has_repro[no]",
+   "has_steps[no]",
+   "ready[no]",
+   "info_steps[no]",
+   "info_bug[no]"
+  ]
+ },
+ "ado-b03": {
+  "actions_sha1": "fbd0147dbc4f429712f191bf2825c61287bebb07",
+  "node": "set_p2",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[yes]",
+   "priority[<1.6]"
+  ]
+ },
+ "ado-b04": {
+  "actions_sha1": "01ceaacfebb214706542ad60fbf16b8cd32ec8fa",
+  "node": "set_p3",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[no]",
+   "has_repro[no]",
+   "has_steps[no]",
+   "ready[yes]",
+   "priority[<0.75]"
+  ]
+ },
+ "ado-b05": {
+  "actions_sha1": "e505900cb12dcc1792b40c848550344f8befc92a",
+  "node": "request_info_ac",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[no]",
+   "has_repro[no]",
+   "has_steps[no]",
+   "ready[no]",
+   "info_steps[no]",
+   "info_bug[no]"
+  ]
+ },
+ "ado-b06": {
+  "actions_sha1": "a2563c714dc131a97ce0013e86f34d66168d9bb8",
+  "node": "set_p1_critical",
+  "path": [
+   "critical_bug[yes]"
+  ]
+ },
+ "ado-b07": {
+  "actions_sha1": "78d4c161ad93670266d6279b5af32fe85ec1f682",
+  "node": "request_info_ac",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[no]",
+   "has_repro[no]",
+   "has_steps[no]",
+   "ready[no]",
+   "info_steps[no]",
+   "info_bug[no]"
+  ]
+ },
+ "ado-b08": {
+  "actions_sha1": "07f0084d60c89b8dcf7e2f0c6ff6e5a913349a30",
+  "node": "set_p2",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[yes]",
+   "priority[<1.6]"
+  ]
+ },
+ "ado-b09": {
+  "actions_sha1": "73f5f83c1de39161e41593cce6389a68010fa657",
+  "node": "set_p2",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[no]",
+   "has_repro[no]",
+   "has_steps[no]",
+   "ready[yes]",
+   "priority[<1.6]"
+  ]
+ },
+ "ado-b10": {
+  "actions_sha1": "9e1d809223d3763b599a7fcfe1374c904f955065",
+  "node": "request_info",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[no]",
+   "has_repro[no]",
+   "has_steps[no]",
+   "ready[no]",
+   "info_steps[no]",
+   "info_bug[yes]"
+  ]
+ },
+ "ado-b11": {
+  "actions_sha1": "e4852dd0a243934a7a58778d01960500f70660c0",
+  "node": "set_p3",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[yes]",
+   "priority[<0.75]"
+  ]
+ },
+ "ado-b12": {
+  "actions_sha1": "119c65ad96aaad8bbc73586104a52fc36bb356b8",
+  "node": "set_p1_critical",
+  "path": [
+   "critical_bug[yes]"
+  ]
+ },
+ "ado-b13": {
+  "actions_sha1": "9f81f4dd424fd7f444b775999d9f16b046f413bf",
+  "node": "set_p3",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[yes]",
+   "priority[<0.75]"
+  ]
+ },
+ "ado-b14": {
+  "actions_sha1": "a1c8b0ec8ccdf0e3af827424988c7031ffa0bdfe",
+  "node": "set_p2",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[yes]",
+   "priority[<1.6]"
+  ]
+ },
+ "ado-c01": {
+  "actions_sha1": "9a9ec8858d608b739ae464b9da9b3a9698fb13e5",
+  "node": "triage_pm",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[no]",
+   "has_repro[yes]",
+   "priority[unsure]"
+  ]
+ },
+ "ado-c02": {
+  "actions_sha1": "142d0584d8e270e61a776e89c2205522ac937429",
+  "node": "request_info_ac",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[no]",
+   "has_repro[no]",
+   "has_steps[no]",
+   "ready[no]",
+   "info_steps[no]",
+   "info_bug[no]"
+  ]
+ },
+ "ado-c03": {
+  "actions_sha1": "ff52345792968d3b1c7eef9b595f57f029d55c58",
+  "node": "triage_pm",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[yes]",
+   "priority[unsure]"
+  ]
+ },
+ "ado-c04": {
+  "actions_sha1": "dfef22c9afc7edf683215daf1bd370bc3a1c224d",
+  "node": "request_info",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[no]",
+   "has_repro[no]",
+   "has_steps[no]",
+   "ready[no]",
+   "info_steps[no]",
+   "info_bug[yes]"
+  ]
+ },
+ "ado-c05": {
+  "actions_sha1": "f9d3108bbd4f90eefa921a16b280bbdaf1bb73a8",
+  "node": "triage_pm",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[no]",
+   "has_repro[no]",
+   "has_steps[no]",
+   "ready[yes]",
+   "priority[unsure]"
+  ]
+ },
+ "ado-c06": {
+  "actions_sha1": "05b9cb027daba66af79e58e2f9cb451aca0543c1",
+  "node": "request_info_ac",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[no]",
+   "has_repro[no]",
+   "has_steps[no]",
+   "ready[no]",
+   "info_steps[no]",
+   "info_bug[no]"
+  ]
+ },
+ "ado-c07": {
+  "actions_sha1": "cf6ab25e3afbeec0878cc2d37d4de833b45aac03",
+  "node": "triage_pm",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[yes]",
+   "priority[unsure]"
+  ]
+ },
+ "ado-c08": {
+  "actions_sha1": "5288639a1a67429a03365c15f70090cb02e5d015",
+  "node": "request_info",
+  "path": [
+   "critical_bug[no]",
+   "plan_level[no]",
+   "has_ac[no]",
+   "has_repro[no]",
+   "has_steps[no]",
+   "ready[no]",
+   "info_steps[no]",
+   "info_bug[yes]"
+  ]
+ },
+ "alert-1": {
+  "actions_sha1": "45963e228f36be1a60c2b39140951f62864f53ee",
+  "node": "page",
+  "path": [
+   "resolved[no]",
+   "critical_outage[yes]",
+   "plan_incident[unsure]"
+  ]
+ },
+ "alert-10": {
+  "actions_sha1": "71af1305b2986577a7410a486ed54eea9d178c34",
+  "node": "prevent_week",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[yes]",
+   "horizon[<1.5]"
+  ]
+ },
+ "alert-11": {
+  "actions_sha1": "dd9fda35ac76bf52918eb4376e8d14d95b25578a",
+  "node": "page",
+  "path": [
+   "resolved[no]",
+   "critical_outage[yes]",
+   "plan_incident[unsure]"
+  ]
+ },
+ "alert-2": {
+  "actions_sha1": "4f963420c8d14f680dbea44c6ad336aafd31a1a9",
+  "node": "log_resolved",
+  "path": [
+   "resolved[yes]"
+  ]
+ },
+ "alert-3": {
+  "actions_sha1": "0b9d896c51925d337825f6ef3996c2d33b67a3d8",
+  "node": "task_internal",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[no]",
+   "impact[<1.5]"
+  ]
+ },
+ "alert-4": {
+  "actions_sha1": "5d499c9174eb53347ec5f40cab2c3f5f679c2f38",
+  "node": "bug_p1",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[no]",
+   "impact[<2.5]"
+  ]
+ },
+ "alert-5": {
+  "actions_sha1": "e3e6ca36d39bee31999709e2c68b1d7f6a311407",
+  "node": "task_internal",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[no]",
+   "impact[<1.5]"
+  ]
+ },
+ "alert-6": {
+  "actions_sha1": "7ab2507d8607593d47e04e5272c301ed0dba02cc",
+  "node": "page",
+  "path": [
+   "resolved[no]",
+   "critical_outage[yes]",
+   "plan_incident[unsure]"
+  ]
+ },
+ "alert-7": {
+  "actions_sha1": "0e08c1299048af037e62721bac7cd877d804e24b",
+  "node": "prevent_backlog",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[yes]",
+   "horizon[<3]"
+  ]
+ },
+ "alert-8": {
+  "actions_sha1": "43282f5e5b674ebbd76b7a90e396da89a862ff6d",
+  "node": "bug_p1",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[no]",
+   "impact[<2.5]"
+  ]
+ },
+ "alert-9": {
+  "actions_sha1": "4d6dbee3b5ee1b487b264557f09fd647c29645b9",
+  "node": "prevent_now",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[yes]",
+   "horizon[<0.5]"
+  ]
+ },
+ "alert-b01": {
+  "actions_sha1": "61f349e3c499674700cae1aa69c377b28ee7e7fe",
+  "node": "page",
+  "path": [
+   "resolved[no]",
+   "critical_outage[yes]",
+   "plan_incident[unsure]"
+  ]
+ },
+ "alert-b02": {
+  "actions_sha1": "4f963420c8d14f680dbea44c6ad336aafd31a1a9",
+  "node": "log_resolved",
+  "path": [
+   "resolved[yes]"
+  ]
+ },
+ "alert-b03": {
+  "actions_sha1": "b77926fc47ed6c46f205f269b2d1426fa9da64f8",
+  "node": "bug_p1",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[no]",
+   "impact[<2.5]"
+  ]
+ },
+ "alert-b04": {
+  "actions_sha1": "f47c05a3799d4974dc987f376f750f7e30e35ac1",
+  "node": "prevent_week",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[yes]",
+   "horizon[<1.5]"
+  ]
+ },
+ "alert-b05": {
+  "actions_sha1": "c8c02909c9f4108136ac2c8628d2088b6b69c6c4",
+  "node": "prevent_backlog",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[yes]",
+   "horizon[<3]"
+  ]
+ },
+ "alert-b06": {
+  "actions_sha1": "6d3a0c90144120098ebc3001d6c4989038b7743a",
+  "node": "task_internal",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[no]",
+   "impact[<1.5]"
+  ]
+ },
+ "alert-b07": {
+  "actions_sha1": "696c3414dbc6b3454cad72ef06c2e396709f6ac4",
+  "node": "task_internal",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[unsure]",
+   "impact[<1.5]"
+  ]
+ },
+ "alert-b08": {
+  "actions_sha1": "f78c87d307dfadea3a95021c882a6475ee90e393",
+  "node": "page",
+  "path": [
+   "resolved[no]",
+   "critical_outage[yes]",
+   "plan_incident[unsure]"
+  ]
+ },
+ "alert-b09": {
+  "actions_sha1": "58319255dc739f65ae014535be1a9cba57e16089",
+  "node": "prevent_now",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[yes]",
+   "horizon[<0.5]"
+  ]
+ },
+ "alert-b10": {
+  "actions_sha1": "51bdeaa52f6bf6d0f4b33e7b2a9ce0bc9637ca3f",
+  "node": "bug_p1",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[no]",
+   "impact[<2.5]"
+  ]
+ },
+ "alert-b11": {
+  "actions_sha1": "8e47cec01b262a304893eb0481495284b6b4513a",
+  "node": "prevent_backlog",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[yes]",
+   "horizon[<3]"
+  ]
+ },
+ "alert-b12": {
+  "actions_sha1": "6dcbdd725bf231072280443dd43036cd2f171886",
+  "node": "task_internal",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[no]",
+   "impact[<1.5]"
+  ]
+ },
+ "alert-b13": {
+  "actions_sha1": "885c5ece7a76e3a8bc13457c2cc52cc03e9e0475",
+  "node": "bug_p1",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[no]",
+   "impact[<2.5]"
+  ]
+ },
+ "alert-b14": {
+  "actions_sha1": "a55670e43d23387ce8969b5faddd7e7b1e314f7b",
+  "node": "page",
+  "path": [
+   "resolved[no]",
+   "critical_outage[yes]",
+   "plan_incident[unsure]"
+  ]
+ },
+ "alert-c01": {
+  "actions_sha1": "6d598dfd3fd0108d5f15fe20740d5121d558a20c",
+  "node": "page",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[no]",
+   "impact[<4]",
+   "plan_incident[unsure]"
+  ]
+ },
+ "alert-c02": {
+  "actions_sha1": "6161a079bd6abd418e61eccc8d6424e4c516de0a",
+  "node": "prevent_week",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[yes]",
+   "horizon[<1.5]"
+  ]
+ },
+ "alert-c03": {
+  "actions_sha1": "0902b24be6f78ee3adce164d761a47a927e32093",
+  "node": "prevent_now",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[yes]",
+   "horizon[<0.5]"
+  ]
+ },
+ "alert-c04": {
+  "actions_sha1": "9ba249a8dabcbee0314e4ba0290cd991c5c2d360",
+  "node": "task_internal",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[no]",
+   "impact[<1.5]"
+  ]
+ },
+ "alert-c05": {
+  "actions_sha1": "1688ad8aabb7f7e474e42b5feb53bc3b52246b6a",
+  "node": "bug_p1",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[no]",
+   "impact[<2.5]"
+  ]
+ },
+ "alert-c06": {
+  "actions_sha1": "97d170e1550eee4afc0af065b78cda302a97674c",
+  "node": "tune_rule",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[no]",
+   "impact[<0.5]",
+   "noise_check[yes]"
+  ]
+ },
+ "alert-c07": {
+  "actions_sha1": "53842ef35d814c0c1840007e6ec66f5f9771daf2",
+  "node": "page",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[no]",
+   "impact[<4]",
+   "plan_incident[unsure]"
+  ]
+ },
+ "alert-c08": {
+  "actions_sha1": "4abe22d6510acae3324fe2c88bdb9e8e7da65b61",
+  "node": "prevent_backlog",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[yes]",
+   "horizon[<3]"
+  ]
+ },
+ "alert-c09": {
+  "actions_sha1": "62a76a9ea865a0d8a5bd1ea57d63557f2c0b2160",
+  "node": "task_internal",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[no]",
+   "impact[<1.5]"
+  ]
+ },
+ "alert-c10": {
+  "actions_sha1": "1200d0936279807c977f95007b3f201041578f81",
+  "node": "prevent_week",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[yes]",
+   "horizon[<1.5]"
+  ]
+ },
+ "alert-c11": {
+  "actions_sha1": "706d56bd9aeb3a6f7afef9f7991952dc36e4cb4f",
+  "node": "bug_p1",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[no]",
+   "impact[<2.5]"
+  ]
+ },
+ "alert-c12": {
+  "actions_sha1": "30ff3dd6c6d59c0aec9f41a0ae38cf8255e3111d",
+  "node": "task_internal",
+  "path": [
+   "resolved[no]",
+   "critical_outage[no]",
+   "future_risk[no]",
+   "impact[<1.5]"
+  ]
+ },
+ "minutes-1": {
+  "actions_sha1": "8e3f387290f1cca148984e0365e84aa0efea4a87",
+  "node": "post_decision",
+  "path": [
+   "label_decision[yes]"
+  ]
+ },
+ "minutes-10": {
+  "actions_sha1": "4f963420c8d14f680dbea44c6ad336aafd31a1a9",
+  "node": "log_info",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[info]"
+  ]
+ },
+ "minutes-2": {
+  "actions_sha1": "e214989a4a3e4be159b0be22233ad03c4fac721b",
+  "node": "create_task",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[action]",
+   "has_owner[yes]",
+   "has_due[yes]"
+  ]
+ },
+ "minutes-3": {
+  "actions_sha1": "62ae0b99d92ec1dd4a5e2229b2982037af5e95fe",
+  "node": "risk_planned",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[risk]",
+   "plan_risk[ok]"
+  ]
+ },
+ "minutes-4": {
+  "actions_sha1": "4f963420c8d14f680dbea44c6ad336aafd31a1a9",
+  "node": "log_info",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[info]"
+  ]
+ },
+ "minutes-5": {
+  "actions_sha1": "469acbac95239a547ea1afd96261f90a7a17294b",
+  "node": "ask_owner",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[action]",
+   "has_owner[no]"
+  ]
+ },
+ "minutes-6": {
+  "actions_sha1": "e4ec03323a6ddf8a60543df2b26117583bd7c8bc",
+  "node": "ask_owner",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[action]",
+   "has_owner[yes]",
+   "has_due[no]"
+  ]
+ },
+ "minutes-7": {
+  "actions_sha1": "2bbac3cd97678f48aab1662b100a702568543f56",
+  "node": "risk_planned",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[risk]",
+   "plan_risk[ok]"
+  ]
+ },
+ "minutes-8": {
+  "actions_sha1": "1a0eb1cd09f26df55c1224daf2b5f231f22c7cce",
+  "node": "post_decision",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[decision]"
+  ]
+ },
+ "minutes-9": {
+  "actions_sha1": "d4fa5be36e98879ad2518f20011e07eeefc51d91",
+  "node": "create_task",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[action]",
+   "has_owner[yes]",
+   "has_due[yes]"
+  ]
+ },
+ "minutes-b01": {
+  "actions_sha1": "ce1bfdac8cd77728ef6c5cee5237275995dd3466",
+  "node": "post_decision",
+  "path": [
+   "label_decision[yes]"
+  ]
+ },
+ "minutes-b02": {
+  "actions_sha1": "9bd961334f5be972e830325960872ebe76d7456f",
+  "node": "create_task",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[action]",
+   "has_owner[yes]",
+   "has_due[yes]"
+  ]
+ },
+ "minutes-b03": {
+  "actions_sha1": "752b05c1bfbd1a51f3dafc7cd3aa266c2bd94766",
+  "node": "risk_planned",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[risk]",
+   "plan_risk[ok]"
+  ]
+ },
+ "minutes-b04": {
+  "actions_sha1": "4f963420c8d14f680dbea44c6ad336aafd31a1a9",
+  "node": "log_info",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[info]"
+  ]
+ },
+ "minutes-b05": {
+  "actions_sha1": "6a38c273fd72f758d276a5c706d5797cc998ee38",
+  "node": "ask_owner",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[action]",
+   "has_owner[no]"
+  ]
+ },
+ "minutes-b06": {
+  "actions_sha1": "5a606c0a814cd56cfd9b55f91d3783f509cd3d4e",
+  "node": "ask_owner",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[action]",
+   "has_owner[yes]",
+   "has_due[no]"
+  ]
+ },
+ "minutes-b07": {
+  "actions_sha1": "e3243b2b81c8943be55f7d38043f97adebf038d5",
+  "node": "risk_item",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[risk]",
+   "plan_risk[unsure]"
+  ]
+ },
+ "minutes-b08": {
+  "actions_sha1": "4e591dd9c55640595119ae18490e86d79a64f3eb",
+  "node": "post_decision",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[decision]"
+  ]
+ },
+ "minutes-b09": {
+  "actions_sha1": "39b64fe800d98fb279d2694e61bc4ee5a64b99ab",
+  "node": "create_task",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[action]",
+   "has_owner[yes]",
+   "has_due[yes]"
+  ]
+ },
+ "minutes-b10": {
+  "actions_sha1": "4f963420c8d14f680dbea44c6ad336aafd31a1a9",
+  "node": "log_info",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[info]"
+  ]
+ },
+ "minutes-b11": {
+  "actions_sha1": "c04b3152fac84c4b2dd018041e3f3531c5626f94",
+  "node": "risk_planned",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[risk]",
+   "plan_risk[ok]"
+  ]
+ },
+ "minutes-b12": {
+  "actions_sha1": "4f963420c8d14f680dbea44c6ad336aafd31a1a9",
+  "node": "log_info",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[info]"
+  ]
+ },
+ "minutes-b13": {
+  "actions_sha1": "ee9fe8a9345fdaba9eb41850627a8f6e64e0fc5c",
+  "node": "create_task",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[action]",
+   "has_owner[yes]",
+   "has_due[yes]"
+  ]
+ },
+ "minutes-b14": {
+  "actions_sha1": "0db8f2c143370bb63b24c18788fdfc1d8a959b33",
+  "node": "post_decision",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[decision]"
+  ]
+ },
+ "minutes-c01": {
+  "actions_sha1": "db86094e8719f58ac0ec2503f7deb822c723d382",
+  "node": "post_decision",
+  "path": [
+   "label_decision[yes]"
+  ]
+ },
+ "minutes-c02": {
+  "actions_sha1": "b1bc20e3f6677473c843c747bff8be8c3edc4379",
+  "node": "create_task",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[action]",
+   "has_owner[yes]",
+   "has_due[yes]"
+  ]
+ },
+ "minutes-c03": {
+  "actions_sha1": "dd29149674394b4cb80d14fd16a8d5ad73ea1a4f",
+  "node": "risk_item",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[risk]",
+   "plan_risk[unsure]"
+  ]
+ },
+ "minutes-c04": {
+  "actions_sha1": "4f963420c8d14f680dbea44c6ad336aafd31a1a9",
+  "node": "log_info",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[info]"
+  ]
+ },
+ "minutes-c05": {
+  "actions_sha1": "1f71c4cbe5407d04d035fab4d1ba08ddca11abdc",
+  "node": "ask_owner",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[action]",
+   "has_owner[no]"
+  ]
+ },
+ "minutes-c06": {
+  "actions_sha1": "a4ed9bb0f73baa90d748cafd9f8e7a69c8d0d696",
+  "node": "post_decision",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[decision]"
+  ]
+ },
+ "minutes-c07": {
+  "actions_sha1": "9f4bce278c2df4c3a58dc87f443147360f922e6a",
+  "node": "create_task",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[action]",
+   "has_owner[yes]",
+   "has_due[yes]"
+  ]
+ },
+ "minutes-c08": {
+  "actions_sha1": "b16aa888866adeef43676d49b8f9805fea9b9681",
+  "node": "risk_item",
+  "path": [
+   "label_decision[no]",
+   "label_task[no]",
+   "label_risk[no]",
+   "label_info[no]",
+   "item_type[risk]",
+   "plan_risk[unsure]"
+  ]
+ },
+ "teams-1": {
+  "actions_sha1": "e8cab106fce78be754730316eccd3a79daefb7cd",
+  "node": "decision_planned",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[decision]",
+   "plan_decision[ok]"
+  ]
+ },
+ "teams-10": {
+  "actions_sha1": "4f963420c8d14f680dbea44c6ad336aafd31a1a9",
+  "node": "log_fyi",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[fyi]"
+  ]
+ },
+ "teams-2": {
+  "actions_sha1": "15b951fce667de6988bdf1b291970b4f612f0020",
+  "node": "reply_status",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[status]"
+  ]
+ },
+ "teams-3": {
+  "actions_sha1": "cc3e7b80587bed9dd5994e260a76ff878c395942",
+  "node": "incident_bug",
+  "path": [
+   "critical_incident[yes]"
+  ]
+ },
+ "teams-4": {
+  "actions_sha1": "4f963420c8d14f680dbea44c6ad336aafd31a1a9",
+  "node": "log_fyi",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[fyi]"
+  ]
+ },
+ "teams-5": {
+  "actions_sha1": "95eae0e6644e35e762baf86c52957fc21594803a",
+  "node": "decision_planned",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[decision]",
+   "plan_decision[ok]"
+  ]
+ },
+ "teams-6": {
+  "actions_sha1": "4464843191468bebe2fb92c8e0de3b63145adb30",
+  "node": "decision_planned",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[decision]",
+   "plan_decision[ok]"
+  ]
+ },
+ "teams-7": {
+  "actions_sha1": "f9e71b1216b3584ff97194fcce98e7f82dec5022",
+  "node": "decision_planned",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[decision]",
+   "plan_decision[ok]"
+  ]
+ },
+ "teams-8": {
+  "actions_sha1": "864f30eda801610141a35ca30201fa7012066482",
+  "node": "decision_planned",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[decision]",
+   "plan_decision[ok]"
+  ]
+ },
+ "teams-9": {
+  "actions_sha1": "f0b3df90092be1b8eb5bfd4d1e1fc6c487e34282",
+  "node": "decision_planned",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[decision]",
+   "plan_decision[ok]"
+  ]
+ },
+ "teams-b01": {
+  "actions_sha1": "fb706ae702ac7500d04a7d543ab04ed2cc2c01c4",
+  "node": "decision_today",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[decision]",
+   "plan_decision[unsure]",
+   "urgency[<4]"
+  ]
+ },
+ "teams-b02": {
+  "actions_sha1": "15b951fce667de6988bdf1b291970b4f612f0020",
+  "node": "reply_status",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[status]"
+  ]
+ },
+ "teams-b03": {
+  "actions_sha1": "5596c98d1c55c5193ecf2275324e031055719711",
+  "node": "incident_bug",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[incident]"
+  ]
+ },
+ "teams-b04": {
+  "actions_sha1": "4f963420c8d14f680dbea44c6ad336aafd31a1a9",
+  "node": "log_fyi",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[fyi]"
+  ]
+ },
+ "teams-b05": {
+  "actions_sha1": "1a44df50a3f792401028cbe384ed5e08ab756089",
+  "node": "decision_later",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[decision]",
+   "plan_decision[unsure]",
+   "urgency[<1.5]"
+  ]
+ },
+ "teams-b06": {
+  "actions_sha1": "a769b1040bd9c74951959145cb3289d15fab71b1",
+  "node": "decision_planned",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[decision]",
+   "plan_decision[ok]"
+  ]
+ },
+ "teams-b07": {
+  "actions_sha1": "ec883053dc710967bd29331c200d44742cefb70b",
+  "node": "decision_planned",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[decision]",
+   "plan_decision[ok]"
+  ]
+ },
+ "teams-b08": {
+  "actions_sha1": "b784415a1effc42061566c2a507a931d4162eb2a",
+  "node": "decision_planned",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[decision]",
+   "plan_decision[ok]"
+  ]
+ },
+ "teams-b09": {
+  "actions_sha1": "b02a10b64c730018800bbdee602c0e389ddce23d",
+  "node": "decision_planned",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[decision]",
+   "plan_decision[ok]"
+  ]
+ },
+ "teams-b10": {
+  "actions_sha1": "4f963420c8d14f680dbea44c6ad336aafd31a1a9",
+  "node": "log_fyi",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[yes]"
+  ]
+ },
+ "teams-b11": {
+  "actions_sha1": "cf27a7a7536ca33310a12ab2d02c62a1a36a7e3d",
+  "node": "incident_bug",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[incident]"
+  ]
+ },
+ "teams-b12": {
+  "actions_sha1": "4f963420c8d14f680dbea44c6ad336aafd31a1a9",
+  "node": "log_fyi",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[fyi]"
+  ]
+ },
+ "teams-b13": {
+  "actions_sha1": "bdcdbc4c447a28b7dbc0c985f4756a6b21cd8518",
+  "node": "decision_later",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[decision]",
+   "plan_decision[unsure]",
+   "urgency[<1.5]"
+  ]
+ },
+ "teams-b14": {
+  "actions_sha1": "15b951fce667de6988bdf1b291970b4f612f0020",
+  "node": "reply_status",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[status]"
+  ]
+ },
+ "teams-b15": {
+  "actions_sha1": "80b2ca66df0419022fedee4cabe2b81f4db8b172",
+  "node": "decision_planned",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[decision]",
+   "plan_decision[ok]"
+  ]
+ },
+ "teams-b16": {
+  "actions_sha1": "3a13924deb9254cc0b675302849eba8dcc697f03",
+  "node": "incident_bug",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[incident]"
+  ]
+ },
+ "teams-b17": {
+  "actions_sha1": "15b951fce667de6988bdf1b291970b4f612f0020",
+  "node": "reply_status",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[status]"
+  ]
+ },
+ "teams-b18": {
+  "actions_sha1": "7fc661094602d31d2da55a9e542bd6c1378d9ab5",
+  "node": "decision_later",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[decision]",
+   "plan_decision[unsure]",
+   "urgency[<1.5]"
+  ]
+ },
+ "teams-c01": {
+  "actions_sha1": "fb706ae702ac7500d04a7d543ab04ed2cc2c01c4",
+  "node": "decision_today",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[decision]",
+   "plan_decision[unsure]",
+   "urgency[unsure]"
+  ]
+ },
+ "teams-c02": {
+  "actions_sha1": "15b951fce667de6988bdf1b291970b4f612f0020",
+  "node": "reply_status",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[status]"
+  ]
+ },
+ "teams-c03": {
+  "actions_sha1": "c7f4d5c31af04bb47b4e1b7665196147706609e5",
+  "node": "incident_bug",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[incident]"
+  ]
+ },
+ "teams-c04": {
+  "actions_sha1": "4f963420c8d14f680dbea44c6ad336aafd31a1a9",
+  "node": "log_fyi",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[fyi]"
+  ]
+ },
+ "teams-c05": {
+  "actions_sha1": "fb706ae702ac7500d04a7d543ab04ed2cc2c01c4",
+  "node": "decision_today",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[decision]",
+   "plan_decision[unsure]",
+   "urgency[unsure]"
+  ]
+ },
+ "teams-c06": {
+  "actions_sha1": "0e9a7540a5469a626bf9077ed0bd071138e7993d",
+  "node": "incident_bug",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[incident]"
+  ]
+ },
+ "teams-c07": {
+  "actions_sha1": "15b951fce667de6988bdf1b291970b4f612f0020",
+  "node": "reply_status",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[status]"
+  ]
+ },
+ "teams-c08": {
+  "actions_sha1": "fb706ae702ac7500d04a7d543ab04ed2cc2c01c4",
+  "node": "decision_today",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[decision]",
+   "plan_decision[unsure]",
+   "urgency[unsure]"
+  ]
+ },
+ "teams-c09": {
+  "actions_sha1": "4f963420c8d14f680dbea44c6ad336aafd31a1a9",
+  "node": "log_fyi",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[fyi]"
+  ]
+ },
+ "teams-c10": {
+  "actions_sha1": "fb706ae702ac7500d04a7d543ab04ed2cc2c01c4",
+  "node": "decision_today",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[decision]",
+   "plan_decision[unsure]",
+   "urgency[unsure]"
+  ]
+ },
+ "teams-c11": {
+  "actions_sha1": "388e354a5215ccc99a359e1476aa3c7eb8d7da43",
+  "node": "incident_bug",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[incident]"
+  ]
+ },
+ "teams-c12": {
+  "actions_sha1": "4f963420c8d14f680dbea44c6ad336aafd31a1a9",
+  "node": "log_fyi",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[fyi]"
+  ]
+ },
+ "teams-c13": {
+  "actions_sha1": "fb706ae702ac7500d04a7d543ab04ed2cc2c01c4",
+  "node": "decision_today",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[decision]",
+   "plan_decision[unsure]",
+   "urgency[unsure]"
+  ]
+ },
+ "teams-c14": {
+  "actions_sha1": "15b951fce667de6988bdf1b291970b4f612f0020",
+  "node": "reply_status",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[status]"
+  ]
+ },
+ "teams-c15": {
+  "actions_sha1": "60cfdfb76a9837f9292fc6ac25811a2bfa9336ca",
+  "node": "incident_bug",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[incident]"
+  ]
+ },
+ "teams-c16": {
+  "actions_sha1": "fb706ae702ac7500d04a7d543ab04ed2cc2c01c4",
+  "node": "decision_today",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[decision]",
+   "plan_decision[unsure]",
+   "urgency[unsure]"
+  ]
+ },
+ "teams-c17": {
+  "actions_sha1": "15b951fce667de6988bdf1b291970b4f612f0020",
+  "node": "reply_status",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[status]"
+  ]
+ },
+ "teams-c18": {
+  "actions_sha1": "4f963420c8d14f680dbea44c6ad336aafd31a1a9",
+  "node": "log_fyi",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[yes]"
+  ]
+ },
+ "teams-c19": {
+  "actions_sha1": "68492639ac303e389b2a2ce8ce5b0a0e64442a59",
+  "node": "incident_bug",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[incident]"
+  ]
+ },
+ "teams-c20": {
+  "actions_sha1": "fb706ae702ac7500d04a7d543ab04ed2cc2c01c4",
+  "node": "decision_today",
+  "path": [
+   "critical_incident[no]",
+   "ack_only[no]",
+   "intent[decision]",
+   "plan_decision[unsure]",
+   "urgency[unsure]"
+  ]
+ }
+}

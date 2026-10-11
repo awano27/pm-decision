@@ -10,7 +10,7 @@ with an overdue promise (status_guard). Three sources:
   (c) a step of an approved item that is due today or this week (due_level <= 1, not 期限要確認), counted as the brief counts it.
 An (a) or (c) promise is closed when the item's work is done, and it is left out PROMISE_KEEP_DAYS after its day (no reply closes it).
 Where it shows (promises=1 only): the morning brief's 約束 section, the end of the arrow line of a new post from the same chat, 詳細 N
-(the chat's open promises). With promises=0 nothing here is read.
+(the chat's open promises of a and c). With promises=0 nothing here is read.
 """
 import re
 import unicodedata
@@ -55,10 +55,13 @@ def _monday(day):
 
 def _weekday_deadline(m, day):
     i = WEEKDAYS.index(m.group("wd"))
-    if m.group("wk") == "来週":
+    wk = m.group("wk") or ""
+    if wk.startswith("来週"):
         return _monday(day) + timedelta(days=7 + i)
-    if m.group("wk") == "今週":
+    if wk.startswith("今週"):
         return _monday(day) + timedelta(days=i)
+    if re.search("今週|来週|今月|来月", m.string):   # 「来週の件、金曜までに」: the week of the 金曜 is not said, so no date (a safe miss)
+        return None
     return day + timedelta(days=(i - day.weekday()) % 7)   # a bare weekday: the next one on or after the day
 
 
@@ -83,9 +86,10 @@ DEADLINES = (
     (re.compile(r"本日中|今日中"), lambda m, day: day),
     (re.compile(r"明日(?:中|まで)"), lambda m, day: day + timedelta(days=1)),
     (re.compile(r"今週中"), lambda m, day: _friday(day)),
-    (re.compile(r"(?P<wk>今週|来週)?(?P<wd>[月火水木金土日])曜日?(?:まで|までに)"), _weekday_deadline),
+    (re.compile(r"(?P<wk>今週の?|来週の?)?(?P<wd>[月火水木金土日])曜日?(?:まで|までに)"), _weekday_deadline),
     (re.compile(r"(?<![\d/])(?P<m>\d{1,2})/(?P<d>\d{1,2})(?:まで|までに)"), _month_day_deadline),
-    (re.compile(r"(?<!\d)(?P<d>\d{1,2})日(?:まで|までに)"), _day_deadline),
+    (re.compile(r"(?<![\d/年])(?P<m>\d{1,2})月(?P<d>\d{1,2})日(?:まで|までに)"), _month_day_deadline),   # 「12月3日」; a year before it is a safe miss
+    (re.compile(r"(?<![\d/月])(?P<d>\d{1,2})日(?:まで|までに)"), _day_deadline),   # 「3日」; 「12月3日」 and 「来月15日」 are not this form
 )
 
 
@@ -230,12 +234,13 @@ def _md(day):
 
 
 def _of_chat(snap, rec, n=None):
-    """The open promises of the record's chat, the earliest first, without the item's own (number n)."""
+    """The open promises (a and c) of the record's chat, the earliest first, without the item's own (number n). A (b) decision is
+    not a promise made to anyone, so it is in the brief only and never at the end of a post or in 詳細 N."""
     ev = rec.get("event") if isinstance(rec.get("event"), dict) else {}
     chat = ev.get("chat_id")
     if not snap or not chat:
         return []
-    return [r for r in snap["rows"] if r["chat"] == chat and (n is None or r["n"] != str(n))]
+    return [r for r in snap["rows"] if r["chat"] == chat and r["src"] != "b" and (n is None or r["n"] != str(n))]
 
 
 def brief_section(out, now=None):

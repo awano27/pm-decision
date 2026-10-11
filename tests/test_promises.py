@@ -17,7 +17,7 @@ from unittest import mock
 from kimeru import brief, cli, config, notify, plan, promises, push
 from kimeru.backends import ReplayBackend, StubBackend
 from tests.test_daily import GRAPHS, PBS
-from tests.test_notify import FakeBridge
+from tests.test_notify import FakeBridge, write_queue
 
 ROOT = Path(__file__).resolve().parent.parent
 # local times: the tests do not depend on the machine's time zone
@@ -85,7 +85,11 @@ class TestTheDeadlineOfASentence(unittest.TestCase):
         ("今週中に判断します", date(2026, 10, 9)),
         ("来週月曜までに回答します", date(2026, 10, 12)),
         ("来週金曜までに回答します", date(2026, 10, 16)),
+        ("来週の金曜までに回答します", date(2026, 10, 16)),
+        ("来週の月曜までに回答します", date(2026, 10, 12)),
         ("10/15までに回答します", date(2026, 10, 15)),
+        ("10月15日までに回答します", date(2026, 10, 15)),
+        ("12月3日までに回答します", date(2026, 12, 3)),
         ("15日までに確認します", date(2026, 10, 15)),
         ("5日までに回答します", date(2026, 11, 5)),
         ("木曜までに返します", date(2026, 10, 8)),
@@ -107,6 +111,9 @@ class TestTheDeadlineOfASentence(unittest.TestCase):
         ("期限は金曜までです。回答します", None),
         ("今週中の判断は難しいかもしれません", None),
         ("金曜日に話しましょう", None),
+        ("来週の件、金曜までに回答します", None),   # which week the 金曜 is in is not said
+        ("来月15日までに回答します", None),          # 「15日」 after 月 is not a day of this month
+        ("2027年1月5日までに回答します", None),      # a year is not read: a safe miss
         ("", None),
     ]
 
@@ -126,6 +133,11 @@ class TestTheDeadlineOfASentence(unittest.TestCase):
 
     def test_a_meeting_in_one_sentence_does_not_make_a_promise_of_the_deadline_in_the_next(self):
         self.assertIsNone(promises.commitment("明日の会議で話します。金曜までに資料を出してください", WED_DAY))
+
+    def test_a_next_week_weekday_said_on_a_monday_is_the_monday_or_friday_of_the_week_after(self):
+        mon = date(2026, 10, 12)
+        self.assertEqual(promises.commitment("来週の月曜までに回答します", mon)[0], date(2026, 10, 19))
+        self.assertEqual(promises.commitment("来週の金曜までに回答します", mon)[0], date(2026, 10, 23))
 
 
 class TestTheLedgerReadsOnlyApprovedRepliesWithAnOkTime(unittest.TestCase):
@@ -248,6 +260,38 @@ class TestTheSameChatsNewPostAndItsDetail(unittest.TestCase):
             self.assertEqual(lines, ["・10/7 #2「金曜までに回答」: 期限切れ 3 日"])
             text = notify.format_detail(3, self.new_post(), None, promise=lines)
             self.assertIn("この相手の約束:\n・10/7 #2「金曜までに回答」: 期限切れ 3 日\n返信: OK 3", text)
+
+    def test_a_new_post_through_notify_ends_with_the_overdue_promise_only_when_the_setting_is_on(self):
+        """The real post path (notify.notify, which reads the ledger at the real now). The fixture is dated from the local today: the
+        OK 4 days ago, a deadline 2 days ago. At 1 the arrow line ends with the promise; at 0 the post is the plain one and the ledger
+        is never read."""
+        now = datetime.now().astimezone()
+        made, due = (now - timedelta(days=4)).date(), (now - timedelta(days=2)).date()
+        reply = f"{due.month}/{due.day}までに回答します。"
+        note = f"（約束: {made.month}/{made.day} #2「{due.month}/{due.day}までに回答」 期限切れ 2 日）"
+        for flag in ("1", "0"):
+            with self.subTest(flag=flag), tempfile.TemporaryDirectory() as d:
+                write_approvals(d, {"2": approved_promise(text=reply, observed=now - timedelta(days=4))})
+                write_queue(d, self.new_post())
+                bridge = FakeBridge()
+                with mock.patch.dict(os.environ, {"KIMERU_PROMISES": flag}), \
+                        mock.patch.object(promises, "snapshot", wraps=promises.snapshot) as snapshot:
+                    notify.notify(d, bridge, send=False)
+                [(body, _)] = bridge.posts
+                self.assertEqual(snapshot.called, flag == "1")
+                if flag == "1":
+                    self.assertEqual(body, notify.format_post(3, self.new_post(), promise=note))
+                    self.assertTrue(body.splitlines()[1].endswith(" " + note), body)
+                else:
+                    self.assertEqual(body, notify.format_post(3, self.new_post()))
+
+    def test_a_decision_asked_this_week_from_the_same_chat_is_neither_a_note_nor_a_detail_line(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_decisions(d, [decision_later(chat="19:c1")])   # due Friday; a (b) row is in the brief only
+            snap = promises.snapshot(d, FRI)
+            self.assertEqual([r["src"] for r in snap["rows"]], ["b"])
+            self.assertIsNone(promises.post_note(snap, self.new_post(), 3))
+            self.assertIsNone(promises.detail_lines(snap, self.new_post(), 3))
 
 
 class TestAStatusQuestionFromAChatWithAnOverduePromise(unittest.TestCase):

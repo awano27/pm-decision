@@ -390,6 +390,8 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
     `reader` (fulltext.Reader) opens a chat to read it in full, only when needed (see fulltext.py).
     `now` (R18, promises.status_guard) is the time the open promises are counted at; None is the current time."""
     from . import fulltext
+    from . import link as linking
+    link_at = now   # R19: the windows of the links are counted from this time (`now` is reused below for the actions)
     if playbooks is None:
         playbooks = planner.load_playbooks(DEFAULT_PLAYBOOKS)
     if writer is None:
@@ -466,6 +468,8 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
                 res["material_event"].pop("直前のやり取り", None)
             res["judge"] = _judge_info(backend)
             res["graph_key"] = key
+            if linking.enabled():   # R19 (link_related=1): the record's link and dup_of; the judge and the writer never see it
+                linking.attach(res, ev_run, out, now=link_at)
             if attention.enabled():   # R17: whether this item may reach the PC and the phone at once (off: no field, the records are unchanged)
                 res["attn"] = attention.judge(g, res, ev_run)
             source_key = f"{res.get('graph')}:{res.get('event_id')}:{res.get('node')}"

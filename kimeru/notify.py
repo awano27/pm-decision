@@ -326,12 +326,13 @@ def _draft_mark(rec):
     return config.value("post_kind_mark") == "1" and rec.get("held_reason") == "draft"
 
 
-def format_post(n, rec, full=None, marks=None, precedent=None, promise=None):
+def format_post(n, rec, full=None, marks=None, precedent=None, promise=None, related=None):
     """The approval post "[kimeru #N]": at most 5 short lines. Everything else (the source text, the memo, every draft, the
     revision, the kinds of action) is in the answer to `詳細 N` (format_detail). `full` is not shown here. `marks` (R09, hold.post_marks):
     {"day": 2} for an item that came back on the 2nd day of its hold, {"undated": ["3"]} for the undated holds named on this post.
     `precedent` (R16, memory.precedent): the text that ends the arrow line; None (memory=0) leaves the post as it was.
-    `promise` (R18, promises.post_note): the open promise of the same chat, at the end of the arrow line too; None (promises=0) adds nothing."""
+    `promise` (R18, promises.post_note): the open promise of the same chat, at the end of the arrow line too; None (promises=0) adds nothing.
+    `related` (R19, link.post_note): the `↔` text of the same case, at the end of the arrow line too; None (link_related=0) adds nothing."""
     from . import execute
     memo = rec.get("memo") or {}
     plan = rec.get("plan") or {}
@@ -354,7 +355,8 @@ def format_post(n, rec, full=None, marks=None, precedent=None, promise=None):
         arrow = "→ " + lead + _clip(proposal, 100 - len(lead) - 1) + "）"
     else:
         arrow = "→ " + _clip(proposal, 100)
-    lines.append(arrow + (f" {precedent}" if precedent else "") + (f" {promise}" if promise else ""))   # R16 / R18: they end the arrow line; no line is added
+    lines.append(arrow + (f" {precedent}" if precedent else "") + (f" {promise}" if promise else "")
+                 + (f" {related}" if related else ""))   # R16 / R18 / R19: they end the arrow line; no line is added
     why = _why(rec)   # R11: one line more, after the arrow line (it replaces nothing)
     if why:
         lines.append(why)
@@ -1066,14 +1068,17 @@ def show_toast(title, body):
     return "shown"
 
 
-def format_notice(rec):
-    """A notice of an automatic decision, at most 4 lines: what it is about, what was done, a link."""
+def format_notice(rec, linked=None):
+    """A notice of an automatic decision, at most 4 lines: what it is about, what was done, a link. `linked` (R19, link.notice_note):
+    {"prefix": the 再発火 text in front of the first line, "tail": the `↔` text at the end of the arrow line}; None (link_related=0)
+    adds nothing, and the notice is the same text as before."""
     kind = str(rec.get("event_kind") or "")
     what = _clip(_ado_label(rec), 80) if kind.startswith("ado.") else _clip(rec.get("summary") or rec.get("advice") or kind, 80)
-    lines = [f"[kimeru 通知] {what}"]
+    lines = [f"[kimeru 通知] {(linked or {}).get('prefix') or ''}{what}"]
     ran = list(dict.fromkeys(WHAT_RAN.get(e["action"].get("type"), "記録") for e in rec.get("executed", [])))
     note = _clip(rec["advice"], 120) if rec.get("advice") else "自動で決定しました"
-    lines.append("→ " + note + (f"（記録: {', '.join(ran)}）" if ran else ""))
+    tail = (linked or {}).get("tail") or ""
+    lines.append("→ " + note + (f"（記録: {', '.join(ran)}）" if ran else "") + (f" {tail}" if tail else ""))
     link = next((l for l in ado_lines(rec) if l.startswith("リンク: ")), "")
     if link:
         lines.append(link[len("リンク: "):])
@@ -1094,6 +1099,8 @@ def notify_notices(out, bridge, send=False):
 
 def _notify_notices_locked(out, bridge, send):
     ap = Approvals(out)
+    from . import link as linking   # R19 (link_related=1): the records read once for the batch; nothing is read at 0
+    related = linking.index(out, ap.data["items"]) if linking.enabled() else None
     done = set(ap.data.setdefault("notices", []))
     uncertain = ap.data.setdefault("notice_delivery_unknown", {})
     if isinstance(uncertain, list):
@@ -1106,7 +1113,7 @@ def _notify_notices_locked(out, bridge, send):
         if key in done or key in uncertain:
             continue
         fsutil.refresh(lock_path(out))
-        body = format_notice(rec)
+        body = format_notice(rec, linking.notice_note(related, rec))   # R19: None at link_related=0
         if send:
             attempt = _attempt_record("notice", key, "notice", body, rec.get("revision"), key)
             ap.data["notice_delivery_attempts"] = ap.data.get("notice_delivery_attempts") or {}
@@ -1160,6 +1167,8 @@ def _notify_locked(out, bridge, send, real):
     ap.save()   # an item that cannot be posted now must still exist (and be counted as waiting) after a failed post
     posted = []
     from . import fulltext, memory, promises
+    from . import link as linking
+    related = None   # R19: the records of the same cases, read once when the first item is posted (link_related=1 only; never read at 0)
     past = None   # R16: the earlier decisions, read once when the first item is posted (memory=1 only; never read at 0)
     promise_snap = None   # R18: the open promises, read once when the first item is posted (promises=1 only; never read at 0)
     fulltext.purge_safe(out)   # a full text kept too long is deleted (a failure is noted in warnings.jsonl; the posts go on); the item is then treated as decided from the preview
@@ -1180,9 +1189,12 @@ def _notify_locked(out, bridge, send, real):
                 past = memory.index(out, ap.data["items"])
             if promise_snap is None and promises.enabled():
                 promise_snap = promises.snapshot(out)
+            if related is None and linking.enabled():
+                related = linking.index(out, ap.data["items"])
             body = format_post(n, it["record"], fulltext.load(out, it["key"]), marks=marks,
                                precedent=memory.precedent(past, it["record"], n),   # R16: None at memory=0
-                               promise=promises.post_note(promise_snap, it["record"], n))   # R18: None at promises=0
+                               promise=promises.post_note(promise_snap, it["record"], n),   # R18: None at promises=0
+                               related=linking.post_note(related, it["record"], n))   # R19: None at link_related=0
             if send:
                 attempt = _attempt_record("case", n, "post", body, it.get("revision", 1), it["key"])
                 it.update({"delivery_unknown": True, "delivery_unknown_part": "post",

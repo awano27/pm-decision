@@ -4,13 +4,16 @@ except ImportError:
     import isolate  # noqa: F401
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from kimeru import graph, notify, plan
 from kimeru.backends import BackendUnavailable, ReplayBackend, StubBackend
 from kimeru.cli import process
+from tests.test_notify import FakeBridge
 
 ROOT = Path(__file__).resolve().parent.parent
 PBS = plan.load_playbooks(ROOT / "playbooks")
@@ -76,6 +79,22 @@ class TestSevereAlerts(unittest.TestCase):
                 self.assertEqual("承認待ち" in text, writer is not None)
                 self.assertNotIn("返信は不要です", text)
                 self.assertLessEqual(len(text.splitlines()), 4)
+
+    def test_linking_never_silences_a_sev1_refire(self):   # R19: the link adds a prefix to a refire, it never drops or quiets the notice
+        payload = json.loads((ROOT / "examples" / "monitor_alert.json").read_text(encoding="utf-8"))
+        again = json.loads(json.dumps(payload))
+        again["data"]["essentials"].update({"alertId": "/subscriptions/x/alerts/a9", "firedDateTime": "2026-09-23T10:00:00Z"})
+        with mock.patch.dict(os.environ, {"KIMERU_LINK_RELATED": "1"}), tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            for p in (payload, again):
+                [res] = process(p, GRAPHS_ALL, StubBackend(), out, PBS)
+                self.assertTrue(res["notify"])
+            notices = [json.loads(l) for l in (out / "notices.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(len(notices), 2)
+            bridge = FakeBridge()
+            notify.notify_notices(out, bridge, send=False)
+            self.assertTrue(bridge.posts[1][0].startswith("[kimeru 通知] 再発火 2 回目"), bridge.posts)
+            self.assertEqual(len((out / "decisions.jsonl").read_text(encoding="utf-8").splitlines()), 2)
 
     def test_judge_down_still_waits_for_the_next_cycle(self):
         class Down:

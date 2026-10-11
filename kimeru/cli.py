@@ -330,6 +330,11 @@ def _draft(res, ev, meter, writer):
     # a kind the PM switched on for real execution never runs by itself, decided by the graph or not
     held += [a for a in res["actions"] if execute.is_gated(a) and a not in held]
     if held and res["outcome"] == "decide":
+        # R12: the reason the decision waits for the PM. A draft is the reason only when nothing held it before (no queue, no
+        # severe or unsure rule), so the post, brief and toast can say "only the text needs a look" (setting post_kind_mark)
+        if (not res.get("needs_human") and not res.get("severe_guard") and not res.get("via_unsure")
+                and any(a.get("drafted_by") for a in held)):
+            res["held_reason"] = "draft"
         res["needs_human"] = True
     return res, held
 

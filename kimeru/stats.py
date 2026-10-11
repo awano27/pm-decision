@@ -264,6 +264,9 @@ def _week_extra(out, decision_rows, decisions, week_replies, review_rows, now, s
         "latency": {"now": [s for t, s in latencies if since_ts <= t <= now_ts],
                     "previous": [s for t, s in latencies if prev_ts <= t < since_ts]},
         "calibration": _calibration(out),
+        # R12: the decisions that waited only for a writer's draft (post_kind_mark=1; None at 0, the digest is then unchanged)
+        "drafts": (sum(1 for r in decisions if r.get("needs_human") and r.get("held_reason") == "draft")
+                   if config.value("post_kind_mark") == "1" else None),
     }
 
 
@@ -429,6 +432,8 @@ def render(s, share=False):
             lines.append(f"  - {shown[name]}: {g['n']} 件（自動 {g['auto']}、人 {g['human']}、規則 {g['rule']}）")
     wk = s.get("week") or {}   # the week's additions; a summary made without them (older callers) shows none of them
     if wk:
+        if wk.get("drafts") is not None:   # R12: the judgments that wait for the PM, and the draft checks, apart
+            lines.append(f"人に回した件の内訳: 判断が必要 {s['human'] - wk['drafts']} 件 / 下書きの確認 {wk['drafts']} 件")
         prev = wk["previous"]
         if prev["decisions"]:
             lines.append(f"前の 7 日（{prev['since']} から）: 判断 {prev['decisions']} 件"

@@ -320,6 +320,12 @@ def _why(rec):
     return explain.open_question(rec)
 
 
+def _draft_mark(rec):
+    """R12: with the setting post_kind_mark=1, a record that waits only for a writer's draft (held_reason "draft", cli._draft).
+    False otherwise, so at 0 (the default) the texts are unchanged."""
+    return config.value("post_kind_mark") == "1" and rec.get("held_reason") == "draft"
+
+
 def format_post(n, rec, full=None, marks=None):
     """The approval post "[kimeru #N]": at most 5 short lines. Everything else (the source text, the memo, every draft, the
     revision, the kinds of action) is in the answer to `詳細 N` (format_detail). `full` is not shown here. `marks` (R09, hold.post_marks):
@@ -335,12 +341,17 @@ def format_post(n, rec, full=None, marks=None):
     resurfaced = f" （保留から・{day} 日目）" if day else ""
     undated = (marks or {}).get("undated")
     named = f" （保留（日付なし）: {', '.join('#' + str(x) for x in undated)}）" if undated else ""
-    lines = [f"[kimeru #{n}] {update}{_who(rec)}{held_mark}{resurfaced}{named}"]
+    draft_only = _draft_mark(rec)   # R12: 下書き: in the first line; the number "[kimeru #N]" stays where the reader looks for it
+    lines = [f"[kimeru #{n}] {'下書き: ' if draft_only else ''}{update}{_who(rec)}{held_mark}{resurfaced}{named}"]
     if str(rec.get("event_kind") or "").startswith("ado.") and any(a.get("type") == "ado.comment" for a in actions) and not memo:
         proposal = "情報不足: 追記依頼のコメント案あり"
     else:
         proposal = memo.get("next") or rec.get("advice") or plan.get("summary") or "内容を確認してください"
-    lines.append("→ " + _clip(proposal, 100))
+    if draft_only:
+        lead = "文面だけ確認（判断は自動: "
+        lines.append("→ " + lead + _clip(proposal, 100 - len(lead) - 1) + "）")
+    else:
+        lines.append("→ " + _clip(proposal, 100))
     why = _why(rec)   # R11: one line more, after the arrow line (it replaces nothing)
     if why:
         lines.append(why)
@@ -978,13 +989,22 @@ def toast_enabled():
     return config.value("toast") != "0"
 
 
+def _posted_drafts(out, posted):
+    """R12: how many of the posted items wait only for a writer's draft, with post_kind_mark=1; None at 0 (the default)."""
+    if config.value("post_kind_mark") != "1":
+        return None
+    items = Approvals(out).data["items"]
+    return sum(1 for n in posted if ((items.get(str(n)) or {}).get("record") or {}).get("held_reason") == "draft")
+
+
 def toast_text(out, posted, notices, unposted=0):
     """Title and body for the PC notification. Counts and numbers only; KIMERU_TOAST=detail adds the
     first item's one-line summary (on this PC only: the routes that leave it never carry a summary)."""
     import os
     parts = []
     if posted:
-        parts.append(f"確認待ち {len(posted)} 件")
+        drafts = _posted_drafts(out, posted)
+        parts.append(f"確認待ち {len(posted)} 件" + (f"（うち下書き {drafts}）" if drafts is not None else ""))
     if notices:
         parts.append(f"自動決定の通知 {notices} 件")
     if unposted:

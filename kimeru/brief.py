@@ -12,7 +12,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import fsutil, hold
+from . import config, fsutil, hold
 from .backends import judge_name
 
 HARM = ["No real harm", "Minor inconvenience for the team",
@@ -60,7 +60,8 @@ def collect(out, now=None, days=2):
         if key not in seen:
             seen.add(key)
             items.append({"key": key, "kind": kind, "text": text, "subject": subject, "due_level": due_level,
-                          "notify": bool((rec or {}).get("notify")), "severe": bool((rec or {}).get("severe_guard"))})
+                          "notify": bool((rec or {}).get("notify")), "severe": bool((rec or {}).get("severe_guard")),
+                          "draft": (rec or {}).get("held_reason") == "draft"})   # R12: waits only for a writer's draft
 
     ap = json.loads((out / "approvals.json").read_text(encoding="utf-8")) if (out / "approvals.json").exists() else {"items": {}}
     queued = set()
@@ -149,7 +150,9 @@ def rank(items, backend, top=None):
     return ranked if top is None else ranked[:top]
 
 
-def format_post(ranked, total, pending, date=None, empty_message="対応が必要な項目はありません"):
+def format_post(ranked, total, pending, date=None, empty_message="対応が必要な項目はありません", drafts=None):
+    """drafts (R12, post_kind_mark=1): how many of the `pending` waiting items only need their draft checked; None (the default) keeps
+    the one count."""
     date = date or datetime.now().strftime("%Y-%m-%d")
     lines = [f"[kimeru brief {date}] 今日の進め方"]
     if not ranked:
@@ -158,8 +161,10 @@ def format_post(ranked, total, pending, date=None, empty_message="対応が必�
         lines.append(f"{i}. {it['text']}")
     if total > len(ranked):
         lines.append(f"ほか {total - len(ranked)} 件")
-    if pending:
+    if pending and drafts is None:
         lines.append(f"確認待ち {pending} 件（OK 番号 / NG 番号 / 詳細 番号 で返信）")
+    elif pending:
+        lines.append(f"判断が必要 {pending - drafts} / 下書きの確認 {drafts}（OK 番号 / NG 番号 / 詳細 番号 で返信）")
     return "\n".join(lines)
 
 
@@ -341,11 +346,12 @@ def build(out, backend, top=TOP, now=None, date=None, since=None):
     items = collect(out, now=now)
     ranked = rank(items, backend)
     pending = sum(1 for i in items if i["kind"] == "approval")
+    drafts = sum(1 for i in items if i["kind"] == "approval" and i["draft"]) if config.value("post_kind_mark") == "1" else None
     from . import work
     unfinished = [row for row in work.list_work(out) if row["state"] != "done"]
     empty_message = ("実行候補はありません。未完了作業の状況は下記を確認してください"
                      if unfinished else "対応が必要な項目はありません")
-    text = format_post(ranked[:top], len(items), pending, date, empty_message)
+    text = format_post(ranked[:top], len(items), pending, date, empty_message, drafts=drafts)
     quiet = quiet_reads(out, now=now)
     if quiet:
         text += (f"\n開いて読みましたが、対応は不要でした: {len(quiet)} 件（{'、'.join(quiet[:5])}{' ほか' if len(quiet) > 5 else ''}）"

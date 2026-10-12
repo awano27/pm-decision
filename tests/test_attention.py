@@ -25,8 +25,8 @@ ROOT = Path(__file__).resolve().parent.parent
 BODY = "本文-マーカーXYZ"
 
 
-def chat(preview, time, cid="19:a_b@unq.gbl.spaces"):
-    return {"id": cid, "kind": "oneOnOne", "title": "Sato", "preview": preview, "time": time, "unread": True, "mention": False}
+def chat(preview, time, cid="19:a_b@unq.gbl.spaces", title="Sato"):
+    return {"id": cid, "kind": "oneOnOne", "title": title, "preview": preview, "time": time, "unread": True, "mention": False}
 
 
 class TestGoldenDefaults(unittest.TestCase):
@@ -819,6 +819,7 @@ class TestQuietDocs(unittest.TestCase):
 NOW = datetime(2026, 9, 28, 10, 20)   # naive local, as the cycle's clock is
 NOW_UTC = datetime(2026, 10, 12, 0, 0, tzinfo=timezone.utc)
 SITTING_ENV = {"KIMERU_INTERRUPT": "sittings", "KIMERU_SIT_HOURS": "9,13,17"}
+CHAT_A, CHAT_B, CHAT_C, CHAT_D = "19:a_b@unq.gbl.spaces", "19:b_c@unq.gbl.spaces", "19:c_d@unq.gbl.spaces", "19:d_e@unq.gbl.spaces"
 # the golden texts of `digest --week` (no share), written before the change: two approvals, and six at 9, 9, 13, 13, 13, 17 o'clock
 WEEK_TWO = """kimeru の直近 7 日（2026-10-05 から）
 判断: 0 件
@@ -992,13 +993,14 @@ class TestChaseRule(TestChaseBase):
         (self.out / "approvals.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         self.assertEqual(attention.waiting(self.out), {2})   # 佐藤 still waits; 田中 is announced at once
 
-    def test_the_note_returns_a_count_and_no_name_leaves_the_function(self):
+    def test_the_note_returns_the_number_of_senders_listed_now(self):
         self.save([waiting_item("田中", first_ready=datetime(2026, 9, 28, 9, 30))])
         self.hold_at(datetime(2026, 9, 28, 9, 40))
         self.follow_up(1, "資料を追加しました")
         result = self.hold_at(datetime(2026, 9, 28, 10, 15))
         self.assertIs(type(result), int)
         self.assertEqual(result, 1)
+        self.assertEqual(self.hold_at(datetime(2026, 9, 28, 10, 20)), 0)   # the item no longer waits, so nothing more is listed
 
     def test_under_interrupt_all_nothing_is_kept_listed_or_held_and_the_brief_is_the_same(self):
         with mock.patch.dict(os.environ, {"KIMERU_INTERRUPT": "all"}):
@@ -1112,6 +1114,15 @@ class TestChaseDigest(TestChaseBase):
         self.write_log((9, 9, 13, 13, 13, 17))
         self.assertNotIn("sit_hours の候補", stats.render(stats.collect(self.out, NOW_UTC), share=True))
 
+    def test_a_refusal_or_a_hold_is_not_an_approval_time_so_it_never_moves_the_suggestion(self):
+        pairs = [(9, "approved"), (13, "approved"), (17, "approved")] + [(20, "rejected")] * 3 + [(21, "held")] * 3
+        self.out.mkdir(parents=True, exist_ok=True)
+        rows = [{"at": datetime(2026, 10, 10, h, 30).astimezone().isoformat(timespec="seconds"), "key": f"k{i}", "id": i, "status": s}
+                for i, (h, s) in enumerate(pairs)]
+        (self.out / "approvals.log.jsonl").write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8")
+        text = stats.render(stats.collect(self.out, NOW_UTC), share=False)
+        self.assertIn("sit_hours の候補: 9,13,17（", text)
+
 
 class TestChaseGoldenAndCycles(Cycles):
     """The texts the default keeps (written before the change), and what a real cycle keeps under each setting."""
@@ -1136,6 +1147,129 @@ class TestChaseGoldenAndCycles(Cycles):
         self.assertEqual(read_json_file(self.out / "approvals.json")["sitting_waited"], {"1": 1})
         self.assertEqual(self.shown, [])
         self.assertFalse((self.out / "attention.json").exists())
+
+    # ---- the chase in real cycles (the times are injected; the chase is by a chasing word, as the 30-minute rule reads the real clock) ----
+
+    def screen(self, *rows):
+        """The chat list on screen: one (preview, time, sender, chat id) row per chat. A chat whose preview and time did not change is
+        not read again."""
+        self.t.chat_list = [chat(preview, time, cid=cid, title=who) for preview, time, who, cid in rows]
+
+    def start_day(self, who):
+        """The first cycle of the day: a greeting from `who` in chat A is the baseline, and nothing waits."""
+        self.screen(("おはようございます", "9:00", who, CHAT_A))
+        return self.cycle(9, 5)
+
+    def list_senders(self, *names):
+        """out/attention.json as a chase leaves it (the names are kept here and in the brief, nowhere else)."""
+        self.out.mkdir(parents=True, exist_ok=True)
+        rows = [{"name": n, "since": "2026-09-28T07:30", "why": "words"} for n in names]
+        (self.out / "attention.json").write_text(json.dumps({"senders": rows}, ensure_ascii=False, indent=1), encoding="utf-8")
+
+    def two_held_questions_then_a_chase(self):
+        """田中 asks in chat A at 10:15 and in chat B at 10:59 (both held). Her 'まだですか' in chat A at 10:58 is a chase: the cycle at
+        11:00 lists 田中, and both items are announced in that cycle (item 2 by the sitting read again after the listing)."""
+        self.sittings()
+        self.start_day("田中")
+        self.screen(("これは何ですか", "10:15", "田中", CHAT_A))
+        self.cycle(10, 20)
+        self.screen(("これは何ですか", "10:15", "田中", CHAT_A), ("これは何ですか", "10:59", "田中", CHAT_B))
+        self.cycle(10, 59)
+        self.assertEqual((self.shown, self.sent), ([], []))
+        self.screen(("まだですか", "10:58", "田中", CHAT_A), ("これは何ですか", "10:59", "田中", CHAT_B))
+        return self.cycle(11, 0)
+
+    def test_after_a_chase_no_text_of_the_cycle_or_the_week_digest_carries_the_senders_name(self):
+        self.two_held_questions_then_a_chase()
+        self.assertEqual(self.shown, [("kimeru: 確認待ち 2 件", "#1, #2")])
+        self.assertEqual(self.sent, [("webhook", "kimeru: 確認待ち 2 件（#1, #2）。Teams の自分とのチャットを確認してください")])
+        for title, body in self.shown:
+            self.assertNotIn("田中", title + body)
+        for _, text in self.sent:
+            self.assertNotIn("田中", text)
+        self.assertNotIn("田中", stats.week(self.out, share=True))
+        self.assertNotIn("田中", (self.out / "daily.log.jsonl").read_text(encoding="utf-8"))
+        self.assertEqual([r["name"] for r in read_json_file(self.out / "attention.json")["senders"]], ["田中"])
+
+    def test_a_chase_announces_the_senders_other_held_item_in_the_same_cycle(self):
+        self.two_held_questions_then_a_chase()
+        self.assertIn("#2", self.shown[0][1])   # item 2 is a question of 田中's that was held: it is announced now, not at 13:00
+        self.assertEqual(len(self.shown), 1)
+
+    def test_the_listed_senders_next_item_is_announced_at_once_and_another_senders_waits_for_the_sitting(self):
+        self.two_held_questions_then_a_chase()
+        self.screen(("まだですか", "10:58", "田中", CHAT_A), ("これは何ですか", "10:59", "田中", CHAT_B),
+                    ("これは何ですか", "11:35", "田中", CHAT_C))
+        self.cycle(11, 35)
+        self.assertEqual(self.shown[1:], [("kimeru: 確認待ち 1 件", "#3")])                # 田中's next item: at once, before 13:00
+        self.assertEqual(self.sent[1:], [("webhook", "kimeru: 確認待ち 1 件（#3）。Teams の自分とのチャットを確認してください")])
+        self.screen(("まだですか", "10:58", "田中", CHAT_A), ("これは何ですか", "10:59", "田中", CHAT_B),
+                    ("これは何ですか", "11:35", "田中", CHAT_C), ("これは何ですか", "11:40", "佐藤", CHAT_D))
+        self.cycle(11, 40)
+        self.assertEqual(len(self.shown), 2)                                                 # 佐藤's item waits for the sitting
+        self.assertEqual(len(self.sent), 2)
+        self.cycle(13, 5)
+        self.assertEqual(self.shown[2:], [("kimeru: 確認待ち 1 件（まとめ）", "#4")])
+
+    def morning_brief(self):
+        """The first cycle at or after the brief hour, with a question from 田中 and one from 佐藤 in it: the brief text, and the lines
+        the writer was given (summarize_day is the writer's only call the brief makes)."""
+        self.screen(("おはようございます", "7:00", "田中", CHAT_A))
+        self.cycle(7, 0)                                    # before the brief hour: the baseline, no brief yet
+        self.screen(("これは何ですか", "8:05", "田中", CHAT_A), ("これは何ですか", "8:08", "佐藤", CHAT_D))
+        writer_lines = []
+
+        def summarize(writer, lines):
+            writer_lines.append(list(lines))
+            return ["要点を一つ"]
+        with mock.patch("kimeru.writer.summarize_day", side_effect=summarize):
+            self.cycle(8, 10)
+        briefs = [t for t, _ in self.t.posts if t.startswith("[kimeru brief")]
+        self.assertEqual(len(briefs), 1)
+        return briefs[0], writer_lines
+
+    def test_under_sittings_the_morning_brief_ends_with_the_listed_senders_line_and_the_writer_never_gets_it(self):
+        self.sittings()
+        self.list_senders("田中")
+        text, lines = self.morning_brief()
+        self.assertTrue(lines)                                                               # the writer was asked
+        self.assertFalse(any("今後" in line for call in lines for line in call))
+        self.assertIn("今後 田中さんはすぐ知らせます（外すには kimeru attention remove）", text)
+        self.assertLess(text.index("要点を一つ"), text.index("今後 田中さん"))               # after the writer's points
+
+    def test_under_interrupt_all_the_same_brief_has_no_line_even_when_a_file_lists_a_sender(self):
+        self.list_senders("田中")
+        text, lines = self.morning_brief()
+        self.assertTrue(lines)
+        self.assertIn("要点を一つ", text)
+        self.assertNotIn("今後", text)
+        self.assertFalse(any("今後" in line for call in lines for line in call))
+
+    def test_a_failed_chase_step_logs_the_error_type_and_never_its_message(self):
+        self.sittings()
+        self.start_day("田中")
+        self.screen(("これは何ですか", "10:15", "田中", CHAT_A))
+        with mock.patch("kimeru.attention.note", side_effect=ValueError("田中 の本文 SECRETXYZ")):
+            r = self.cycle(10, 20)
+        log = (self.out / "daily.log.jsonl").read_text(encoding="utf-8")
+        self.assertIn('"chase": "ValueError"', log)
+        self.assertNotIn("SECRETXYZ", log)
+        self.assertNotIn("田中", log)
+        self.assertEqual(self.shown, [])                                                     # the cycle goes on: the item waits as before
+        self.assertEqual(r["notify"], [1])
+
+    def test_two_quick_follow_ups_in_real_cycles_list_nobody(self):
+        self.sittings()
+        self.start_day("田中")
+        self.screen(("これは何ですか", "10:15", "田中", CHAT_A))
+        self.cycle(10, 20)
+        self.screen(("資料を追加しました", "10:21", "田中", CHAT_A))
+        self.cycle(10, 25)
+        self.screen(("修正版です", "10:26", "田中", CHAT_A))
+        self.cycle(10, 30)
+        self.assertEqual(read_json_file(self.out / "approvals.json")["items"]["1"]["revision"], 3)   # both follow-ups merged into item 1
+        self.assertFalse((self.out / "attention.json").exists())
+        self.assertEqual(attention.senders(self.out), set())
 
 
 class TestChaseDocs(unittest.TestCase):

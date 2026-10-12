@@ -490,10 +490,13 @@ def _report_lines(rep):
 
 
 def _sit_hours(dated):
-    """R37: the three local hours of the day at which the approvals of the week came most often, in hour order: a suggestion for
-    sit_hours that nothing applies by itself. None with fewer than three approvals that have a time."""
+    """R37: the three local hours of the day at which the approvals (OK) of the week came most often, in hour order: a suggestion for
+    sit_hours that nothing applies by itself. Only status approved counts (not NG, 保留, 修正 or 聞き返し). None with fewer than three
+    approvals that have a time."""
     counts = {}
     for r in dated:
+        if r.get("status") != "approved":
+            continue
         when = _parse(r.get("at"))
         if when is not None:
             hour = when.astimezone().hour

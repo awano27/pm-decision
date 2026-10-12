@@ -242,7 +242,7 @@ def _chase(out, now, sit):
     try:
         return bool(attention.note(out, now, sit["hold"]))
     except Exception as e:
-        _log(out, {"step": "attention", "chase": f"{type(e).__name__}: {str(e)[:120]}"})
+        _log(out, {"step": "attention", "chase": type(e).__name__})
         return False
 
 

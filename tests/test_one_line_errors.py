@@ -123,6 +123,25 @@ class TestOneLine(Base):
         self.assertIn("teams-chat-triage", text)
         self.assertTrue((inbox / "done" / "teams_chat.json").exists())
 
+    def test_an_array_a_string_an_empty_dict_and_null_are_one_line_each_and_the_run_goes_on(self):
+        shapes = {"array": "[]", "string": '"text"', "empty_dict": "{}", "null": "null",
+                  "list_of_dict": '[{"body": "x"}]'}
+        for name, body in shapes.items():
+            bad = Path(self.dir.name) / f"{name}.json"
+            bad.write_text(body, encoding="utf-8")
+            with self.subTest(shape=name):
+                rc, _, err = self.cli("--backend", "stub", "run", str(bad))
+                self.assertEqual(rc, 1)
+                self.assertNotIn("Traceback", err)
+                lines = err.strip().splitlines()
+                self.assertEqual(len(lines), 1, err)
+                self.assertIn(bad.name, lines[0])
+                self.assertIn("はイベントの形式ではありません", lines[0])
+                rc, text, err = self.cli("--backend", "stub", "run", str(bad), str(ROOT / "examples" / "teams_chat.json"))
+                self.assertEqual(rc, 1)
+                self.assertNotIn("Traceback", err)
+                self.assertIn("teams-chat-triage", text)
+
     def test_review_without_a_terminal_is_one_line(self):
         with mock.patch("sys.stdin", io.StringIO("")):
             rc, _, err = self.cli("review")

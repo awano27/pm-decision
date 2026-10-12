@@ -516,8 +516,8 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
             if read_info:
                 res["read_full"] = read_info
             # decide runs now; advise actions are only proposed until approved (see notify.collect)
-            now = [a for a in res["actions"] if a not in held] if res["outcome"] == "decide" else []
-            res["executed"] = [actions.execute(a, dry_run=True) for a in now]
+            run_now = [a for a in res["actions"] if a not in held] if res["outcome"] == "decide" else []   # not `now`: the time above
+            res["executed"] = [actions.execute(a, dry_run=True) for a in run_now]
             res["at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
             res["measurement"] = {"schema": 1, "source": measurement_source, "generation": 1,
                                   "ready_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds"), **arrival}

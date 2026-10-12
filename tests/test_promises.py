@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
-from kimeru import brief, cli, config, notify, plan, promises, push
+from kimeru import brief, cli, config, graph, notify, plan, promises, push
 from kimeru.backends import ReplayBackend, StubBackend
 from tests.test_daily import GRAPHS, PBS
 from tests.test_notify import FakeBridge, write_queue
@@ -354,6 +354,30 @@ class TestAStatusQuestionFromAChatWithAnOverduePromise(unittest.TestCase):
             out = Path(d)
             write_approvals(d, {"2": approved_promise()})
             self.assertFalse(self.judge(out, "19:c1", {"KIMERU_PROMISES": "1"}, now=WED)["needs_human"])
+
+    def test_two_graphs_for_the_same_chat_both_come_back_and_each_is_counted_at_the_same_time(self):
+        """Two teams.chat graphs (graph.load_dir appends each file). The loop's own `now` must not overwrite the time that the
+        second graph's status question is counted at: both results come back, and the time is the one given."""
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as gd:
+            out = Path(d)
+            write_approvals(d, {"2": approved_promise()})
+            base = json.loads((ROOT / "graphs" / "teams_chat.json").read_text(encoding="utf-8"))
+            Path(gd, "a_teams_chat.json").write_text(json.dumps(base, ensure_ascii=False), encoding="utf-8")
+            Path(gd, "b_teams_chat.json").write_text(json.dumps({**base, "name": base["name"] + "-2"}, ensure_ascii=False),
+                                                     encoding="utf-8")
+            graphs = graph.load_dir(gd, PBS)
+            self.assertEqual(len(graphs["teams.chat"]), 2)
+            be = ReplayBackend({"intent": {"choice": "status", "confidence": 0.9, "probabilities": {}}})
+            with mock.patch.dict(os.environ, {"KIMERU_PROMISES": "1"}), \
+                    mock.patch.object(promises, "snapshot", wraps=promises.snapshot) as snapshot:
+                results = cli.process(self.event("19:c1"), graphs, be, out, PBS, now=MON)
+            self.assertEqual(len(results), 2)
+            for res in results:
+                self.assertEqual((res["node"], res["outcome"]), ("reply_status", "decide"))
+                self.assertTrue(res["needs_human"])
+                self.assertEqual(res["advice"], ADVICE)
+            self.assertTrue(snapshot.call_args_list)
+            self.assertEqual({c.args[1] for c in snapshot.call_args_list}, {MON})
 
 
 class TestNothingIsWrittenAndTheRankIsAskedAsBefore(unittest.TestCase):

@@ -67,7 +67,7 @@ SETTINGS = {
     "brief_style": ("KIMERU_BRIEF_STYLE", "rank"),               # desk = a fixed order and no judge call or writer call for the brief (brief.py, daily.py)
     "inbox_done_keep_days": ("KIMERU_INBOX_DONE_KEEP_DAYS", "7"),   # days a judged original (inbox/done/*.json, the full text) is kept; 0 = never deleted
     "learn": ("KIMERU_LEARN", "0"),                            # 1 = the reply 違う N / 違う N k labels a decision (reviews.jsonl) and 詳細 N lists the question it was unsure of
-    "post_reason": ("KIMERU_POST_REASON", "0"),                # 1 = the approval post and 詳細 N add one line: the question the model was unsure of (explain.py)
+    "post_reason": ("KIMERU_POST_REASON", "0"),                # 1 = the approval post and 詳細 N add one line: the question the model was unsure of (explain.py); 詳細 N also starts with the words a rule read (hit / rejected / sent to a person, at most 3 lines: explain.rule_evidence)
     "post_kind_mark": ("KIMERU_POST_KIND_MARK", "0"),          # 1 = a post that waits only for a writer's draft says 下書き: in its first line; brief, toast and digest count it apart (notify.py, brief.py, stats.py)
     "sent_watch": ("KIMERU_SENT_WATCH", "0"),                  # 1 = after an OK, the self-chat list shows whether the reply went out: as_is / edited / other, kept without the text (sent.py)
     "sent_watch_days": ("KIMERU_SENT_WATCH_DAYS", "3"),        # days after an OK in which that send is looked for (sent.py)

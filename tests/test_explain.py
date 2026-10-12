@@ -352,5 +352,35 @@ class TestTheLineIsShortAndCountsNoRule(unittest.TestCase):
                 self.assertEqual(explain.rule_evidence(rec), [])
 
 
+ADO = next(g for lst in GRAPHS.values() for g in lst if g["name"] == "workitem-intake")
+ADO_LONG = "作業を進めています。" * 14 + "本番で決済ができません。"   # the rule word comes after the 120 characters a record keeps
+RULE_ADO = "規則: 当たった語「本番で決済ができません」"
+
+
+class TestTheWholeMaterialOfAWaitingWorkItemGivesTheWords(unittest.TestCase):
+    """An ADO work item: the record keeps its description cut to 120 characters, so the rule word is in the whole material only."""
+
+    def setUp(self):
+        env = mock.patch.dict(os.environ, {"KIMERU_POST_REASON": "1"})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def ado_record(self):
+        ev = {"kind": "ado.workitem.created", "id": "w5", "type": "Bug", "title": "注文画面の確認", "description": ADO_LONG}
+        rec = graph.run(ADO, ev, ReplayBackend({}), playbooks=PBS)
+        rec.update({"revision": 1, "graph_key": f"{ADO['name']}@{cli._graph_version(ADO)}:ado.workitem.created:w5",
+                    "event": cli._recorded_event(ev)})
+        return rec
+
+    def test_a_cut_description_names_its_words_only_from_the_whole_material_of_the_item(self):
+        rec = self.ado_record()
+        full = {"material": {"description": ADO_LONG}}
+        self.assertNotIn("本番", rec["event"]["description"])   # the recorded text reads no rule word
+        self.assertEqual(explain.rule_evidence(rec), [])
+        self.assertEqual(explain.rule_evidence(rec, full), [RULE_ADO])
+        self.assertNotIn(RULE_ADO, notify.format_detail(7, rec).splitlines())
+        self.assertEqual(notify.format_detail(7, rec, full).splitlines()[1], RULE_ADO)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -13,6 +13,7 @@ python -m kimeru run <payload.json>...
 python -m kimeru watch inbox/                     # inbox/*.json と議事録 *.txt を常駐処理（処理済みは inbox/done/）
 python -m kimeru digest                           # 今日の判断件数と確認待ち
 python -m kimeru memory <N>                        # #N と同じ相手・チャット・作業項目・規則の前例と経緯（読むだけ。`KIMERU_MEMORY` の 0/1 によらず表示）
+python -m kimeru owed                              # 返事の借り: 自分が返事をまだ返していない件と、閉じた件の内訳（`KIMERU_SENT_WATCH=1` のときだけ。読むだけ）
 python -m kimeru pull teams|ado|alerts --inbox inbox    # ado: --org <組織 or URL> [--project <名前>] [--login]
 python -m kimeru brief [--post [--send]]
 python -m kimeru daily [--once] [--send]
@@ -189,6 +190,7 @@ python -m kimeru config path
 | `KIMERU_SENT_WATCH` | `1` で、承認した返信が相手へ送られたかを、自分とのチャットの一覧で見届ける。承認のあと、その相手のチャットの一覧に自分の新しい発言が現れたら、承認した文と比べ、`as_is`（同じ）・`edited`（直した）・`other`（別の文）のどれかを、その件に 1 つだけ残す（時刻と一致の度合いも。本文は残さない）。チャットは開かず、クリックも送信もしない。`daily` の定期の実行だけが見る。一覧に出るのは発言の有無で、相手に届いたことの確認ではない（既定 0。0 のときは一覧を見ず、何も残さず、投稿・朝のまとめ・トースト・通知の文も変わらない） |
 | `KIMERU_SENT_WATCH_DAYS` | 承認から送りを見届ける日数（既定 3。1 以上の整数。それ以外の値は 3 として扱う）。この日数を過ぎた件は見ない（`KIMERU_SENT_WATCH=1` のときだけ効く） |
 | `KIMERU_SENT_NUDGE_HOURS` | 承認から、送りが一覧で見えず `送った N` の返信もないまま、この時間を過ぎた件を催促するまでの時間（既定 2。1 以上の整数。それ以外の値は 2 として扱う）。`KIMERU_SENT_WATCH=1` のときだけ働きます。催促は自分とのチャットに `[kimeru 未送信 #N]` として 1 日 1 通、件ごとに 1 回だけ出します（その日に新しく催促の時間を過ぎた件だけを並べ、翌日は催促済みの件を出しません）。`送った N`（自分とのチャットに、件の番号だけで返信）は、その件の催促を止めます。数えるのは、承認の投稿（`[kimeru #N]`）か催促の投稿（`[kimeru 未送信 #N]`）の画面にある下に書いたものだけです（承認の投稿が画面の外へ流れていても、催促の下なら数えます。催促より上に書いたものは数えません）。状態・投稿・承認・実行は変わりません。`push` の経路には「未送信 N 件（#…）」と件数と番号だけを送ります。休み（`KIMERU_QUIET_WORDS`）と時刻のまとめ（`KIMERU_INTERRUPT=sittings`）の間は、この push も緊急でない件と同じく保留し、時刻に 1 回送ります。見届けは `KIMERU_SENT_WATCH_DAYS` 日の間だけ。`KIMERU_SENT_WATCH=0`（既定）では催促も `送った N` の読みも行いません |
+| `KIMERU_OWED_KEEP_DAYS` | `KIMERU_SENT_WATCH=1` のときだけ働く、返事の借り（自分がまだ返事を返していない件）を開いたままにする日数（既定 5。1 以上の整数。それ以外の値は 5 として扱う）。朝のまとめの「返事を待っている人」（最大 5 件、残りは「ほか N 件」。`ask_pm` は雑談も入るため名前を出さない）と `kimeru owed` は、この日数の間の件だけを出し、過ぎた件は期限切れとして閉じる。閉じた件（自分のメッセージが相手のチャットの一覧に出た `own_preview`・NG `ng`・済 `done`・期限 `expired`）は `out/owed.jsonl` に、チャットの識別子・時刻・閉じ方・件数だけを 90 日残す（本文と名前は残らない）。`KIMERU_SENT_WATCH=0`（既定）では何も読まず、何も書かず、朝のまとめも変わらない |
 | `KIMERU_IDLE_SEC` | Teams を操作する前に、キーボード・マウスが止まっているべき秒数（既定: `post`・`send` は 3、teams-copilot は 4。`0` で待たない。他のチャットを開いて読む処理には効かず、そちらは `KIMERU_READ_IDLE_SEC`（既定 30）だけで決まる） |
 | `KIMERU_STATE_DIR` | （`schedule install` が、設定されていれば自動運転の起動行に引き継ぎます）状態フォルダ（設定ファイル、自分とのチャットの目印、writer の休止の印、診断）。未設定なら `%LOCALAPPDATA%\kimeru` |
 | `KIMERU_COPILOT_EXE` / `KIMERU_CLAUDE_EXE` / `KIMERU_CODEX_EXE` / `KIMERU_GROK_EXE` | 各 CLI の場所（PATH に無いとき） |

@@ -72,6 +72,7 @@ SETTINGS = {
     "sent_watch": ("KIMERU_SENT_WATCH", "0"),                  # 1 = after an OK, the self-chat list shows whether the reply went out: as_is / edited / other, kept without the text (sent.py)
     "sent_watch_days": ("KIMERU_SENT_WATCH_DAYS", "3"),        # days after an OK in which that send is looked for (sent.py)
     "sent_nudge_hours": ("KIMERU_SENT_NUDGE_HOURS", "2"),      # hours after an OK, with no send seen and no `送った N`, before the one nudge of that reply (sent.py; only with sent_watch=1)
+    "owed_keep_days": ("KIMERU_OWED_KEEP_DAYS", "5"),          # days a reply the PM owes stays open before it expires (owed.py; only with sent_watch=1)
     "memory": ("KIMERU_MEMORY", "0"),                          # 1 = the post's arrow line ends with 前例, 詳細 N has 「これまでの経緯」, the brief counts the same person's items (memory.py; read only)
     "link_related": ("KIMERU_LINK_RELATED", "0"),              # 1 = the same case is shown beside its earlier item (↔), an alert that comes back within 24 hours is a 再発火 notice, a repeated ado.create gets dup_of (link.py; the judge never sees it)
     "record_event_full": ("KIMERU_RECORD_EVENT_FULL", "0"),   # 1 = decisions.jsonl keeps the whole event (2,000 characters of text), not a summary-length excerpt
@@ -98,7 +99,7 @@ SECRET_ENV = ("TYPESAFE_API_KEY", "KEV_API_KEY", "CLM_API_KEY", "KIMERU_PUSH_TEA
 SECRET_KEY = re.compile(r"key|token|secret|passw|credential|auth|hook.*url|push.*url|teams_url", re.I)
 # settings whose value may be written to the daily log (the others are recorded by name and source only)
 LOGGABLE = ("backend", "writer", "writer_model", "codex_model", "codex_effort", "grok_model", "toast", "brief_hour",
-            "push", "push_min_minutes", "execute", "read_full", "record_event_full", "judge_text_max", "priority", "cycle_budget_sec", "plan_lean", "batch_questions", "learn", "post_reason", "post_kind_mark", "hold_stale_days", "sent_watch", "sent_watch_days", "sent_nudge_hours", "brief_delta", "brief_style", "memory", "promises", "interrupt", "sit_hours", "link_related", "control_words", "quiet_words", "judge_context", "redraft_prev", "weekly_report", "spot_check_per_day")
+            "push", "push_min_minutes", "execute", "read_full", "record_event_full", "judge_text_max", "priority", "cycle_budget_sec", "plan_lean", "batch_questions", "learn", "post_reason", "post_kind_mark", "hold_stale_days", "sent_watch", "sent_watch_days", "sent_nudge_hours", "owed_keep_days", "brief_delta", "brief_style", "memory", "promises", "interrupt", "sit_hours", "link_related", "control_words", "quiet_words", "judge_context", "redraft_prev", "weekly_report", "spot_check_per_day")
 
 # settings with a fixed set of values: checked by `config set` and again when read. A value is first read forgivingly
 # (case, spaces, on/off, true/false, yes/no); if it is still not allowed, `backend` stops the command (it decides where the
@@ -366,7 +367,7 @@ def rows():
 # has its default (a constant of kimeru). Any other value that was set (a folder, an organization, a subscription, an
 # address, a model or deployment name) is only reported as set.
 SHARE_VALUES = ("backend", "writer", "toast", "brief_hour", "priority", "cycle_budget_sec", "plan_lean", "batch_questions", "learn", "post_reason", "post_kind_mark",
-                "sent_watch", "sent_watch_days", "sent_nudge_hours", "execute", "execute_signature", "send_ready_post", "open_chat_link", "read_full", "record_event_full",
+                "sent_watch", "sent_watch_days", "sent_nudge_hours", "owed_keep_days", "execute", "execute_signature", "send_ready_post", "open_chat_link", "read_full", "record_event_full",
                 "read_max_open", "read_budget_sec", "read_messages", "read_min_preview", "read_idle_sec", "read_click", "read_max_defer", "preview_cut_len", "full_text_keep_days", "inbox_done_keep_days", "judge_text_max", "title_max", "push",
                 "push_min_minutes", "idle_sec", "codex_effort", "hold_stale_days", "brief_delta", "brief_style", "memory", "promises", "interrupt", "sit_hours", "link_related", "control_words", "quiet_words", "judge_context", "redraft_prev", "weekly_report", "spot_check_per_day")
 

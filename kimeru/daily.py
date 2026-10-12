@@ -10,7 +10,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import actions, attention, brief as brief_mod, config, control, events, fsutil, fulltext, graph, hold, learn, notify, pull, push, sent, spot
+from . import actions, attention, brief as brief_mod, config, control, events, fsutil, fulltext, graph, hold, learn, notify, owed, pull, push, sent, spot
 from .backends import BackendUnavailable, is_jev
 
 
@@ -460,6 +460,14 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
         changes.extend(got)
         return [f"#{c['id']}:{c['status']}" for c in changes]
     _step(out, "approvals", do_collect, r)
+    if real and send and owed.enabled():   # R29 (sent_watch=1 only): the closed debts of the replies the PM owes go to out/owed.jsonl
+        def do_owed():
+            added = owed.settle(out, now=now)
+            if added is None:
+                _busy(r, "owed", "owed.lock is held by another run; nothing was recorded this cycle")
+                return "busy"
+            return added or "nothing new"
+        _step(out, "owed", do_owed, r)
     if send:   # R09: a held item whose day has come is posted again under the same number, in this cycle; nothing is decided by it
         try:
             back = hold.resurface(out, now)

@@ -7,7 +7,8 @@ with an overdue promise (status_guard). Three sources:
       from the day the PM's OK was observed (measurement.approval_observed_at); an item without that time is left out.
   (b) a decision_later judgment (graphs/teams_chat.json): a request to decide this week (判断依頼（今週中と判定）), counted from its
       decision day and shown until DECISION_SHOW_DAYS after that day. It is not a promise made to anyone, so it is only in the brief.
-  (c) a step of an approved item that is due today or this week (due_level <= 1, not 期限要確認), counted as the brief counts it.
+  (c) a step of an approved item that is due today or this week (due_level <= 1, not 期限要確認), counted as the brief counts it, and
+      not a step that 完了 N k marked done (R30, work.done_steps).
 An (a) or (c) promise is closed when the item's work is done, and it is left out PROMISE_KEEP_DAYS after its day (no reply closes it).
 Where it shows (promises=1 only): the morning brief's 約束 section, the end of the arrow line of a new post from the same chat, 詳細 N
 (the chat's open promises of a and c). With promises=0 nothing here is read.
@@ -17,7 +18,7 @@ import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from . import brief, config, fsutil, memory, plan
+from . import brief, config, fsutil, memory, plan, work
 
 PROMISE_KEEP_DAYS = 7       # an (a) or (c) promise is shown this many days after its day, then left out
 DECISION_SHOW_DAYS = 2      # a (b) decision is shown until this many days after its day (the brief drops it on that day)
@@ -165,8 +166,9 @@ def _from_item(n, item, rec, ev):
                     break
     at = _when(rec.get("at"))
     if at is not None:
+        done = work.done_steps(item)   # R30: a step that 完了 N k marked is no promise any more (empty at promises=0)
         for s in (rec.get("plan") or {}).get("steps") or []:
-            if isinstance(s, dict) and s.get("due_level", 2) <= 1 and s.get("due") != plan.DUE_UNSURE:
+            if isinstance(s, dict) and s.get("due_level", 2) <= 1 and s.get("due") != plan.DUE_UNSURE and s.get("id") not in done:
                 rows.append(_entry("c", n, chat, who, _clip(s.get("title"), LABEL_MAX),
                                    brief.due_date(rec["at"], s["due_level"]), at.astimezone().date()))
     return rows

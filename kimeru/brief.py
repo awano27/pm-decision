@@ -107,24 +107,25 @@ def collect(out, now=None, days=2):
         stable = merged_aliases.get((rec.get("graph"), str(rec.get("event_id"))))
         return approvals_by_key.get(stable) if stable else None
 
-    def add_plan(rec, source_key):
+    def add_plan(rec, source_key, done=frozenset()):   # done: the steps of an approved case that 完了 N k marked (work.done_steps)
         p = rec.get("plan")
         at = rec.get("at")
         today = now.astimezone().date()
         for s in (p or {}).get("steps", []):
-            if s.get("due_level", 2) <= 1:
+            if s.get("due_level", 2) <= 1 and s.get("id") not in done:
                 # "今日" was relative to the decision; re-anchor it so yesterday's "today" shows as overdue.
                 due = due_date(at, s["due_level"]) if at else None
                 label, level = (due_label(due, today), 0 if due <= today else 1) if due else (s["due"], s["due_level"])
                 add(f"step:{source_key}:{p['playbook']}:{s['id']}", "step",
                     f"{p['title']}: {s['title']}（{label}）", f"{p['title']}: {s['title']}", level, rec)
 
+    from . import work   # R30: the steps an approved case marked done with 完了 N k (empty at promises=0)
     for _, item in ap.get("items", {}).items():
         record = item.get("record") or {}
         key = item.get("key") or f"{record.get('graph')}:{record.get('event_id')}:{record.get('node')}"
         progress = item.get("work") if isinstance(item.get("work"), dict) else {}
         if item.get("status") == "approved" and progress.get("state") != "done":
-            add_plan(record, key)
+            add_plan(record, key, work.done_steps(item))
 
     for rec in reversed(decisions):
         linked = case_for(rec)

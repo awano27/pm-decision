@@ -260,7 +260,8 @@ def _begin_cycle_locked(out, now=None):
         changed = True
     if routes:
         posted, notices, unposted = pending(out)
-        everything = {k for _, k in posted} | {f"unposted:{n}" for n in unposted} | {f"unsent:{n}" for n in unsent_numbers(out, now)}             | {f"due:{n}" for n in due_today_numbers(out, now)}
+        everything = ({k for _, k in posted} | {f"unposted:{n}" for n in unposted} | {f"unsent:{n}" for n in unsent_numbers(out, now)}
+                      | {f"due:{n}" for n in due_today_numbers(out, now)})   # due: R30 (promises=1), the numbers only
         for route in routes:
             if "notice_n" not in data["routes"].get(route, {}):
                 data["routes"][route] = {"sent": sorted(everything), "notice_n": len(notices), "fails": 0,
@@ -310,7 +311,8 @@ def _run_locked(out, now=None, sender=None, routes=None, hold=None):
     posted, notices, unposted = pending(out)
     unsent = unsent_numbers(out, now)
     due = due_today_numbers(out, now)   # R30 (promises=1): the cases whose deadline post was made today
-    everything = {k for _, k in posted} | {f"unposted:{n}" for n in unposted} | {f"unsent:{n}" for n in unsent}         | {f"due:{n}" for n in due}
+    everything = ({k for _, k in posted} | {f"unposted:{n}" for n in unposted} | {f"unsent:{n}" for n in unsent}
+                  | {f"due:{n}" for n in due})
     for r in [r for r in data["routes"] if r not in routes]:
         del data["routes"][r]            # turned off: turning it on again starts from a fresh baseline
     result = {}

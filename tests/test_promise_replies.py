@@ -15,10 +15,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
-from kimeru import config, notify, push, work
+from kimeru import brief, config, fsutil, notify, promises, push, work
+from kimeru.backends import StubBackend
 from tests.test_notify import REC, FakeBridge, write_queue
 
 NOW = datetime(2026, 10, 12, 9, 0)                                   # naive local: the cycle's clock (a Monday)
+NOW_LOCAL = NOW.astimezone()                                         # the same clock, aware (the brief takes an aware time)
 AT = datetime(2026, 10, 12, 8, 0).astimezone().isoformat(timespec="seconds")   # the record's time: local, the same day
 REC2 = {**REC, "event_id": "4813", "advice": "別の件"}
 GOLDEN_POST = "[kimeru #278] ADO #4812\n→ 優先度を判定できないチケット #4812\nOK 278 / NG 278 / 詳細 278"
@@ -28,6 +30,12 @@ GOLDEN_PUSH = [
     "kimeru: 自動決定の通知 1 件 / 投稿できていない確認待ち 2 件 / 未送信 1 件（#4）。Teams の自分とのチャットを確認してください",
     "kimeru: 確認待ち 2 件（#3, #5） / 自動決定の通知 2 件 / 投稿できていない確認待ち 1 件 / 未送信 2 件（#4, #6）。Teams の自分とのチャットを確認してください",
 ]
+GOLDEN_BRIEF = ("[kimeru brief 2026-10-12] 今日の進め方\n"               # the morning brief of the approved case (captured before the review fix)
+                "1. 一次回答: 一次回答の下書き（今日）\n"
+                "2. 一次回答: 担当者へ確認を依頼（今日）\n"
+                "\n"
+                "承認済み・未完了の作業:\n"
+                "- #1 優先度を判定できないチケット #4812")
 
 
 def plan_record(event_id="4812"):
@@ -76,6 +84,15 @@ def item(out, n=1):
 
 def notices(bridge):
     return [text for text, _ in bridge.posts if text.startswith("[kimeru 期限")]
+
+
+def folder(out):
+    """Every file of the state folder, by name and bytes: a cycle that writes nothing leaves this equal."""
+    return {p.name: p.read_bytes() for p in sorted(Path(out).iterdir()) if p.is_file()}
+
+
+def brief_text(out, when):
+    return brief.build(out, StubBackend(), now=when.astimezone(), date=when.date().isoformat())[0]
 
 
 class TestTheReplyForms(unittest.TestCase):
@@ -139,6 +156,16 @@ class TestDefaultIsUnchanged(unittest.TestCase):
         self.assertFalse(work.enabled())
         self.assertFalse(work.awaiting({"items": {}}, NOW))
 
+    def test_the_morning_brief_of_an_approved_case_is_the_golden_text_and_a_step_done_with_k_is_not_read_at_0(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = approved_case(d)
+            self.assertEqual(brief_text(out, NOW), GOLDEN_BRIEF)
+            data = json.loads((out / "approvals.json").read_text(encoding="utf-8"))
+            data["items"]["1"]["work"] = {"steps": {"s2": {"done_at": AT}}}      # as if 完了 1 2 had been read at promises=1
+            (out / "approvals.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            self.assertEqual(brief_text(out, NOW), GOLDEN_BRIEF)                 # at 0 both steps stay, as before R30
+            self.assertEqual(work.done_steps(item(out)), frozenset())
+
 
 class TestTheDeadlinePost(unittest.TestCase):
     def test_the_deadline_post_lists_the_steps_due_today_once_a_day(self):
@@ -156,6 +183,8 @@ class TestTheDeadlinePost(unittest.TestCase):
             run(out, chat)
             self.assertEqual(len(notices(chat)), 1)          # the same day: not again
             self.assertEqual(item(out)["work"]["notice_seq"], 1)
+            for text, _ in chat.posts:                        # every post of the cycle is a kimeru post (the reader's K: boundary)
+                self.assertTrue(text.startswith("[kimeru"), text)
 
     def test_nothing_is_posted_before_nudge_hour(self):
         with mock.patch.dict(os.environ, {"KIMERU_PROMISES": "1", "KIMERU_NUDGE_HOUR": "10"}), tempfile.TemporaryDirectory() as d:
@@ -169,11 +198,15 @@ class TestTheDeadlinePost(unittest.TestCase):
     def test_an_overdue_step_is_listed_again_the_next_morning_until_it_is_done(self):
         with mock.patch.dict(os.environ, {"KIMERU_PROMISES": "1"}), tempfile.TemporaryDirectory() as d:
             out = approved_case(d)
-            chat = Chat(["P:1", "K:1", "R:完了 1 2"])
-            run(out, chat)                                    # day 1: the post lists both steps; the reply below it
-            run(out, chat, now=NOW + timedelta(days=1))       # day 2 (the reply came after the post of day 1 is the boundary)
+            chat = Chat(["P:1"])
+            run(out, chat)                                    # day 1: the post lists both steps
+            day1 = notices(chat)[-1]
+            self.assertIn("完了 1 1", day1)
+            self.assertIn("完了 1 2", day1)
+            chat.timeline = ["P:1", "K:1", "R:完了 1 2"]      # the PM answers below that post
+            run(out, chat, now=NOW + timedelta(days=1))       # day 2: the reply is read first, then the day's post is made
             day2 = notices(chat)[-1]
-            self.assertIn("完了 1 1", day2)
+            self.assertIn("完了 1 1", day2)                    # step 1 is still open
             self.assertNotIn("完了 1 2", day2)                # step 2 was done: it is gone the next morning
 
     def test_a_case_done_by_hand_gets_no_deadline_post(self):
@@ -258,6 +291,29 @@ class TestTheReplies(unittest.TestCase):
         self.assertEqual(notices(chat), [])
         self.assertEqual(chat.reads, 0)
 
+    def test_a_dry_run_or_a_cycle_without_send_leaves_every_file_of_the_state_folder_as_it_was(self):
+        chat = Chat(["P:1", "K:1", "R:完了 1 2", "R:完了 1"])
+        before = folder(self.out)
+        notify.collect(self.out, chat, real=False, send=True, now=NOW)
+        notify.collect(self.out, chat, real=True, send=False, now=NOW)
+        self.assertEqual(folder(self.out), before)
+        self.assertEqual(chat.reads, 0)
+
+    def test_a_busy_approvals_lock_changes_no_step_and_the_reply_is_read_on_the_next_free_cycle(self):
+        chat = Chat(["P:1", "K:1", "R:完了 1 2"])
+        with fsutil.exclusive(notify.lock_path(self.out)) as got:
+            self.assertTrue(got)
+            res = notify.collect(self.out, chat, real=True, send=True, now=NOW)
+            with self.assertRaises(work.WorkError):
+                work.set_state(self.out, 1, "done", now=NOW)
+        self.assertTrue(res.busy)                              # nothing was read while the lock was held
+        self.assertEqual(chat.reads, 0)
+        self.assertNotIn("steps", item(self.out).get("work", {}))
+        self.assertEqual(journal(self.out), [])
+        run(self.out, chat)                                    # the lock is free: the same reply is applied once
+        self.assertEqual(item(self.out)["work"]["steps"].keys(), {"s2"})
+        self.assertEqual(len(journal(self.out)), 1)
+
     def test_the_self_chat_is_read_only_inside_the_window_after_a_deadline_post(self):
         chat = Chat(["P:1"])
         run(self.out, chat)                                   # the deadline post of the day is made
@@ -277,6 +333,57 @@ class TestTheReplies(unittest.TestCase):
         data = json.loads((self.out / "approvals.json").read_text(encoding="utf-8"))
         self.assertEqual(data[work.NOTICE_DAY], "2026-10-12")
         self.assertEqual(item(self.out)["work"]["notice_day"], "2026-10-12")
+
+
+class TestAStepDoneWithKLeavesTheBriefAndTheLedger(unittest.TestCase):
+    """`完了 N k` marks one step of an approved case done. The next morning the brief's step lines and the 約束 section (the promises
+    ledger's (c) rows) lose that step and nothing else; the case itself stays open. With promises=1 only."""
+
+    def setUp(self):
+        self.env = mock.patch.dict(os.environ, {"KIMERU_PROMISES": "1"})
+        self.env.start()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.out = approved_case(self.tmp.name)
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def test_after_done_1_2_the_brief_and_the_promise_section_lose_only_step_2_the_next_morning(self):
+        day2 = NOW + timedelta(days=1)
+        chat = Chat(["P:1"])
+        run(self.out, chat)                                       # day 1: the deadline post lists steps 1 and 2
+        chat.timeline = ["P:1", "K:1", "R:完了 1 2"]
+        before, before_section = brief_text(self.out, day2), promises.brief_section(self.out, day2)
+        self.assertIn("担当者へ確認を依頼", before)                # control: nothing is done yet on day 2
+        self.assertIn("約束: 超過 2 件", before_section)
+
+        run(self.out, chat, now=day2)                             # day 2: the reply is read, then the day's post is made
+        self.assertEqual(item(self.out)["work"]["steps"].keys(), {"s2"})
+        self.assertIsNone(item(self.out)["work"].get("state"))    # the case is still open
+        self.assertIn("完了 1 1", notices(chat)[-1])
+        self.assertNotIn("完了 1 2", notices(chat)[-1])
+
+        after = brief_text(self.out, day2)
+        self.assertIn("一次回答の下書き", after)                   # step 1 stays
+        self.assertNotIn("担当者へ確認を依頼", after)              # step 2 is gone
+        self.assertNotIn("来月の計画を見直す", after)              # the later step was never in the brief
+        self.assertIn("- #1 ", after)                             # the case is still listed as open work
+
+        after_section = promises.brief_section(self.out, day2)
+        self.assertIn("約束: 超過 1 件", after_section)
+        self.assertIn("#1「一次回答の下書き」", after_section)
+        self.assertNotIn("担当者へ確認を依頼", after_section)
+
+    def test_a_step_done_with_k_does_not_come_back_on_a_later_day(self):
+        chat = Chat(["P:1", "K:1", "R:完了 1 2"])
+        run(self.out, chat)                                       # the reply is read first (no post yet), then day 1's post
+        for days in (1, 2):
+            run(self.out, chat, now=NOW + timedelta(days=days))
+            self.assertNotIn("担当者へ確認を依頼", brief_text(self.out, NOW + timedelta(days=days)))
+            self.assertNotIn("担当者へ確認を依頼", promises.brief_section(self.out, NOW + timedelta(days=days)))
+        self.assertEqual(item(self.out)["work"]["steps"].keys(), {"s2"})
+        self.assertEqual(len(journal(self.out)), 1)
 
 
 class TestPushAndSettings(unittest.TestCase):

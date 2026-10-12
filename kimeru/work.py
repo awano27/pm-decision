@@ -289,6 +289,16 @@ def _steps(item):
     return ((item.get("record") or {}).get("plan") or {}).get("steps") or []
 
 
+def done_steps(item):
+    """The ids of the plan steps that `完了 N k` marked done on an approved case. Empty at promises=0: nothing of R30 is read there,
+    so the brief and the 約束 section are the same as before R30 (a step stays listed)."""
+    if not enabled():
+        return frozenset()
+    progress = item.get("work") if isinstance(item.get("work"), dict) else {}
+    steps = progress.get("steps")
+    return frozenset(steps) if isinstance(steps, dict) else frozenset()
+
+
 def _due_lines(n, item, progress, today):
     """The lines of one case in the deadline post. The case's own day (work.due, set by 延期 or the CLI) when it is set, otherwise each
     plan step of 今日 / 今週 whose day (from the decision) has come. Due: that day is today or earlier, within DUE_KEEP_DAYS."""

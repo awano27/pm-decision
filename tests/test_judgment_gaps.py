@@ -291,5 +291,39 @@ class TestDailyUsesTheLastBrief(unittest.TestCase):
                 brief.build = real
 
 
+class TestTeamsRequests(unittest.TestCase):
+    """R35 (split_asks=1): however two requests in one chat message are judged, the message ends at least as high (needs_human 2,
+    notify 1, nothing 0) as its body alone would, and only a request of a fixed kind moves the route. The judges are fakes."""
+
+    def test_no_pair_of_requests_ends_lower_than_the_body_alone_and_no_path_names_a_missing_node(self):
+        from tests.test_split_asks import CHOICES, NODES, TWO, judge, question_ids, rank
+        labels = CHOICES + ("unsure",)
+        for body in labels:
+            base, _ = judge(TWO, body, split=False)
+            for first in labels:
+                for second in labels:
+                    with self.subTest(body=body, requests=(first, second)):
+                        res, be = judge(TWO, body, [first, second], split=True)
+                        self.assertGreaterEqual(rank(res), rank(base))
+                        self.assertIn(res["node"], NODES)
+                        self.assertTrue(all(step["node"] in NODES for step in res["path"]))
+                        self.assertEqual(question_ids(be)[0], ["intent", "intent_0", "intent_1"])
+                        for state, qids in be.calls[1:]:
+                            self.assertNotIn("asks", state, qids)
+
+    def test_a_request_moves_the_route_only_in_the_three_listed_ways(self):
+        from tests.test_split_asks import CHOICES, TWO, judge
+        moved = {}
+        for body in CHOICES:
+            for label in CHOICES + ("unsure",):
+                res, _ = judge(TWO, body, [label, label], split=True)
+                if res["node"] != judge(TWO, body, split=False)[0]["node"]:
+                    moved[(body, label)] = res["node"]
+        for (body, label), node in moved.items():
+            self.assertTrue(label == "unsure" or label == "incident" and body in ("status", "fyi", "decision")
+                            or body in ("status", "fyi") and label in ("decision", "requirements", "none"),
+                            (body, label, node))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -415,6 +415,14 @@ def _draft_mark(rec):
     return config.value("post_kind_mark") == "1" and rec.get("held_reason") == "draft"
 
 
+def _others(rec):
+    """R35 (split_asks=1): "（ほかに依頼 N 件）" when the message had N+1 requests; the record keeps the count only (`asks.n`).
+    "" otherwise, so with the setting off (no `asks` in the record) the texts are unchanged."""
+    asks_rec = rec.get("asks")
+    n = int(asks_rec.get("n") or 0) if isinstance(asks_rec, dict) else 0
+    return f" （ほかに依頼 {n - 1} 件）" if n >= 2 else ""
+
+
 def format_post(n, rec, full=None, marks=None, precedent=None, promise=None, related=None):
     """The approval post "[kimeru #N]": at most 5 short lines. Everything else (the source text, the memo, every draft, the
     revision, the kinds of action) is in the answer to `詳細 N` (format_detail). `full` is not shown here. `marks` (R09, hold.post_marks):
@@ -438,7 +446,7 @@ def format_post(n, rec, full=None, marks=None, precedent=None, promise=None, rel
     draft_only = _draft_mark(rec)   # R12: 下書き: in the first line; the number "[kimeru #N]" stays where the reader looks for it
     from . import promises   # R31 (promises=1): a reply that answers an ask-back #M is marked after the number on the first line; "" otherwise
     answer = promises.answer_mark(rec)
-    lines = [f"[kimeru #{n}] {answer + ' ' if answer else ''}{'下書き: ' if draft_only else ''}{update}{_who(rec)}{held_mark}{resurfaced}{named}"]
+    lines = [f"[kimeru #{n}] {answer + ' ' if answer else ''}{'下書き: ' if draft_only else ''}{update}{_who(rec)}{_others(rec)}{held_mark}{resurfaced}{named}"]
     if str(rec.get("event_kind") or "").startswith("ado.") and any(a.get("type") == "ado.comment" for a in actions) and not memo:
         proposal = "情報不足: 追記依頼のコメント案あり"
     else:
@@ -520,7 +528,7 @@ def format_detail(n, rec, full=None, precedent=None, promise=None):
         else:
             effects.append("記録のみ")
     revision = rec.get("revision", 1)
-    lines = [f"[kimeru 詳細 #{n}] 判断が必要（{rec.get('graph')}） / 改訂 {revision}",
+    lines = [f"[kimeru 詳細 #{n}] 判断が必要（{rec.get('graph')}）{_others(rec)} / 改訂 {revision}",
              f"判断: {advice}", "次の一手: " + (next_action or no_memo),
              "不足情報: " + (" / ".join(str(v) for v in missing) if missing else ("メモに記載なし" if memo else no_memo)),
              "OK の効果: " + ("; ".join(dict.fromkeys(effects)) if effects else "記録のみ"),
@@ -1223,7 +1231,7 @@ def format_notice(rec, linked=None):
     adds nothing, and the notice is the same text as before."""
     kind = str(rec.get("event_kind") or "")
     what = _clip(_ado_label(rec), 80) if kind.startswith("ado.") else _clip(rec.get("summary") or rec.get("advice") or kind, 80)
-    lines = [f"[kimeru 通知] {(linked or {}).get('prefix') or ''}{what}"]
+    lines = [f"[kimeru 通知] {(linked or {}).get('prefix') or ''}{what}{_others(rec)}"]
     ran = list(dict.fromkeys(WHAT_RAN.get(e["action"].get("type"), "記録") for e in rec.get("executed", [])))
     note = _clip(rec["advice"], 120) if rec.get("advice") else "自動で決定しました"
     tail = (linked or {}).get("tail") or ""

@@ -79,6 +79,7 @@ SETTINGS = {
     "record_event_full": ("KIMERU_RECORD_EVENT_FULL", "0"),   # 1 = decisions.jsonl keeps the whole event (2,000 characters of text), not a summary-length excerpt
     "judge_text_max": ("KIMERU_JUDGE_TEXT_MAX", "1200"),       # characters of `text` the judge sees
     "judge_context": ("KIMERU_JUDGE_CONTEXT", "0"),            # 1 = a judge on this PC (Kev or CLM at a loopback address) also sees the earlier messages of the same chat (the newest 2 decided within 72 hours, 120 characters each, from decisions.jsonl) and today's date (cli._judge_context); the text is cut shorter to make room
+    "split_asks": ("KIMERU_SPLIT_ASKS", "0"),                  # 1 = a chat message with two or more requests is judged request by request, and the route is combined toward people only (asks.py, graph.run); the record keeps the count and the confidences, never the text; the judge is asked once more per request
     "title_max": ("KIMERU_TITLE_MAX", "100"),                  # characters of an action's title
     "push": ("KIMERU_PUSH", ""),                                   # comma list of: teams_webhook, webhook, outlook
     "push_min_minutes": ("KIMERU_PUSH_MIN_MINUTES", "5"),
@@ -101,7 +102,7 @@ SECRET_ENV = ("TYPESAFE_API_KEY", "KEV_API_KEY", "CLM_API_KEY", "KIMERU_PUSH_TEA
 SECRET_KEY = re.compile(r"key|token|secret|passw|credential|auth|hook.*url|push.*url|teams_url", re.I)
 # settings whose value may be written to the daily log (the others are recorded by name and source only)
 LOGGABLE = ("backend", "writer", "writer_model", "codex_model", "codex_effort", "grok_model", "toast", "brief_hour",
-            "push", "push_min_minutes", "execute", "read_full", "record_event_full", "judge_text_max", "priority", "cycle_budget_sec", "plan_lean", "batch_questions", "learn", "post_reason", "post_kind_mark", "hold_stale_days", "sent_watch", "sent_watch_days", "sent_nudge_hours", "owed_keep_days", "brief_delta", "brief_style", "memory", "promises", "nudge_hour", "interrupt", "sit_hours", "link_related", "merge_recurring", "control_words", "quiet_words", "judge_context", "redraft_prev", "weekly_report", "spot_check_per_day")
+            "push", "push_min_minutes", "execute", "read_full", "record_event_full", "judge_text_max", "priority", "cycle_budget_sec", "plan_lean", "batch_questions", "learn", "post_reason", "post_kind_mark", "hold_stale_days", "sent_watch", "sent_watch_days", "sent_nudge_hours", "owed_keep_days", "brief_delta", "brief_style", "memory", "promises", "nudge_hour", "interrupt", "sit_hours", "link_related", "merge_recurring", "control_words", "quiet_words", "judge_context", "split_asks", "redraft_prev", "weekly_report", "spot_check_per_day")
 
 # settings with a fixed set of values: checked by `config set` and again when read. A value is first read forgivingly
 # (case, spaces, on/off, true/false, yes/no); if it is still not allowed, `backend` stops the command (it decides where the
@@ -113,7 +114,7 @@ CHOICES = {
     "toast": ("0", "1", "detail"),
     "plan_lean": _ONOFF, "batch_questions": _ONOFF, "learn": _ONOFF, "post_reason": _ONOFF, "post_kind_mark": _ONOFF, "sent_watch": _ONOFF, "read_full": _ONOFF, "read_click": _ONOFF, "record_event_full": _ONOFF, "open_chat_link": _ONOFF,
     "send_ready_post": _ONOFF, "execute_signature": _ONOFF, "kev_url_remote_ok": _ONOFF, "clm_url_remote_ok": _ONOFF,
-    "brief_delta": _ONOFF, "brief_style": ("rank", "desk"), "memory": _ONOFF, "link_related": _ONOFF, "merge_recurring": _ONOFF, "promises": _ONOFF, "control_words": _ONOFF, "quiet_words": _ONOFF, "judge_context": _ONOFF, "redraft_prev": _ONOFF, "weekly_report": _ONOFF,
+    "brief_delta": _ONOFF, "brief_style": ("rank", "desk"), "memory": _ONOFF, "link_related": _ONOFF, "merge_recurring": _ONOFF, "promises": _ONOFF, "control_words": _ONOFF, "quiet_words": _ONOFF, "judge_context": _ONOFF, "split_asks": _ONOFF, "redraft_prev": _ONOFF, "weekly_report": _ONOFF,
     "interrupt": ("all", "sittings"), "spot_check_per_day": ("0", "1", "2", "3", "4", "5"),
 }
 _YES, _NO = ("1", "on", "true", "yes"), ("0", "off", "false", "no")
@@ -371,7 +372,7 @@ def rows():
 SHARE_VALUES = ("backend", "writer", "toast", "brief_hour", "priority", "cycle_budget_sec", "plan_lean", "batch_questions", "learn", "post_reason", "post_kind_mark",
                 "sent_watch", "sent_watch_days", "sent_nudge_hours", "owed_keep_days", "execute", "execute_signature", "send_ready_post", "open_chat_link", "read_full", "record_event_full",
                 "read_max_open", "read_budget_sec", "read_messages", "read_min_preview", "read_idle_sec", "read_click", "read_max_defer", "preview_cut_len", "full_text_keep_days", "inbox_done_keep_days", "judge_text_max", "title_max", "push",
-                "push_min_minutes", "idle_sec", "codex_effort", "hold_stale_days", "brief_delta", "brief_style", "memory", "promises", "nudge_hour", "interrupt", "sit_hours", "link_related", "merge_recurring", "control_words", "quiet_words", "judge_context", "redraft_prev", "weekly_report", "spot_check_per_day")
+                "push_min_minutes", "idle_sec", "codex_effort", "hold_stale_days", "brief_delta", "brief_style", "memory", "promises", "nudge_hour", "interrupt", "sit_hours", "link_related", "merge_recurring", "control_words", "quiet_words", "judge_context", "split_asks", "redraft_prev", "weekly_report", "spot_check_per_day")
 
 
 def share_rows():

@@ -83,6 +83,7 @@ python -m kimeru --out <出力先> delivery confirm KIND TARGET --confirm-delive
 - 設定 `plan_lean=1` にすると、進め方（plan）は、不要と判断した手順の期限を聞きません（既定は無効: 呼び出しが増えるため。速くなるかは Kev で測ってから決めます）。最終的な行動は変わりません
 - 設定 `batch_questions=1` にすると、グラフの judge の質問を **1 回の呼び出し** にまとめます（既定は無効。規則だけで決まる経路は、どちらでも 0 問）。最終的な行動は、判断モデルが質問を互いに独立に答えるなら、1 問ずつと同じです
 - `batch_questions=1` のとき、規則の結果で通らない枝の質問は、聞きません（規則で外れた質問まで聞くと、質問が増えるため）
+- 設定 `split_asks=1` のとき、2 件以上の依頼がある Teams のチャットは、依頼ごとに判断します（R35）。組み合わせは `kimeru/graph.py` の `combine_requests` が決め、本文だけの判断より低い行き先にはなりません。組み合わせで通知も人も無い行き先になったときは、通知を付けます（`asks_guard`）。承認の投稿・詳細・通知の「（ほかに依頼 N 件）」は、記録に残る件数から作ります
 - 全文を読んで判断し直した件（1 回目はプレビュー、2 回目は全文）は、`perf` に、2 回の合計を残します
 - 測る: `python eval/measure_speed.py --backend kev [--repeat N]`（`sequential` / `lean` / `batch` の 3 通りを、呼び出し・質問・秒数・最終的な行動の違いの表で比べます）。この PC で Kev が起動しているかを先に確かめ、起動していなければ（または接続先がこの PC でなければ）、1 行の案内を出して終わります。Jev は受け付けません（性能の数値は公開できません）
 
@@ -167,6 +168,7 @@ python -m kimeru config path
 | `KIMERU_INBOX_DONE_KEEP_DAYS` | 取り込んだ原本（`inbox/done/*.json`。全文を含む）を残す日数（既定 7。`0` で消さない。`*.error` は対象外）。`daily` の各サイクルで消す |
 | `KIMERU_READ_MIN_PREVIEW` / `KIMERU_PREVIEW_CUT_LEN` / `KIMERU_FULL_TEXT_KEEP_DAYS` | これより短いプレビューの件は開かない（既定 12 字。これより小さくはできない）／この長さ以上のプレビューも「切れている」とみなす（既定 0 = 末尾の記号だけ。`T23` の結果で決める）／確認待ちの全文を残す日数（既定 7） |
 | `KIMERU_RECORD_EVENT_FULL` | `1` で、`decisions.jsonl` に元のイベントの全体（本文などは 2,000 文字まで）を残す。既定 0 は、要約の長さ（120 文字）まで（[SECURITY.md](../SECURITY.md#記録に残る範囲と期間)） |
+| `KIMERU_SPLIT_ASKS` | `1` で、2 件以上の依頼がある Teams のチャットを、依頼ごとに判断する（依頼は、`?`・ください・お願いします・いただけますか・でしょうか・決め を含む文。よろしくお願いします・決めました は除き、最大 3 件）。本文と依頼ごとの種類を 1 回の呼び出しで聞き、人へ寄せる向きだけで組み合わせる（不明が 1 つでもあれば人へ。インシデントは、本文が status・fyi・decision・incident のとき。本文が status・fyi のときは一番重い依頼へ。none・decision・requirements の本文は変えない）。依頼ごとに判断モデルへ `text` の一部を渡す（新しい文は加わらない）。記録に残るのは依頼の数 `asks.n` と確信度だけ。既定 `0`（判断モデルへの質問と行き先は今と同じ）。`batch_questions=1` のときも、依頼の分は別の呼び出しになる |
 | `KIMERU_JUDGE_TEXT_MAX` / `KIMERU_TITLE_MAX` | 判断モデルに見せる `text` の文字数（既定 1200）／行動の件名の文字数（既定 100） |
 | `KIMERU_JUDGE_CONTEXT` | `1` で、この PC の判断モデル（Kev・CLM を `127.0.0.1` などこの PC で動かしているとき。リモートの判断モデル・Jev・スタブには渡さない）に、同じチャットの直前のメッセージ（`decisions.jsonl` の抜粋のうち 72 時間以内の新しい順 2 件、各 120 字まで）と今日の日付を渡す。`text` は、その分だけ短く切る。既定 0。記録に残るのは `context_used`（件数）だけ |
 | `KIMERU_KEV_URL` / `KIMERU_KEV_URL_REMOTE_OK` | Kev の接続先（既定 `http://127.0.0.1:8009/v1`。空は既定）。この PC 以外の接続先は、`KIMERU_KEV_URL_REMOTE_OK=1` を明示したときだけ使えます |

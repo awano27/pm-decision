@@ -39,7 +39,7 @@ import json
 import re
 from pathlib import Path
 
-from . import config, profiles
+from . import asks, config, profiles
 from .backends import BackendAnswerError
 
 TERMINALS = ("decide", "advise")
@@ -401,21 +401,85 @@ def render(s, ctx):
     return s
 
 
-def run(g, event, backend, state=None, playbooks=None, batch=None):
+HEAVIEST_FIRST = ("decision", "requirements", "none")   # R35: a status or fyi message takes its heaviest request, in this order
+
+
+def combine_requests(body, labels):
+    """R35: the route of a message from its own intent (`body`) and the intents of its requests (`labels`), only toward people:
+    an unsure request makes the message unsure (a person is asked); an incident request makes a status, fyi, decision or incident
+    message an incident. A status or fyi message takes its heaviest request (HEAVIEST_FIRST). Any other message keeps its own
+    route: a none or requirements message may end at the PM's queue (ask_pm), which an incident route (a notice) would lower."""
+    if body == "unsure" or "unsure" in labels:
+        return "unsure"
+    if "incident" in labels and body in ("status", "fyi", "decision", "incident"):
+        return "incident"
+    if body in ("status", "fyi"):
+        for label in HEAVIEST_FIRST:
+            if label in labels:
+                return label
+    return body
+
+
+def _one_request(question, k):
+    """The intent question for one request of the message: the same choices, asked about `asks[k]` alone."""
+    return {**question, "instructions": f"Answer for the one request `asks[{k}]` (a sentence of `text`) only. " + question["instructions"]}
+
+
+def _confidence(answer):
+    c = answer.get("confidence") if isinstance(answer, dict) else None
+    return round(float(c), 2) if isinstance(c, (int, float)) and not isinstance(c, bool) else 0.0
+
+
+def _split_intent(n, nid, state, backend, requests, profile):
+    """R35: the intent answer of the message and one answer per request, in ONE call. The call's state carries the requests
+    (`asks`); the state the rest of the graph sees does not. Returns (body answer, body edge, combined edge, info) where info
+    keeps only the number of requests and their confidences. A malformed answer for the message raises BackendAnswerError (the
+    caller takes the unsure route, as for any intent answer); a malformed answer for one request makes only that request unsure."""
+    istate = {**state, "asks": list(requests)}
+    qs = {nid: with_context(n["question"], istate)}
+    for k in range(len(requests)):
+        qs[f"{nid}_{k}"] = with_context(_one_request(n["question"], k), istate)
+    answered = backend.ask(istate, qs)
+    body = answered.get(nid) if isinstance(answered, dict) else None
+    body_edge, _ = route(n, body, profile)
+    labels, conf = [], []
+    for k in range(len(requests)):
+        a = answered.get(f"{nid}_{k}") if isinstance(answered, dict) else None
+        try:
+            edge, _ = route(n, a, profile)
+        except BackendAnswerError:
+            edge, a = "unsure", {}
+        labels.append(edge)
+        conf.append(_confidence(a))
+    combined = combine_requests(body_edge, labels)
+    if combined not in n["routes"]:
+        combined = body_edge
+    return body, body_edge, combined, {"n": len(requests), "confidence": conf}
+
+
+def run(g, event, backend, state=None, playbooks=None, batch=None, split_asks=None):
     """Walk the graph for one event. Returns a trace dict ending in an outcome.
 
     batch=True asks every judge question of the graph in ONE call the first time a question is needed (after the rules
     have had their say: a route decided by rules alone asks nothing). The plan questions are not part of it: they depend on
     the chosen playbook. The final action is the one a question-by-question walk reaches, provided the backend answers each
-    question independently of the others."""
+    question independently of the others.
+
+    split_asks=True (R35, setting split_asks=1): a chat message with two or more requests (asks.find) has its intent question
+    asked once for the message and once for each request, in one call; the routes are combined (combine_requests). A
+    message with one request, and every other event, is judged as before. The record keeps only the number and the
+    confidences (`asks`). None reads the setting."""
     import os
     from .events import state_of
     from . import plan as planner
     if batch is None:
         batch = config.value("batch_questions") == "1"
+    if split_asks is None:
+        split_asks = config.value("split_asks") == "1"
     state = state if state is not None else state_of(event)
     nodes, nid, trace, answers, plan = g["nodes"], g["start"], [], {}, None
     pre = {}
+    asks_info, asks_changed = None, None   # R35: the numbers of a split message; the combined route when it differs from the body's
     for _ in range(MAX_STEPS):
         n = nodes[nid]
         if n["kind"] in TERMINALS:
@@ -436,6 +500,11 @@ def run(g, event, backend, state=None, playbooks=None, batch=None):
             if severe and not reached:
                 out["severe_guard"] = severe
                 out["notify" if n["kind"] == "decide" else "needs_human"] = True
+            elif asks_changed and not reached:   # R35: the requests changed the route, and this outcome would reach nobody
+                out["asks_guard"] = asks_changed
+                out["notify" if n["kind"] == "decide" else "needs_human"] = True
+            if asks_info:
+                out["asks"] = asks_info
             if plan:
                 out["plan"] = plan
             unsure = [t["node"] for t in trace if t.get("edge") == "unsure"]
@@ -466,6 +535,21 @@ def run(g, event, backend, state=None, playbooks=None, batch=None):
                                                    "answers": _plan_answers(ans)},
                           "edge": edge})
             nid = n["routes"][edge]
+            continue
+        requests = asks.find(state.get("text")) if split_asks and nid == asks.NODE and event.get("kind") == "teams.chat" else []
+        if len(requests) >= 2:   # R35: the requests of the message are judged in one call of their own (see _split_intent)
+            try:
+                ans, edge, combined, asks_info = _split_intent(n, nid, state, backend, requests,
+                                                               profiles.for_node(getattr(backend, "profile", None), g, nid))
+            except BackendAnswerError as e:   # as for any intent answer that is malformed: the safe route
+                batch, pre = False, {}
+                trace.append({"node": nid, "answer": {"invalid": str(e)[:200]}, "edge": "unsure"})
+                nid = n["routes"]["unsure"]
+                continue
+            answers[nid] = ans
+            trace.append({"node": nid, "answer": {k: v for k, v in ans.items() if k != "type"}, "edge": combined})
+            asks_changed = combined if combined != edge else None
+            nid = n["routes"][combined]
             continue
         try:
             if batch and not pre:

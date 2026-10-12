@@ -35,6 +35,7 @@ sys.path.insert(0, str(ROOT))
 
 from kimeru import graph, plan, profiles  # noqa: E402
 from kimeru.backends import ClmBackend, JevBackend, KevBackend  # noqa: E402
+from kimeru.events import state_of  # noqa: E402
 
 SEVERE = {"page", "page_planned", "set_p1", "set_p1_critical", "prevent_now"}
 PBS = plan.load_playbooks(ROOT / "playbooks")
@@ -144,9 +145,11 @@ def _safe_fallback(model, g, event):
 
 def run_one(fx, backend):
     g = GRAPHS[fx["event"]["kind"]]
+    ctx = fx.get("context") if isinstance(fx.get("context"), dict) else None   # R22: a fixture may carry the chat's earlier messages
+    state = state_of(fx["event"], ctx) if ctx is not None else None
     rec = Recording(backend)
-    model = graph.run(g, fx["event"], rec, playbooks=PBS)
-    ideal = graph.run(g, fx["event"], Oracle(rec, fx["expect"], g), playbooks=PBS)
+    model = graph.run(g, fx["event"], rec, state=state, playbooks=PBS)
+    ideal = graph.run(g, fx["event"], Oracle(rec, fx["expect"], g), state=state, playbooks=PBS)
     human = bool(model.get("needs_human"))   # actually queued for the PM, not just an advise terminal
     same_actions = _acts(model) == _acts(ideal)
     severe_miss = ideal["node"] in SEVERE and model["node"] not in SEVERE and not human

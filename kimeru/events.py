@@ -246,17 +246,43 @@ JUDGE_HIDDEN = ("raw", "thread", "full", "chat_title", "origin", "_kimeru")   # 
 # _kimeru: when the PC saw the event (pull.arrival_of), a measurement that the judge never reads
 
 
-def state_of(event):
-    """What the judge sees: the event without its raw payload and the earlier messages of a thread (they are for the writer);
-    `chat_title` is kept on the event but not sent (it repeats `author`; an extra field lowers Kev's confidence);
-    `text` is cut at `judge_text_max` characters (Kev refuses input that is too long, and a long text lowers its confidence)."""
+def text_cap():
+    """`judge_text_max`: the characters of a text the judge sees (1200 by default, never fewer than 100)."""
     from . import config
     try:
-        cap = max(100, int(config.value("judge_text_max")))
+        return max(100, int(config.value("judge_text_max")))
     except ValueError:
-        cap = 1200
+        return 1200
+
+
+def context_budget(cap):
+    """Characters the earlier messages of a chat may take in the judge's state (R22): at most 300, and at most a quarter of the cap."""
+    return min(300, cap // 4)
+
+
+def fit_earlier(entries, budget):
+    """The newest of the earlier messages that fit `budget` characters together. An entry is kept whole or left out; the oldest go first."""
+    out = [str(e) for e in entries or []]
+    while out and sum(len(e) for e in out) > budget:
+        out.pop(0)
+    return out
+
+
+def state_of(event, context=None):
+    """What the judge sees: the event without its raw payload and the earlier messages of a thread (they are for the writer);
+    `chat_title` is kept on the event but not sent (it repeats `author`; an extra field lowers Kev's confidence);
+    `text` is cut at `judge_text_max` characters (Kev refuses input that is too long, and a long text lowers its confidence).
+    `context` (R22, only for a judge on this PC and a chat; see cli._judge_context) is {"earlier": [...], "today": "YYYY-MM-DD"}:
+    the state then also has `earlier` and `today`, and `text` is cut `context_budget` characters shorter, so that the text and
+    the earlier messages together stay within the cap. None (the default) gives the state as it was before."""
+    cap = text_cap()
+    budget = context_budget(cap) if context is not None else 0
     s = {k: v for k, v in event.items() if k not in JUDGE_HIDDEN}
     for k in ("text", "description", "repro_steps", "acceptance_criteria", "test_steps"):   # the long ADO fields are cut like a chat text
-        if isinstance(s.get(k), str) and len(s[k]) > cap:
-            s[k] = s[k][:cap]
+        limit = cap - budget if k == "text" else cap
+        if isinstance(s.get(k), str) and len(s[k]) > limit:
+            s[k] = s[k][:limit]
+    if context is not None:
+        s["earlier"] = fit_earlier(context.get("earlier"), budget)
+        s["today"] = str(context.get("today") or "")
     return s

@@ -184,6 +184,18 @@ def is_jev(backend):
     return judge_name(backend) == JevBackend.NAME
 
 
+def is_local_judge(backend):
+    """A judge on this PC: Kev or CLM whose address is a loopback one, so the event text does not leave the PC (R22: the
+    earlier messages of a chat are sent to such a judge only). Seen through the wrappers as judge_name is. Jev, a stub, a
+    replay and any other class that only calls itself Kev are not: the name alone proves nothing."""
+    seen = 0
+    while hasattr(backend, "inner") and seen < 5:
+        backend, seen = backend.inner, seen + 1
+    if judge_name(backend) not in (KevBackend.NAME, ClmBackend.NAME) or not isinstance(backend, (KevBackend, ClmBackend)):
+        return False
+    return urllib.parse.urlparse(backend.api).hostname in LOOPBACK
+
+
 class BackendUnavailable(RuntimeError):
     """The judge could not be reached or is overloaded (429/5xx/timeout after retries).
     Inbox files stay in place and are retried on the next cycle."""

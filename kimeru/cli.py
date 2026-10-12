@@ -21,13 +21,13 @@ import json
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import actions, attention, config, events, execute, fsutil, graph, promises, pull
 from . import writer as writer_mod
 from . import plan as planner
-from .backends import BackendUnavailable, ClmBackend, JevBackend, KevBackend, StubBackend, judge_name
+from .backends import BackendUnavailable, ClmBackend, JevBackend, KevBackend, StubBackend, is_local_judge, judge_name
 
 HERE = Path(__file__).resolve().parent.parent
 DEFAULT_PLAYBOOKS = HERE / "playbooks"
@@ -311,9 +311,69 @@ def _merge_locked(out, ev, res, notify, source_event=None, source_request=None, 
     return False
 
 
-def _judge(g, ev, meter, playbooks):
-    """The graph only: no writer is called."""
-    return graph.run(g, ev, meter, playbooks=playbooks)
+CONTEXT_HOURS = 72          # R22: how far back the earlier messages of a chat are taken from decisions.jsonl
+CONTEXT_MESSAGES = 2        # the newest of them, given oldest first
+CONTEXT_EXCERPT = 120       # characters of one earlier message
+CONTEXT_TAIL = 256 * 1024   # bytes read from the end of decisions.jsonl (a bounded read, never the whole file)
+
+
+def _judge_context(backend, out, ev, at):
+    """R22 (setting judge_context=1, a judge on this PC, a teams.chat with its chat_id): the chat's earlier messages (see
+    _earlier_messages) and today's date, for the judge's state. None in every other case, and then the judge sees the event
+    alone, as before. Computed once per event, so the preview and the full text are judged with the same context."""
+    if config.value("judge_context") != "1" or ev.get("kind") != "teams.chat" or not ev.get("chat_id"):
+        return None
+    if not is_local_judge(backend):
+        return None
+    at = at or datetime.now(timezone.utc)
+    if at.tzinfo is None:
+        at = at.astimezone()
+    return {"earlier": events.fit_earlier(_earlier_messages(out, ev, at), events.context_budget(events.text_cap())),
+            "today": at.astimezone().date().isoformat()}
+
+
+def _earlier_messages(out, ev, at):
+    """The messages this chat had before `ev`, from decisions.jsonl: other events of the same chat, decided within CONTEXT_HOURS
+    before `at`, the newest CONTEXT_MESSAGES of them, oldest first, each `author: text` cut to CONTEXT_EXCERPT characters (the
+    record may keep more with record_event_full=1; this never sends more). A damaged or unexpected line is skipped. Nothing else is
+    read: not the chat, not full_text.json."""
+    try:
+        with (Path(out) / "decisions.jsonl").open("rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - CONTEXT_TAIL))
+            lines = f.read().split(b"\n")
+    except OSError:
+        return []
+    if size > CONTEXT_TAIL:
+        lines = lines[1:]   # the first line may begin before the part that was read
+    since, seen, found = at - timedelta(hours=CONTEXT_HOURS), {ev.get("id")}, []
+    for line in lines:
+        try:
+            row = json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            continue
+        e = row.get("event") if isinstance(row, dict) else None
+        if not isinstance(e, dict) or e.get("kind") != "teams.chat" or e.get("chat_id") != ev.get("chat_id") or e.get("id") in seen:
+            continue
+        try:
+            when = datetime.fromisoformat(str(row.get("at")))
+        except ValueError:
+            continue
+        if when.tzinfo is None or not since <= when <= at:
+            continue
+        seen.add(e.get("id"))
+        author = " ".join(str(e.get("author") or "").split())
+        text = " ".join(str(e.get("text") or "").split())
+        found.append(_short(f"{author}: {text}" if author else text, CONTEXT_EXCERPT))
+    return found[-CONTEXT_MESSAGES:]
+
+
+def _judge(g, ev, meter, playbooks, context=None):
+    """The graph only: no writer is called. `context` is what _judge_context made (None: the event alone)."""
+    if context is None:
+        return graph.run(g, ev, meter, playbooks=playbooks)
+    return graph.run(g, ev, meter, playbooks=playbooks, state=events.state_of(ev, context))
 
 
 def _draft(res, ev, meter, writer):
@@ -392,6 +452,7 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
     from . import fulltext
     from . import link as linking
     link_at = now   # R19: the windows of the links are counted from this time (`now` is reused below for the actions)
+    context_at = now   # R22: the earlier messages are taken from the 72 hours before this time (None: the current time)
     if playbooks is None:
         playbooks = planner.load_playbooks(DEFAULT_PLAYBOOKS)
     if writer is None:
@@ -407,6 +468,7 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
     body = {k: v for k, v in payload.items() if k != "_kimeru"} if isinstance(payload, dict) else payload
     for ev in events.normalize(body):
         arrival = pull.arrival_of(ev, note)
+        context = _judge_context(backend, out, ev, context_at) if graphs.get(ev["kind"]) else None   # R22: once per event
         for g in graphs.get(ev["kind"], []):
             key = f"{g['name']}@{_graph_version(g)}:{ev['kind']}:{ev.get('id')}".replace(" ", "_")
             if key in seen:
@@ -430,11 +492,11 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
                             pend.put(key)                              # counted: the next cycle tries again, up to read_max_defer times
                             raise
                         read_info = fulltext.gave_up(0)
-                res = _judge(g, ev_run, meter, playbooks)
+                res = _judge(g, ev_run, meter, playbooks, context)
             else:
                 res = pend.get(key) if pend else None                 # a preview judged in an earlier cycle: continue from the reading
                 if res is None:
-                    res = _judge(g, ev, meter, playbooks)
+                    res = _judge(g, ev, meter, playbooks, context)
                 if can_read and _ends_at_pm(res, writer):              # a decision that ends at the PM: look at the whole chat
                     if tired:
                         read_info = fulltext.gave_up(fulltext.max_defer())
@@ -447,7 +509,7 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
                                 raise
                             read_info = fulltext.gave_up(0)
                     if read_info["state"] == "full":
-                        res = _judge(g, ev_run, meter, playbooks)      # the whole text may change the judgment
+                        res = _judge(g, ev_run, meter, playbooks, context)      # the whole text may change the judgment
             if pend:
                 pend.drop(key)
             res = promises.status_guard(res, ev_run, out, now)        # R18 (promises=1): a status question from a chat with an overdue promise goes to the PM
@@ -468,6 +530,8 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
                 res["material_event"].pop("直前のやり取り", None)
             res["judge"] = _judge_info(backend)
             res["graph_key"] = key
+            if context is not None:   # R22: the record keeps how many earlier messages the judge was given, never their text
+                res["context_used"] = {"earlier": len(context["earlier"])}
             if linking.enabled():   # R19 (link_related=1): the record's link and dup_of; the judge and the writer never see it
                 linking.attach(res, ev_run, out, now=link_at)
             if attention.enabled():   # R17: whether this item may reach the PC and the phone at once (off: no field, the records are unchanged)

@@ -425,8 +425,8 @@ def run(g, event, backend, state=None, playbooks=None, batch=None):
             continue
         try:
             if batch and not pre:
-                pre = backend.ask(state, {k: nodes[k]["question"] for k in reachable_judges(nodes, nid, event)})
-            ans = pre[nid] if nid in pre else backend.ask(state, {nid: n["question"]})[nid]
+                pre = backend.ask(state, {k: with_context(nodes[k]["question"], state) for k in reachable_judges(nodes, nid, event)})
+            ans = pre[nid] if nid in pre else backend.ask(state, {nid: with_context(n["question"], state)})[nid]
             edge, nxt = route(n, ans, profiles.for_node(getattr(backend, "profile", None), g, nid))   # R21: this question's own bar, if learned
         except BackendAnswerError as e:   # a malformed answer is not a judgment: the safe route, never a lost event
             batch, pre = False, {}   # a batch with a bad answer is not trusted: ask the remaining questions one by one
@@ -441,6 +441,26 @@ def run(g, event, backend, state=None, playbooks=None, batch=None):
         trace.append({"node": nid, "answer": {k: v for k, v in ans.items() if k != "type"}, "edge": edge})
         nid = nxt
     raise GraphError("max steps exceeded")
+
+
+EARLIER_NOTE = ("The state's `earlier` lists the messages this chat had before `text`, oldest first (excerpts of up to 120 "
+                "characters). They are context only: judge `text`, the message the question is about.")
+DEADLINE = re.compile(r"deadline|\bdue\b|\bsoon\b|\bwhen\b|\btoday\b|期限|締切|いつ|今日|今週|までに", re.I)
+
+
+def with_context(question, state):
+    """The judge question with the notes of R22 added to its instructions, when the state carries the earlier messages of a
+    chat (`earlier`) or the date (`today`): only for a judge on this PC (see cli._judge_context). The note on the date goes
+    to a question about a deadline. A copy: the graph and the playbooks are never changed. Any other state gives the question
+    itself, so the judge is asked exactly what it was asked before."""
+    if "earlier" not in state and "today" not in state:
+        return question
+    notes = [EARLIER_NOTE] if "earlier" in state else []
+    if state.get("today") and DEADLINE.search(question.get("instructions") or ""):
+        notes.append(f"Today is {state['today']}.")
+    if not notes:
+        return question
+    return {**question, "instructions": " ".join([question["instructions"], *notes])}
 
 
 def reachable_judges(nodes, start, event):

@@ -30,6 +30,34 @@ class TestFixtures(unittest.TestCase):
             for q in r["questions"].values():
                 self.assertTrue(set(q) <= {"type", "instructions", "criteria"})
 
+    def test_context_fixtures_label_judge_nodes_and_carry_only_the_other_persons_words(self):
+        fxs = run_eval.fixtures(ROOT / "eval" / "fixtures_context.jsonl")
+        self.assertTrue(fxs)
+        g = run_eval.GRAPHS["teams.chat"]
+        for fx in fxs:
+            ctx = fx["context"]
+            self.assertLessEqual(len(ctx["earlier"]), 2, fx["id"])
+            for entry in ctx["earlier"]:
+                self.assertLessEqual(len(entry), 120, fx["id"])
+                self.assertFalse(entry.startswith(("あなた:", "あなた：", "You:")), fx["id"])   # the PM's own words are never an event
+            for nid, exp in fx["expect"].items():
+                n = g["nodes"].get(nid)
+                self.assertIsNotNone(n, f"{fx['id']}: {nid} missing")
+                self.assertIn(n["kind"], ("judge", "plan"), f"{fx['id']}: {nid}")
+            r = run_eval.request(fx)
+            self.assertIn("earlier", r["state"], fx["id"])
+            self.assertTrue(all("earlier" in q["instructions"] for q in r["questions"].values()), fx["id"])
+
+    def test_the_end_to_end_walk_runs_on_a_context_fixture_without_a_judge(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("e2e", ROOT / "eval" / "e2e.py")
+        e2e = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(e2e)
+        from kimeru.backends import StubBackend
+        fx = run_eval.fixtures(ROOT / "eval" / "fixtures_context.jsonl")[0]
+        row = e2e.run_one(fx, StubBackend())
+        self.assertIn(row["outcome"], ("correct", "human", "fallback", "wrong"))
+
     def test_scorer_on_perfect_answers(self):
         fx = run_eval.fixtures()[0]
         g = run_eval.GRAPHS[fx["event"]["kind"]]

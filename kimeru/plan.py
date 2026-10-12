@@ -78,8 +78,9 @@ def build(node, state, backend, playbooks):
           "hints": {i: playbooks[i].get("hints", []) for i in ids}}
     from .profiles import conf
     from .backends import validate_answers
+    from .graph import with_context   # R22: the notes on the earlier messages and the date, when the state carries them
     prof = getattr(backend, "profile", None)
-    a1 = validate_answers({"playbook": q1}, backend.ask(state, {"playbook": q1}))["playbook"]
+    a1 = validate_answers({"playbook": q1}, backend.ask(state, {"playbook": with_context(q1, state)}))["playbook"]
     answers = {"playbook": a1}
     if a1.get("confidence", 0) < conf(node, "min_conf", 0.6, prof):
         return "unsure", None, answers
@@ -104,12 +105,13 @@ def build(node, state, backend, playbooks):
     qs["first"] = {"type": "choice", "instructions": "Which step should the project manager do first?",
                    "criteria": {s["id"]: s["desc"] for s in steps},
                    "hints": {s["id"]: s.get("hints", []) for s in steps}}
-    a2 = validate_answers(qs, backend.ask(state, qs))
+    a2 = validate_answers(qs, backend.ask(state, {k: with_context(v, state) for k, v in qs.items()}))
     if lean:
         kept = [s for s in steps if s.get("check") and a2[f"need_{s['id']}"]["noul"] >= node.get("need_at", 0.5)]
         if kept:
             due_questions = {f"due_{s['id']}": due_q(s) for s in kept}
-            a2.update(validate_answers(due_questions, backend.ask(state, due_questions)))
+            a2.update(validate_answers(due_questions,
+                                       backend.ask(state, {k: with_context(v, state) for k, v in due_questions.items()})))
     answers.update(a2)
 
     need_at = node.get("need_at", 0.5)

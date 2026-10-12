@@ -51,11 +51,18 @@ def plan_question(node):
             "criteria": {**{i: PBS[i]["when"] for i in ids}, "none": "None of these playbooks fits"}}
 
 
+def context_of(fx):
+    """The judge context a fixture carries (R22: its chat's earlier messages and today's date), or None for the event alone."""
+    return fx.get("context") if isinstance(fx.get("context"), dict) else None
+
+
 def request(fx):
+    state = state_of(fx["event"], context_of(fx))
     qs = {}
     for nid, n, _ in labeled_nodes(fx):
-        qs[nid] = plan_question(n) if n["kind"] == "plan" else n["question"]
-    return {"id": fx["id"], "state": state_of(fx["event"]), "questions": jev_questions(qs)}
+        q = plan_question(n) if n["kind"] == "plan" else n["question"]
+        qs[nid] = graph.with_context(q, state)   # the same notes the judge is given in the graph run
+    return {"id": fx["id"], "state": state, "questions": jev_questions(qs)}
 
 
 def judge(node, exp, ans, profile=None):

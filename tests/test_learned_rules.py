@@ -65,6 +65,17 @@ def rules_file(out):
     return json.loads((Path(out) / "learned_rules.json").read_text(encoding="utf-8"))
 
 
+def stamp_last_decision(out, when):
+    """process() writes the real clock into a decision's `at`; the 24-hour window is tested on the injected clock, so the newest
+    decisions line is stamped with `when` (a naive local time, as the daily cycle's clock)."""
+    p = Path(out) / "decisions.jsonl"
+    rows = p.read_text(encoding="utf-8").splitlines()
+    row = json.loads(rows[-1])
+    row["at"] = when.isoformat(timespec="seconds")
+    rows[-1] = json.dumps(row, ensure_ascii=False)
+    p.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+
 def write_rules(out, *rules):
     Path(out).mkdir(parents=True, exist_ok=True)
     data = {"next": len(rules) + 1, "rules": list(rules)}
@@ -324,6 +335,23 @@ class TestRevert(Learn1):
         self.assertTrue(run_line(self.out, 10, LINE, DAY2)["needs_human"])
         self.assertEqual(learn.dispatch(["revert", "A1"], self.out, print_fn=lines.append), 1)
 
+    def test_a_reverted_sentence_is_not_offered_again_the_next_day(self):
+        """R33 review fix 2: a revert keeps its sentence quiet for RULE_NG_DAYS, as an NG on its card does (the 不要 marks of
+        make_rule are still within RULE_DAYS here, so only the stopped rule keeps the card back)."""
+        self.make_rule()
+        self.assertEqual(learn.revert_rule(self.out, "A1", now=DAY2), "reverted")
+        self.assertEqual(learn.offer_rule(self.out, UNSURE_KIND, now=DAY2 + timedelta(days=1))["state"], "nothing")
+        self.assertFalse(rules_file(self.out)["rules"][0]["active"])
+
+    def test_a_reverted_sentence_can_be_offered_again_after_thirty_days(self):
+        self.make_rule()
+        learn.revert_rule(self.out, "A1", now=DAY2)
+        later = DAY2 + timedelta(days=31)
+        self.not_needed(4, later)
+        self.not_needed(5, later)
+        self.not_needed(6, later + timedelta(days=1))
+        self.assertEqual(learn.offer_rule(self.out, UNSURE_KIND, now=later + timedelta(days=1))["state"], "queued")
+
     def test_a_followup_from_the_same_chat_within_a_day_stops_the_rule_and_goes_to_the_pm(self):
         write_rules(self.out, rule())
         row = {"at": (NOW - timedelta(hours=1)).isoformat(timespec="seconds"), "demoted_by": "A1",
@@ -391,6 +419,54 @@ class TestRevert(Learn1):
             write_rules(self.out, rule(at=NOW - timedelta(days=1)))
             learn.demote(self.out, MINUTES, res, ev, now=NOW)                       # a rule that is on
             self.assertTrue(scan.called)
+
+
+class TestFollowUpOnTheMinutesPath(Learn1):
+    """R33 AC3 on the minutes path, the only path the allow list lets a rule decide: a new line of the same meeting (its title, the
+    `meeting` of the recorded event) within 24 hours after a recorded-only line stops the rule, and that line goes to the PM with
+    （規則を戻しました）. A Teams chat_id is the same mechanism for a chat (source_of) and is not reached from here."""
+
+    def test_a_new_line_of_the_same_meeting_within_a_day_stops_the_rule_and_goes_to_the_pm(self):
+        self.make_rule()
+        self.assertEqual(run_line(self.out, 10, LINE, DAY2 + timedelta(hours=1)).get("demoted_by"), "A1")
+        stamp_last_decision(self.out, DAY2 + timedelta(hours=1))
+        got = run_line(self.out, 11, "別の件です。来週までに確認する", DAY2 + timedelta(hours=2))
+        self.assertEqual((got["outcome"], got["needs_human"], got["notify"]), ("advise", True, False))
+        self.assertNotIn("demoted_by", got)
+        self.assertIn("（規則を戻しました）", got["advice"])
+        rule_row = rules_file(self.out)["rules"][0]
+        self.assertEqual((rule_row["active"], rule_row["stopped_reason"]), (False, "followup"))
+        bridge = FakeBridge()
+        notify.notify(self.out, bridge, send=True, real=True)
+        posted = [text for text, _ in bridge.posts if "（規則を戻しました）" in text]
+        self.assertEqual(len(posted), 1)
+        self.assertTrue(posted[0].startswith("[kimeru #"))
+
+    def test_a_line_of_another_meeting_within_a_day_does_not_stop_the_rule(self):
+        self.make_rule()
+        run_line(self.out, 10, LINE, DAY2 + timedelta(hours=1))
+        stamp_last_decision(self.out, DAY2 + timedelta(hours=1))
+        other = {"kind": "meeting.item", "id": "m11", "meeting": "別の定例", "item": LINE}
+        got = cli.process(other, GRAPHS, UNSURE_KIND, self.out, PBS, writer=None, dedup=True, now=DAY2 + timedelta(hours=2))[0]
+        self.assertEqual(got.get("demoted_by"), "A1")
+        self.assertTrue(rules_file(self.out)["rules"][0]["active"])
+
+    def test_a_line_of_the_same_meeting_after_a_day_does_not_stop_the_rule(self):
+        self.make_rule()
+        run_line(self.out, 10, LINE, DAY2 + timedelta(hours=1))
+        stamp_last_decision(self.out, DAY2 + timedelta(hours=1))
+        self.assertEqual(run_line(self.out, 11, LINE, DAY2 + timedelta(hours=26)).get("demoted_by"), "A1")
+        self.assertTrue(rules_file(self.out)["rules"][0]["active"])
+
+    def test_a_follow_up_that_stops_a_rule_keeps_its_sentence_quiet_for_thirty_days(self):
+        self.make_rule()
+        run_line(self.out, 10, LINE, DAY2 + timedelta(hours=1))
+        stamp_last_decision(self.out, DAY2 + timedelta(hours=1))
+        when = DAY2 + timedelta(hours=2)
+        run_line(self.out, 11, "別の件です。来週までに確認する", when)
+        num = post_new(self.out)
+        answer(self.out, [f"P:{num}", f"R:NG {num}"], when)
+        self.assertEqual(learn.offer_rule(self.out, UNSURE_KIND, now=DAY2 + timedelta(days=1))["state"], "nothing")
 
 
 class TestNotNeededDropsTheWholeText(Learn1):

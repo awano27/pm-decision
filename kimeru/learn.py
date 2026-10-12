@@ -522,7 +522,7 @@ RULE_MIN_TIMES = 3       # for one sentence ...
 RULE_MIN_DAYS = 2        # ... on at least this many days
 RULE_NG_DAYS = 30        # after an NG on its card the sentence is not offered again for this many days
 RULE_UNUSED_DAYS = 60    # a rule not used (or adopted) for this many days stops applying
-RULE_FOLLOWUP_HOURS = 24  # a new line from the chat of a recorded-only line within this many hours stops its rule
+RULE_FOLLOWUP_HOURS = 24  # a new line from the same source (its meeting title, or a chat_id) as a recorded-only line within this many hours stops its rule
 RULE_BRIEF_MAX = 5
 
 
@@ -638,10 +638,22 @@ def _rule_rejected(items, now):
     return keys
 
 
+def _rule_stopped(rows, now):
+    """The keys of the sentences whose rule was taken back (revert) or stopped by a follow-up within RULE_NG_DAYS: not offered again
+    for that long, the same as after an NG on its card (a rule that stopped on its own, after RULE_UNUSED_DAYS, is not counted)."""
+    keys = set()
+    for r in rows:
+        t = _parse(r.get("stopped_at"))
+        if (r.get("stopped_reason") in ("revert", "followup") and isinstance(r.get("phrase"), str) and t
+                and timedelta(0) <= now - _naive(t) < timedelta(days=RULE_NG_DAYS)):
+            keys.add(f"{_node_key()}:{_rule_hash(r['phrase'])}")
+    return keys
+
+
 def _rule_pick(items, rows, now):
     """(phrase, times, days, key) of the sentence to offer, or None: RULE_MIN_TIMES 不要 on RULE_MIN_DAYS days, no OK for it, no rule
-    that is on for it, and no NG for it within RULE_NG_DAYS."""
-    rejected = _rule_rejected(items, now)
+    that is on for it, and no NG, revert or follow-up stop for it within RULE_NG_DAYS."""
+    rejected = _rule_rejected(items, now) | _rule_stopped(rows, now)
     best = None
     for h, c in sorted(_rule_counts(items, now).items()):
         times = c["times"]
@@ -707,23 +719,30 @@ def _unmarked(ev):
     return not any(m in text for m in RULE_MARKS)
 
 
-def _recorded_only_ids(out, chat, now):
-    """The ids of the rules that recorded a line of this chat within RULE_FOLLOWUP_HOURS (decisions.jsonl; a damaged line is no line)."""
+SOURCE_CHARS = 119   # the recorded event keeps 119 characters and an ellipsis of a longer free text (cli.EVENT_TEXT_SUMMARY): both sides cut to 119
+
+
+def source_of(ev):
+    """The source a follow-up is matched on (R33 AC3): the meeting title (`meeting`) of a minutes line, the allowed path, or the chat_id
+    of a Teams line. The Teams variant is the same mechanism for a chat and stays unused while no rule can decide a Teams line
+    (RULE_NODE). None when the line has neither (a recorded event or a raw event: both keep these fields)."""
+    if not isinstance(ev, dict):
+        return None
+    if ev.get("kind") == "meeting.item" and ev.get("meeting"):
+        return ("meeting", str(ev["meeting"])[:SOURCE_CHARS])
+    if ev.get("chat_id"):
+        return ("chat", str(ev["chat_id"]))
+    return None
+
+
+def _recorded_only_ids(out, src, now):
+    """The ids of the rules that recorded a line of this source (source_of) within RULE_FOLLOWUP_HOURS. Reads the bounded tail of
+    decisions.jsonl (memory._tail_rows: a damaged line is no line, a missing file gives nothing)."""
+    from . import memory
     ids = set()
-    try:
-        lines = (Path(out) / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return ids
-    for line in lines:
-        if '"demoted_by"' not in line:
-            continue
-        try:
-            row = json.loads(line)
-        except ValueError:
-            continue
-        ev = row.get("event") if isinstance(row, dict) else None
-        when = _parse(row.get("at")) if isinstance(row, dict) else None
-        if not isinstance(ev, dict) or ev.get("chat_id") != chat or when is None:
+    for row in memory._tail_rows(Path(out) / "decisions.jsonl"):
+        when = _parse(row.get("at"))
+        if "demoted_by" not in row or when is None or source_of(row.get("event")) != src:
             continue
         if timedelta(0) <= now - _naive(when) < timedelta(hours=RULE_FOLLOWUP_HOURS):
             ids.add(str(row.get("demoted_by")))
@@ -755,18 +774,19 @@ def demote(out, g, res, ev, now=None):
     """R33 (learn=1 only): a minutes line that a rule names is recorded only. Returns `res` itself unless the line is eligible: the
     check_line result reached through an unsure kind (item_type), with no request mark, no posting, paging or gated action, no severe
     hit, and a rule that is on for its first sentence. The result then reads outcome decide, one log.only action and `demoted_by` (the
-    rule id); its path and via_unsure stay. A new line from a chat stops the rules that recorded a line of that chat within
-    RULE_FOLLOWUP_HOURS. Whatever the graph decided, that line then goes to the PM (outcome advise, needs_human, actions only
-    proposed); so does a line whose rules could not be locked. The chat is read only while a rule is on, and only a line that
-    carries a chat_id can stop a rule (the shipped minutes scope has none, so only a manual revert or RULE_UNUSED_DAYS stops one)."""
+    rule id); its path and via_unsure stay. A new line from the same source (source_of: the meeting title of a minutes line) stops
+    the rules that recorded a line of that source within RULE_FOLLOWUP_HOURS. Whatever the graph decided, that line then goes to the
+    PM (outcome advise, needs_human, actions only proposed, advice + （規則を戻しました）); so does a line whose rules could not be
+    locked. The decisions are read only while a rule is on. Only a minutes line can be decided today, so a rule ends by a manual
+    revert, by a follow-up of its meeting, or by RULE_UNUSED_DAYS; the Teams chat_id variant (source_of) is ready but not reached."""
     if not enabled() or not isinstance(res, dict) or not isinstance(ev, dict):
         return res
     from . import execute
     from . import graph as graphs
     out, now = Path(out), _naive(now) or datetime.now()
-    chat = ev.get("chat_id")
-    if chat and any(r.get("active") is True for r in _rules_read(out)):
-        ids = _recorded_only_ids(out, chat, now)
+    src = source_of(ev)
+    if src and any(r.get("active") is True for r in _rules_read(out)):
+        ids = _recorded_only_ids(out, src, now)
         if ids:
             stopped = _stop_rules(out, ids, now, "followup")
             if stopped is None:   # the rules could not be locked: the line is not left to the graph's own decision

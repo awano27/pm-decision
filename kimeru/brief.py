@@ -76,6 +76,8 @@ def collect(out, now=None, days=2):
             head = hold.brief_label(n, it, now) or f"確認待ち #{n}"   # R09: 保留 #N（10/15 に再表示）, 長く保留 (hold_stale_days)
             same = memory.same_person_note(ap["items"], n, it["record"], now)   # R16 (memory=1): 同じ相手 N 件目; "" otherwise
             add(f"approval:{n}", "approval", f"{head}: {what}{same}", f"Waiting for the PM's approval: {what}", 0, it["record"])
+    if isinstance(ap.get("folded"), dict):   # R32 (merge_recurring=1): a queue line joined a waiting item stays in queue.jsonl; it is no row of its own
+        queued |= set(ap["folded"])
     for rec in reversed(_rows(out / "queue.jsonl")):
         key = f"{rec.get('graph')}:{rec.get('event_id')}:{rec.get('node')}"
         if key not in queued and not learn.is_card(rec):

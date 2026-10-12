@@ -196,6 +196,24 @@ class TestFollowupMerge(unittest.TestCase):
             self.assertEqual(items_of(out)["20"]["revision"], 3)
             self.assertEqual(again.posts, [])
 
+    def test_the_morning_brief_shows_one_waiting_row_for_three_recurrences_in_one_cycle(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, MERGE_ON):
+            out = Path(d)
+            seed_next(out, 20)
+            for i, fired in enumerate(("2026-09-23T09:30:00Z", "2026-09-23T09:40:00Z", "2026-09-23T09:50:00Z")):
+                judged(out, recurring(f"/subscriptions/x/alerts/d{i}", fired))
+            notify.notify(out, FakeBridge(), send=True)
+            self.assertEqual(sorted(items_of(out)), ["20"])
+            self.assertEqual(len(rows(out, "queue.jsonl")), 3)   # the two folded lines stay in the queue file
+            text, _ranked = brief.build(out, UnsureJudge(), now=datetime.now(timezone.utc), date="2026-10-12")
+            shown = [l for l in text.splitlines() if "確認待ち" in l]
+            self.assertEqual(len(shown), 2, text)   # the numbered row and the count line, nothing else
+            self.assertTrue(shown[0].startswith("1. 確認待ち #20: "), text)
+            self.assertTrue(shown[1].startswith("確認待ち 1 件（"), text)
+            self.assertNotIn("未投稿", text)
+            self.assertNotIn("#21", text)
+            self.assertNotIn("#22", text)
+
     def test_a_recurring_sev1_alert_is_never_joined_and_keeps_its_own_number(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, MERGE_ON):
             out = Path(d)

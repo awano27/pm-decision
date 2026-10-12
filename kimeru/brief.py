@@ -540,6 +540,9 @@ def build(out, backend, top=TOP, now=None, date=None, since=None):
         section = promises.brief_section(out, now=now)
         if section:
             text += "\n" + section
+        answered = promises.answer_lines(out, now=now)   # R31: the answers to an ask-back that the judge decided by itself (none at 0)
+        if answered:
+            text += "\n" + "\n".join(answered)
     from . import owed   # R29: the 返事を待っている人 section (sent_watch=1 only; nothing is read at 0)
     if owed.enabled():
         section = owed.brief_section(out, now=now)

@@ -531,6 +531,9 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
             res["graph_key"] = key
             if context is not None:   # R22: the record keeps how many earlier messages the judge was given, never their text
                 res["context_used"] = {"earlier": len(context["earlier"])}
+            answer = promises.answer_for(out, ev, now)   # R31 (promises=1): the first message of a chat with an open ask-back is its answer; read only, the judgment stays
+            if answer is not None:
+                res["answers_case"] = answer
             if linking.enabled():   # R19 (link_related=1): the record's link and dup_of; the judge and the writer never see it
                 linking.attach(res, ev_run, out, now=link_at)
             if attention.recording():   # R17: whether this item may reach the PC and the phone at once (off: no field, the records are unchanged; R27: also while 休み is read)

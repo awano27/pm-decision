@@ -418,7 +418,9 @@ def format_post(n, rec, full=None, marks=None, precedent=None, promise=None, rel
     undated = (marks or {}).get("undated")
     named = f" （保留（日付なし）: {', '.join('#' + str(x) for x in undated)}）" if undated else ""
     draft_only = _draft_mark(rec)   # R12: 下書き: in the first line; the number "[kimeru #N]" stays where the reader looks for it
-    lines = [f"[kimeru #{n}] {'下書き: ' if draft_only else ''}{update}{_who(rec)}{held_mark}{resurfaced}{named}"]
+    from . import promises   # R31 (promises=1): a reply that answers an ask-back #M is marked after the number on the first line; "" otherwise
+    answer = promises.answer_mark(rec)
+    lines = [f"[kimeru #{n}] {answer + ' ' if answer else ''}{'下書き: ' if draft_only else ''}{update}{_who(rec)}{held_mark}{resurfaced}{named}"]
     if str(rec.get("event_kind") or "").startswith("ado.") and any(a.get("type") == "ado.comment" for a in actions) and not memo:
         proposal = "情報不足: 追記依頼のコメント案あり"
     else:
@@ -1772,7 +1774,7 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
     send=True: what is posted while collecting (results, texts ready to copy) is sent; otherwise it is only pasted.
     real and send together (the first run with --send after an OK without it): the comments of such OKs are written now, once."""
     ap = Approvals(out)
-    from . import execute, memory, sent, work
+    from . import execute, memory, promises, sent, work
     clock = now or _naive_now()   # R28: the clock of the nudge and of its watch window (sent.py)
 
     def waiting(it):   # waiting for an answer, or approved but with an execution that failed / was left unsure (`再実行` / `済`),
@@ -1794,6 +1796,8 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
                     adopted.append({"id": int(num), "status": "learned" if got["state"] == "adopted" else "learn_stale", "learn": got})
         if adopted:
             ap.save()
+    if real and send and promises.close_waiting(out, ap.data["items"]):   # R31 (promises=1): an ask-back whose chat has answered ends its wait; read only in decisions.jsonl, before any early return
+        ap.save()
     # nothing is waiting for an answer: do not touch Teams at all (reading switches it to the self chat). The one exception is a card
     # of the day's spot check that waits for its answer (R26, spot.py): the reply is read for it, and nothing else is touched
     work_wait = real and send and work.awaiting(ap.data, clock)   # R30 (promises=1): the deadline post is due, or a post of it is recent
@@ -1994,6 +1998,7 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
         learn.on_status(it, new, now)   # R21: a card's own state (OK waits to be adopted; NG keeps the question quiet for 28 days)
         if new == "approved":
             measurement_for(it).setdefault("approval_observed_at", measurement_now())
+            promises.open_waiting(it, clock)   # R31 (promises=1): an approved ask-back reply waits for the answer of its chat (item.waiting); other items get nothing
             from . import sent   # R14: with sent_watch=1, the list signature of the reply's chat is kept, to see the send later (sent.py)
             if sent.enabled() and not learn.is_card(it):
                 sent.note_approval(it, sent.list_signatures(out), now)

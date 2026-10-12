@@ -297,3 +297,124 @@ def status_guard(res, event, out, now=None):
     if not any(r["chat"] == chat and r["src"] != "b" and (snap["today"] - r["due"]).days > 0 for r in snap["rows"]):
         return res
     return {**res, "needs_human": True, "advice": ADVICE}
+
+
+# --- R31 (promises=1): the answer to an approved ask-back (`聞き返し N`, then `OK N`). The wait is item.waiting = {chat_id, since} in
+# approvals.json (written at the approval and ended by a collect that holds the lock); the answer is decisions.jsonl's answers_case.
+# The judgment never reads the wait: answer_for only annotates the record after the judgment is made.
+ANSWER_SHOW_DAYS = 1                  # 「返事が来ました」 is shown in the brief of the day the answer came and of this many days after it
+ANSWER_LINE = "返事が来ました: #{n}"
+_FRACTION = re.compile(r"(\.\d{6})\d+")   # Microsoft Graph sends seven fraction digits; datetime.fromisoformat reads six
+
+
+def _stamp(value):
+    """An aware time from an ISO text, also in the form Microsoft Graph sends (a trailing Z, more than six fraction digits). A naive
+    text is local time. None when it cannot be read."""
+    text = str(value or "").strip()
+    if text[-1:] in ("Z", "z"):
+        text = text[:-1] + "+00:00"
+    try:
+        t = datetime.fromisoformat(_FRACTION.sub(r"\1", text))
+    except ValueError:
+        return None
+    return t if t.tzinfo else t.astimezone()
+
+
+def _answer_no(rec):
+    """The item number a decisions row answers (answers_case, an int), or None."""
+    n = rec.get("answers_case")
+    return n if isinstance(n, int) and not isinstance(n, bool) else None
+
+
+def _chat_of_row(rec):
+    ev = rec.get("event") if isinstance(rec.get("event"), dict) else {}
+    return ev.get("chat_id")
+
+
+def _waits(items):
+    """[(number, item)] of the items that carry a wait (any status: a wait is only ever opened on an approved item)."""
+    return [(str(n), it) for n, it in (items or {}).items()
+            if str(n).isdigit() and isinstance(it, dict) and isinstance(it.get("waiting"), dict)]
+
+
+def _ask_back_chat(item):
+    """The chat of an item's approved ask-back reply (teams.reply with variant ask_back), or None."""
+    rec = item.get("record") if isinstance(item.get("record"), dict) else {}
+    ev = rec.get("event") if isinstance(rec.get("event"), dict) else {}
+    for a in rec.get("actions") or []:
+        if isinstance(a, dict) and a.get("type") == "teams.reply" and a.get("variant") == "ask_back":
+            return a.get("chat_id") or ev.get("chat_id") or None
+    return None
+
+
+def open_waiting(item, when):
+    """promises=1: an approved ask-back reply waits for the answer of its chat: item.waiting = {chat_id, since} with `since` the approval's
+    time. Any other item gets nothing. The caller (notify's approval step) saves approvals.json. promises=0: nothing."""
+    if not enabled():
+        return
+    chat = _ask_back_chat(item)
+    if chat:
+        item["waiting"] = {"chat_id": chat, "since": when.astimezone().isoformat(timespec="seconds")}
+
+
+def answer_for(out, ev, now=None):
+    """promises=1: the number of the approved ask-back whose answer the new message `ev` is, or None. It is the first message of the
+    wait's chat that is newer than the approval (the message's own time, `now` when it has none) and no answer is recorded yet. Reads
+    approvals.json and the tail of decisions.jsonl; writes nothing (the judgment path never writes approvals.json)."""
+    if not enabled() or ev.get("kind") != "teams.chat" or not ev.get("chat_id"):
+        return None
+    data = fsutil.read_json(Path(out) / "approvals.json", {"items": {}})
+    items = data.get("items") if isinstance(data, dict) and isinstance(data.get("items"), dict) else {}
+    chat = ev["chat_id"]
+    open_ = [(_stamp(it["waiting"].get("since")), int(n)) for n, it in _waits(items)
+             if it.get("status") == "approved" and it["waiting"].get("chat_id") == chat and _stamp(it["waiting"].get("since"))]
+    if not open_:
+        return None
+    when = _stamp(ev.get("ts")) or (now if now is not None else datetime.now(timezone.utc))
+    when = when if when.tzinfo else when.astimezone()
+    answered = {_answer_no(r) for r in memory._tail_rows(Path(out) / "decisions.jsonl") if _chat_of_row(r) == chat}
+    due = [(since, n) for since, n in open_ if when > since and n not in answered]
+    return max(due)[1] if due else None
+
+
+def close_waiting(out, items):
+    """promises=1: a wait ends when decisions.jsonl holds the answer of its chat (a row with answers_case = the item's number, in the same
+    chat). The wait is removed from `items` (the caller saves approvals.json). Returns True when a wait ended. A wait with no answer yet
+    stays open: the next collect that holds the lock reads the file again."""
+    if not enabled():
+        return False
+    waits = _waits(items)
+    if not waits:
+        return False
+    rows = memory._tail_rows(Path(out) / "decisions.jsonl")
+    ended = False
+    for n, it in waits:
+        chat = it["waiting"].get("chat_id")
+        if any(_answer_no(r) == int(n) and _chat_of_row(r) == chat for r in rows):
+            it.pop("waiting", None)
+            ended = True
+    return ended
+
+
+def answer_mark(rec):
+    """promises=1: 「（#3 への返事？）」 for a post whose record is the answer to the ask-back #3 (its first line, after the number); "" when
+    it is not, or when promises is 0."""
+    n = _answer_no(rec) if enabled() else None
+    return f"（#{n} への返事？）" if n is not None else ""
+
+
+def answer_lines(out, now=None):
+    """promises=1: 「返事が来ました: #3」 for each answer the judge decided by itself (no notice, not sent to the PM), on the day it came and
+    ANSWER_SHOW_DAYS after it. Read only: the tail of decisions.jsonl. [] when there is none."""
+    today = (now or datetime.now(timezone.utc)).astimezone().date()
+    lines = []
+    for rec in memory._tail_rows(Path(out) / "decisions.jsonl"):
+        n = _answer_no(rec)
+        if n is None or rec.get("needs_human") or rec.get("notify"):
+            continue
+        at = _stamp(rec.get("at"))
+        if at is None or not 0 <= (today - at.astimezone().date()).days <= ANSWER_SHOW_DAYS:
+            continue
+        if ANSWER_LINE.format(n=n) not in lines:
+            lines.append(ANSWER_LINE.format(n=n))
+    return lines

@@ -253,6 +253,19 @@ class TestRuleApplies(Learn1):
         self.assertTrue(res["needs_human"])
         self.assertNotIn("demoted_by", res)
 
+    def test_every_request_mark_in_another_sentence_keeps_the_question(self):
+        """Each entry of learn.RULE_MARKS (read from the module, so a mark added later is covered), plus the seven marks pinned here
+        (a mark dropped from the constant must fail its own subTest, not vanish from the loop) and a longer literal: the line begins
+        with the rule's phrase, the mark is in the second sentence, and the question stays."""
+        pinned = ("？", "?", "ください", "お願い", "決め", "至急", "本日中", "至急確認ください")
+        marks = list(dict.fromkeys(learn.RULE_MARKS + pinned))
+        self.make_rule()
+        for n, mark in enumerate(marks, start=10):
+            with self.subTest(mark=mark):
+                res = run_line(self.out, n, PHRASE + "。来週の会議で扱う" + mark, DAY2)
+                self.assertIs(res["needs_human"], True)
+                self.assertNotIn("demoted_by", res)
+
     def test_a_confident_decision_of_the_same_sentence_is_not_touched(self):
         self.make_rule()
         res = run_line(self.out, 10, LINE, DAY2, backend=CONFIDENT_DECISION)

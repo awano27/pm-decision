@@ -7,14 +7,16 @@ except ImportError:
     import isolate  # noqa: F401
     from isolate import detail_of
 
+import hashlib
 import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from kimeru import config, graph, notify, plan, writer
+from kimeru import config, graph, memory, notify, plan, writer
 from kimeru.backends import StubBackend
 from kimeru.cli import process
 
@@ -921,3 +923,163 @@ def learn_style_file(case, scope):
 
     from kimeru import learn
     learn.add_style("S000000000abc", "結論を先に", scope, datetime.now())
+
+
+PRECEDENT_NOW = datetime(2026, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def precedent_ago(days):
+    return (PRECEDENT_NOW - timedelta(days=days)).replace(hour=12).isoformat(timespec="seconds")
+
+
+def precedent_chat(eid, chat="19:c1", author="佐藤"):
+    """A Teams chat item as approvals.json keeps it (the fields the lookup reads: chat, person, graph and node)."""
+    return {"graph": "teams-chat-triage", "event_kind": "teams.chat", "event_id": eid, "node": "plan_decision",
+            "outcome": "decide", "needs_human": True, "advice": "来週のリリース日の延期の可否を判断してほしい",
+            "event": {"kind": "teams.chat", "author": author, "chat_id": chat, "text": "来週のリリースを延期できますか"},
+            "memo": {"summary": "リリース日の延期", "next": "QA に確認する"},
+            "actions": [{"type": "teams.reply", "text": "確認して返信します"}]}
+
+
+def precedent_state(out, rows):
+    """rows: [(number, record, status, days ago)]. approvals.json and approvals.log.jsonl as the app writes them; a status
+    other than pending is one reply of the PM in the log (approved, rejected, held, redrafted)."""
+    items, log = {}, []
+    for n, rec, status, days in rows:
+        items[str(n)] = {"key": f"{rec['graph']}:{rec['event_id']}:{rec['node']}", "status": status, "posted": True, "record": rec}
+        if status != "pending":
+            log.append({"at": precedent_ago(days), "key": items[str(n)]["key"], "id": n, "status": status})
+    (out / "approvals.json").write_text(json.dumps({"next": max(int(n) for n in items) + 1, "items": items}, ensure_ascii=False),
+                                        encoding="utf-8")
+    (out / "approvals.log.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in log), encoding="utf-8")
+
+
+class TestWriterPrecedent(unittest.TestCase):
+    """R36 (writer_precedent=1): the two most recent lines of the earlier decisions about the same case go into the writer's request
+    as data, after the preferences of the PM and before the drafts. The check material never has them, so a date that only a precedent
+    has stays unverified. The paste-in request for Microsoft 365 does not change. With the setting at 0 (the default) nothing is read
+    and the request is byte-identical to the one before R36 (the golden below was taken from that code)."""
+
+    PRECEDENT = ["・10/10 #11 修正: 佐藤さん: 来週のリリース日の延期", "・10/9 #12 OK: 佐藤さん: 仕様変更の可否"]
+    GOLDEN_LEN = 1642   # the request of apply(reply_res(), REDRAFT_EVENT, spy, "もっと短く", previous=PREV_TEXT), taken before R36
+    GOLDEN_SHA = "8c9c61589a0661107a362b50f9ddd58243f66e8491d448b0698f55f39217c943"
+
+    def setting(self, value):
+        return mock.patch.dict(os.environ, {"KIMERU_WRITER_PRECEDENT": value})
+
+    def test_with_the_setting_off_the_request_is_the_one_before_r36_even_when_a_precedent_is_given(self):
+        spy = PromptSpy([{"a1": "延期の件、承知しました。順番に確認します。"}])
+        with self.setting("0"):
+            writer.apply(reply_res(), REDRAFT_EVENT, spy, "もっと短く", previous={"a1": PREV_TEXT}, precedent=self.PRECEDENT)
+        self.assertEqual(len(spy.prompts), 1)
+        prompt = spy.prompts[0]
+        self.assertEqual(len(prompt), self.GOLDEN_LEN)
+        self.assertEqual(hashlib.sha256(prompt.encode("utf-8")).hexdigest(), self.GOLDEN_SHA)
+        self.assertNotIn(writer.PRECEDENT_HEAD, prompt)
+
+    def test_with_the_setting_on_the_precedent_is_data_after_the_instruction_and_the_check_material_does_not_have_it(self):
+        spy = PromptSpy([{"a1": "延期の件、承知しました。順番に確認します。"}])
+        with self.setting("1"):
+            writer.apply(reply_res(), REDRAFT_EVENT, spy, "もっと短く", precedent=self.PRECEDENT)
+        prompt = spy.prompts[0]
+        self.assertIn(writer.PRECEDENT_HEAD, prompt)
+        self.assertLess(prompt.index("PM からの修正指示"), prompt.index(self.PRECEDENT[0]))
+        self.assertLess(prompt.index(self.PRECEDENT[1]), prompt.index("出力形式:"))
+        self.assertNotIn(self.PRECEDENT[0], writer._material(reply_res(), REDRAFT_EVENT, "もっと短く"))
+
+    def test_a_date_that_only_a_precedent_has_stays_unverified(self):
+        spy = PromptSpy([{"a1": "10/10 の件を踏まえて、可否を確認してお返事します。"}])
+        res = reply_res()
+        with self.setting("1"):
+            writer.apply(res, REDRAFT_EVENT, spy, precedent=self.PRECEDENT)
+        self.assertEqual(res["actions"][0]["unverified"], ["10/10"])
+
+    def test_the_paste_in_request_for_microsoft_365_does_not_change_with_the_setting_on(self):
+        res = reply_res()
+        with self.setting("1"):
+            writer.apply(res, REDRAFT_EVENT, writer.M365PromptWriter(), "もっと短く", precedent=self.PRECEDENT)
+        self.assertEqual(res["copilot_request"], writer.human_request(reply_res(), REDRAFT_EVENT, "もっと短く"))
+        self.assertNotIn(self.PRECEDENT[0], res["copilot_request"])
+
+    def test_the_check_material_is_the_same_whether_or_not_the_event_carries_a_precedent(self):
+        ev = dict(REDRAFT_EVENT, precedent=list(self.PRECEDENT))
+        self.assertEqual(writer._material(reply_res(), ev, "もっと短く"), writer._material(reply_res(), REDRAFT_EVENT, "もっと短く"))
+        self.assertIn(writer.PRECEDENT_HEAD, writer._prompt_material(reply_res(), ev, "もっと短く"))
+
+    def test_the_lookup_gives_two_lines_of_the_same_chat_first_and_leaves_out_the_items_own_entries(self):
+        with self.setting("1"), tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            precedent_state(out, [(9, precedent_chat("19:c2#m-9", chat="19:c2"), "approved", 5),
+                                  (11, precedent_chat("19:c1#m-11"), "redrafted", 2),
+                                  (12, precedent_chat("19:c1#m-12"), "approved", 3),
+                                  (13, precedent_chat("19:c1#m-13"), "held", 1)])
+            lines = memory.writer_lines(out, precedent_chat("19:c1#m-13"), 13, now=PRECEDENT_NOW)
+        self.assertEqual(len(lines), 2)
+        self.assertIn("#11 修正", lines[0])
+        self.assertIn("#12 OK", lines[1])
+
+    def test_with_the_setting_off_nothing_is_read_and_no_line_is_given(self):
+        with self.setting("0"), tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(memory, "index", side_effect=AssertionError("read at 0")):
+            precedent_state(Path(d), [(12, precedent_chat("19:c1#m-12"), "approved", 3)])
+            self.assertEqual(memory.writer_lines(Path(d), precedent_chat("19:c1#m-13"), 13, now=PRECEDENT_NOW), [])
+
+    def test_the_first_draft_of_a_chat_gets_the_earlier_lines_of_that_chat_with_the_setting_on(self):
+        with self.setting("1"), tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            precedent_state(out, [(11, precedent_chat("19:c1#m-11"), "redrafted", 2), (12, precedent_chat("19:c1#m-12"), "approved", 3)])
+            spy = PromptSpy([{"a1": "確認して返信します。", "memo": {"summary": "延期の可否"}}])
+            process(MSG, GRAPHS, StubBackend(), out, PBS, writer=spy, now=PRECEDENT_NOW)
+        self.assertIn(writer.PRECEDENT_HEAD, spy.prompts[0])
+        self.assertIn("#12 OK", spy.prompts[0])
+
+    def test_the_first_draft_at_the_default_is_the_same_request_as_with_no_earlier_decision(self):
+        spies = []
+        with self.setting("0"), tempfile.TemporaryDirectory() as with_state, tempfile.TemporaryDirectory() as empty:
+            precedent_state(Path(with_state), [(12, precedent_chat("19:c1#m-12"), "approved", 3)])
+            for d in (with_state, empty):
+                spy = PromptSpy([{"a1": "確認して返信します。", "memo": {"summary": "延期の可否"}}])
+                process(MSG, GRAPHS, StubBackend(), Path(d), PBS, writer=spy, now=PRECEDENT_NOW)
+                spies.append(spy)
+        self.assertTrue(spies[0].prompts)
+        self.assertEqual(spies[0].prompts, spies[1].prompts)
+
+    def test_a_redraft_gets_the_earlier_lines_of_the_case_but_not_its_own_entries(self):
+        with self.setting("1"), tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            own = precedent_chat("19:c1#m-13")
+            precedent_state(out, [(12, precedent_chat("19:c1#m-12"), "approved", 3), (13, own, "held", 1)])
+            rec = {**own, "material_event": {"kind": "teams.chat", "author": "佐藤", "chat_id": "19:c1",
+                                             "text": "来週火曜にリリースを延期できますか"},
+                   "actions": [{"type": "teams.reply", "to": "佐藤", "text": "確認して今日中に返信します。",
+                                "template_text": "受領しました。", "drafted_by": "fake"}]}
+            it = {"key": "teams-chat-triage:19:c1#m-13:plan_decision", "posted": True, "status": "pending", "record": rec}
+            spy = PromptSpy([{"a1": "延期の件、承知しました。順番に確認します。"}])
+            with mock.patch.dict(os.environ, {"KIMERU_REDRAFT_PREV": "0"}):
+                change = notify._redraft(it, "もっと短く", spy, out, n=13)
+        self.assertEqual(change["status"], "redrafted")
+        self.assertIn("#12 OK", spy.prompts[0])
+        self.assertNotIn("#13 保留", spy.prompts[0])
+
+    def test_the_lookup_writes_no_file_and_changes_no_byte_of_the_state_folder(self):
+        with self.setting("1"), tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            precedent_state(out, [(12, precedent_chat("19:c1#m-12"), "approved", 3), (13, precedent_chat("19:c1#m-13"), "held", 1)])
+            before = sorted((p.name, p.read_bytes()) for p in out.iterdir())
+            self.assertTrue(memory.writer_lines(out, precedent_chat("19:c1#m-14"), 14, now=PRECEDENT_NOW))
+            self.assertEqual(sorted((p.name, p.read_bytes()) for p in out.iterdir()), before)
+
+    def test_the_setting_is_off_by_default_read_forgivingly_and_logged_and_shared_like_the_others(self):
+        self.assertEqual(config.SETTINGS["writer_precedent"], ("KIMERU_WRITER_PRECEDENT", "0"))
+        self.assertEqual(config.CHOICES["writer_precedent"], ("0", "1"))
+        self.assertIn("writer_precedent", config.LOGGABLE)
+        self.assertIn("writer_precedent", config.SHARE_VALUES)
+        with mock.patch.dict(os.environ, {"KIMERU_WRITER_PRECEDENT": "on"}):
+            self.assertEqual(config.value("writer_precedent"), "1")
+        self.assertEqual(config.value("writer_precedent"), "0")
+
+    def test_the_docs_name_the_setting_once_and_the_security_row_says_what_is_sent(self):
+        ref = (ROOT / "docs" / "reference.md").read_text(encoding="utf-8")
+        self.assertEqual(sum(1 for line in ref.splitlines() if line.startswith("| `KIMERU_WRITER_PRECEDENT`")), 1)
+        self.assertIn("writer_precedent=1", (ROOT / "SECURITY.md").read_text(encoding="utf-8"))
+        self.assertIn("writer_precedent=1", (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))

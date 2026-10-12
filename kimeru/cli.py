@@ -23,7 +23,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import actions, attention, config, events, execute, fsutil, graph, learn, promises, pull
+from . import actions, attention, config, events, execute, fsutil, graph, learn, memory, promises, pull
 from . import writer as writer_mod
 from . import plan as planner
 from .backends import BackendUnavailable, ClmBackend, JevBackend, KevBackend, StubBackend, is_local_judge, judge_name
@@ -381,11 +381,16 @@ def _judge(g, ev, meter, playbooks, context=None, out=None, now=None):
     return res if out is None else learn.demote(out, g, res, ev, now=now)
 
 
-def _draft(res, ev, meter, writer):
-    """The writer, once, for the judgment that stands. Returns (res, held)."""
+def _draft(res, ev, meter, writer, out=None, now=None):
+    """The writer, once, for the judgment that stands. Returns (res, held). `out` (R36, writer_precedent=1 only) is the state folder
+    the case's earlier decisions are read from; nothing is read without it or at 0."""
     held = []
     t_writer = time.perf_counter()
-    drafted_any = writer_mod.apply(res, ev, writer)
+    precedent = None
+    if out is not None and writer is not None and memory.writer_enabled():   # R36: the first draft of a case gets its earlier decisions
+        probe = {"event_kind": res.get("event_kind"), "event_id": res.get("event_id"), "event": _recorded_event(ev)}
+        precedent = memory.writer_lines(out, probe, now=now)
+    drafted_any = writer_mod.apply(res, ev, writer, precedent=precedent)
     res["perf"] = {"calls": meter.calls, "questions": meter.questions, "judge_sec": round(meter.seconds, 2),
                    "writer_sec": round(time.perf_counter() - t_writer, 2)}
     if drafted_any:
@@ -518,7 +523,7 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
             if pend:
                 pend.drop(key)
             res = promises.status_guard(res, ev_run, out, now)        # R18 (promises=1): a status question from a chat with an overdue promise goes to the PM
-            res, held = _draft(res, ev_run, meter, writer)            # the draft is written once, for the judgment that stands
+            res, held = _draft(res, ev_run, meter, writer, out=out, now=now)   # the draft is written once, for the judgment that stands
             if read_info:
                 res["read_full"] = read_info
             # decide runs now; advise actions are only proposed until approved (see notify.collect)

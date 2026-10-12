@@ -26,6 +26,7 @@ LINE_MAX = 120                  # one history line
 PRECEDENT_MAX = 20              # the precedent on the arrow line, its brackets included
 HISTORY_MAX = 3                 # history lines in 詳細 N
 FINAL = ("OK", "NG")            # the decisions a precedent may name (a hold or a rewrite is only history)
+WRITER_LINES = 2                # R36: the earlier decisions the writer's request gets (writer_precedent=1), at most this many lines
 
 
 def enabled():
@@ -222,6 +223,22 @@ def same_person_note(items, n, rec, now=None):
         return ""
     count = same_person_count(items, n, rec, now)
     return f"（同じ相手 {count} 件目）" if count >= 2 else ""
+
+
+def writer_enabled():
+    """writer_precedent=1 (R36): the writer's request gets the newest earlier decisions of the case. 0 (the default): nothing is read."""
+    return config.value("writer_precedent") == "1"
+
+
+def writer_lines(out, rec, n=None, now=None):
+    """R36 (writer_precedent=1): the first WRITER_LINES lines of 「これまでの経緯」 for the writer's request, from the same lookup and in
+    the same order as 詳細 N (history). `rec` is the case's record (event_kind, event_id, event); `n` is the item's own number, whose
+    entries are left out. [] when the setting is 0 (nothing is read) or there is no state folder. Read only."""
+    if out is None or not writer_enabled():
+        return []
+    data = fsutil.read_json(Path(out) / "approvals.json", {"items": {}})
+    items = data.get("items") if isinstance(data, dict) and isinstance(data.get("items"), dict) else {}
+    return history(index(out, items, now=now), rec, n)[:WRITER_LINES]
 
 
 def show(out, n):

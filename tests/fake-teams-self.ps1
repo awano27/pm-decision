@@ -51,6 +51,7 @@ switch ($Action) {
       elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)保留\s*#?(\d+)\s+(\S{1,10})$') { $c = 'R:保留 {0} {1}' -f $Matches[1], $Matches[2] }
       elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^違う\s*#?(\d+)(?:\s+(\d+))?$') { $c = if ($Matches[2]) { 'R:違う {0} {1}' -f $Matches[1], $Matches[2] } else { 'R:違う {0}' -f $Matches[1] } }
       elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^(正しい|違う)\s*S(\d+)$') { $c = 'R:{0} S{1}' -f $Matches[1], $Matches[2] }
+      elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^送った\s*#?(\d+)\s*[.。!！]*$') { $c = 'R:送った {0}' -f $Matches[1] }
       if ($c -and ($tl.Count -eq 0 -or $tl[$tl.Count - 1] -ne $c)) { $tl.Add($c) }
     }
     Out-Json @{ ok = $true; posts = @(); replies = @(); timeline = @($tl) }

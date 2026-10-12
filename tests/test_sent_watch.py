@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from kimeru import config, daily, fsutil, notify, pull, sent
+from kimeru import config, daily, fsutil, notify, pull, push, sent
 from kimeru.backends import StubBackend
 from kimeru.cli import process
 from tests.test_daily import GRAPHS, PBS, FakeTeams, one_on_one
@@ -266,6 +266,262 @@ class TestSettingsAndDocs(unittest.TestCase):
         ref = (Path(__file__).resolve().parent.parent / "docs" / "reference.md").read_text(encoding="utf-8")
         self.assertEqual(ref.count("| `KIMERU_SENT_WATCH` |"), 1)
         self.assertEqual(ref.count("| `KIMERU_SENT_WATCH_DAYS` |"), 1)
+
+
+# ---- R28 (C04b): an approved reply whose send is not seen gets one nudge a day (once an item, after sent_nudge_hours); `送った N` stops
+# it. Only with sent_watch=1; the default posts, the record and the push text are the same as before (the golden tests below).
+
+ROOT = Path(__file__).resolve().parent.parent
+GOLD_NUDGE = "承認した返信が、自分とのチャットの一覧にまだ見えません。送り終えたら「送った N」と返信してください（例: 送った 3）。"
+PUSH_ENV = {"KIMERU_PUSH": "webhook", "KIMERU_PUSH_WEBHOOK_URL": "https://example.invalid/kimeru"}
+
+
+def watched(num, at, **extra):
+    """An approved item whose reply chat was on the list at the OK (what note_approval keeps as sent_base)."""
+    item = {"key": f"k{num}", "status": "approved", "posted": True, "record": {"actions": []},
+            sent.BASE: {"chat_id": ONE, "p": "h", "approved_at": at.astimezone(timezone.utc).isoformat(timespec="seconds")}}
+    item.update(extra)
+    return item
+
+
+def nudges(t):
+    return [p for p, _ in t.posts if p.startswith("[kimeru 未送信")]
+
+
+class TestTheNudgeIsOnceADayAndOnceAnItem(unittest.TestCase):
+    def setUp(self):
+        patch = mock.patch.dict(os.environ, ON)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.posts = []
+
+    def post(self, text):
+        self.posts.append(text)
+
+    def test_an_unseen_reply_is_nudged_two_hours_after_the_ok_and_not_before(self):
+        data = {"items": {"3": watched(3, T0)}}
+        self.assertEqual(sent.nudge(data, self.post, T0 + timedelta(hours=1, minutes=59)), [])
+        self.assertEqual(sent.nudge(data, self.post, T0 + timedelta(hours=2)), ["3"])
+        self.assertEqual(self.posts, ["[kimeru 未送信 #3]\n" + GOLD_NUDGE])
+        self.assertIn("nudged_at", data["items"]["3"])
+        self.assertEqual(data["nudge_day"], "2026-10-12")
+
+    def test_the_nudge_is_one_post_a_day_and_the_next_day_names_only_the_items_not_yet_nudged(self):
+        data = {"items": {"3": watched(3, T0), "5": watched(5, T0 + timedelta(hours=1))}}
+        self.assertEqual(sent.nudge(data, self.post, T0 + timedelta(hours=2)), ["3"])     # 5 is due at 10:00, today's post is out
+        self.assertEqual(sent.nudge(data, self.post, T0 + timedelta(hours=3)), [])
+        self.assertEqual(sent.nudge(data, self.post, T0 + timedelta(days=1, hours=3)), ["5"])
+        self.assertEqual(sent.nudge(data, self.post, T0 + timedelta(days=2, hours=3)), [])
+        self.assertEqual(self.posts, ["[kimeru 未送信 #3]\n" + GOLD_NUDGE, "[kimeru 未送信 #5]\n" + GOLD_NUDGE])
+
+    def test_a_reply_whose_send_is_seen_or_confirmed_is_never_nudged(self):
+        data = {"items": {"3": watched(3, T0, **{sent.SEEN: {"state": "as_is"}}),
+                          "5": watched(5, T0, **{sent.CONFIRMED: {"at": "x"}})}}
+        self.assertEqual(sent.nudge(data, self.post, T0 + timedelta(hours=5)), [])
+        self.assertEqual(self.posts, [])
+
+    def test_only_an_approved_reply_with_a_watched_chat_inside_the_window_is_nudged(self):
+        data = {"items": {"4": watched(4, T0, status="pending"),
+                          "6": {"key": "k6", "status": "approved", "posted": True, "record": {}}}}
+        self.assertEqual(sent.nudge(data, self.post, T0 + timedelta(hours=5)), [])
+        data = {"items": {"3": watched(3, T0)}}
+        self.assertEqual(sent.nudge(data, self.post, T0 + timedelta(days=3, minutes=1)), [])
+        self.assertEqual(sent.nudge(data, self.post, T0 + timedelta(days=3, minutes=-1)), ["3"])
+
+    def test_with_the_setting_off_nothing_is_nudged_and_the_state_is_not_touched(self):
+        data = {"items": {"3": watched(3, T0)}}
+        with mock.patch.dict(os.environ, OFF):
+            self.assertEqual(sent.nudge(data, self.post, T0 + timedelta(hours=5)), [])
+            self.assertFalse(sent.awaiting(data, data["items"]["3"], T0 + timedelta(hours=5)))
+        self.assertEqual(data, {"items": {"3": watched(3, T0)}})
+        self.assertEqual(self.posts, [])
+
+    def test_the_hours_setting_is_a_whole_number_of_one_or_more_and_otherwise_two(self):
+        for raw, want in (("3", 3), ("1", 1), ("0", 2), ("-4", 2), ("x", 2), ("", 2)):
+            with mock.patch.dict(os.environ, {"KIMERU_SENT_NUDGE_HOURS": raw}):
+                self.assertEqual(sent.nudge_hours(), want, raw)
+
+    def test_a_read_is_asked_for_only_while_a_send_may_still_be_seen_or_confirmed(self):
+        data = {"items": {"3": watched(3, T0), "5": watched(5, T0 + timedelta(hours=1))}}
+        self.assertFalse(sent.awaiting(data, data["items"]["3"], T0 + timedelta(hours=1)))   # not due yet
+        self.assertTrue(sent.awaiting(data, data["items"]["3"], T0 + timedelta(hours=2)))    # due, no nudge today
+        self.assertEqual(sent.nudge(data, self.post, T0 + timedelta(hours=2)), ["3"])
+        self.assertTrue(sent.awaiting(data, data["items"]["3"], T0 + timedelta(hours=2, minutes=30)))   # nudged, not seen
+        self.assertFalse(sent.awaiting(data, data["items"]["5"], T0 + timedelta(hours=3)))    # due, but today's post is out
+        self.assertTrue(sent.awaiting(data, data["items"]["5"], T0 + timedelta(days=1, hours=3)))
+        data["items"]["3"][sent.CONFIRMED] = {"at": "x"}
+        self.assertFalse(sent.awaiting(data, data["items"]["3"], T0 + timedelta(hours=4)))
+
+    def test_an_open_nudge_counts_for_the_phone_only_while_the_setting_is_on(self):
+        item = watched(3, T0, **{sent.NUDGED: "x"})
+        self.assertTrue(sent.nudged_open(item, T0 + timedelta(hours=3)))
+        with mock.patch.dict(os.environ, OFF):
+            self.assertFalse(sent.nudged_open(item, T0 + timedelta(hours=3)))
+
+
+class TestASendReplyIsReadOnlyBelowItsOwnApproval(unittest.TestCase):
+    def test_a_send_reply_counts_only_below_the_approval_post_of_its_number(self):
+        self.assertEqual(notify.fresh_sent({"timeline": ["P:1", "R:送った 1"]}), ["1"])
+        self.assertEqual(notify.fresh_sent({"timeline": ["R:送った 1", "P:1"]}), [])
+        self.assertEqual(notify.fresh_sent({"timeline": ["R:送った 1"]}), [])                  # the approval post is not on the screen
+        self.assertEqual(notify.fresh_sent({"timeline": ["P:1", "X:1:1", "R:送った 1"]}), ["1"])   # a result post is no boundary
+        self.assertEqual(notify.fresh_sent({"timeline": ["P:1", "T:1", "R:送った 1"]}), [])      # a test post of the same number
+        self.assertEqual(notify.fresh_sent({"timeline": ["P:1", "R:送った 1", "R:送った 1"]}), ["1"])
+        self.assertEqual(notify.fresh_sent({"timeline": ["P:2", "R:送った 1"]}), [])
+        self.assertEqual(notify.fresh_sent({"replies": ["送った 1"]}), [])                       # an older reader: nothing is proven
+
+    def test_the_real_and_the_test_reader_each_keep_their_own_send_replies(self):
+        self.assertEqual(notify.scoped_timeline({"timeline": ["T:1", "R:送った 1"]}), [])
+        self.assertEqual(notify.scoped_timeline({"timeline": ["T:1", "R:送った 1"]}, test=True), ["P:1", "R:送った 1"])
+        self.assertEqual(notify._reply_number("送った 1"), "1")
+
+    def test_the_send_reply_grammar_takes_the_forms_a_phone_types_and_no_other_line(self):
+        for line in ("送った 3", "送った3", "送った #3", "送った ３", "送った 3。"):
+            self.assertEqual(notify.parse_sent(line), "3", line)
+        for line in ("送った", "送ったかも 3", "送った 3 ありがとう", "OK 3", "送信 3", "送った 3-1"):
+            self.assertIsNone(notify.parse_sent(line), line)
+
+    def test_a_send_reply_changes_no_reply_or_redo_boundary_wherever_it_stands(self):
+        base = ["P:7", "X:7:1", "R:再実行 7-1", "R:OK 7", "R:再実行 7-2"]
+        for at in range(len(base) + 1):
+            tl = base[:at] + ["R:送った 7"] + base[at:]
+            self.assertEqual(notify.fresh_entries({"timeline": tl}), notify.fresh_entries({"timeline": base}))
+            self.assertEqual(notify.redo_k_entries({"timeline": tl}), notify.redo_k_entries({"timeline": base}))
+            self.assertEqual(notify.redo_bad_kinds({"timeline": tl}), notify.redo_bad_kinds({"timeline": base}))
+            self.assertEqual(notify.fresh_replies({"timeline": tl}), notify.fresh_replies({"timeline": base}))
+
+
+class TestASendReplyStopsTheNudge(unittest.TestCase):
+    def test_the_nudge_goes_to_the_self_chat_once_and_the_reply_chat_is_not_opened(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, ON):
+            t = FakeTeams()
+            out, inbox = approve(d, t)
+            cycle(out, inbox, t, T0 + timedelta(hours=2, minutes=20))
+            self.assertEqual(nudges(t), ["[kimeru 未送信 #1]\n" + GOLD_NUDGE])
+            self.assertEqual(getattr(t, "opened", []), [])
+            self.assertIn("nudged_at", item_one(out))
+            cycle(out, inbox, t, T0 + timedelta(hours=5))
+            self.assertEqual(len(nudges(t)), 1)
+
+    def test_a_send_reply_after_the_nudge_confirms_it_and_changes_nothing_else(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, ON):
+            t = FakeTeams()
+            out, inbox = approve(d, t)
+            cycle(out, inbox, t, T0 + timedelta(hours=2, minutes=20))
+            before = item_one(out)
+            t.timeline.append("R:送った 1")
+            cycle(out, inbox, t, T0 + timedelta(hours=2, minutes=40))
+            after = item_one(out)
+            self.assertIn("sent_confirmed", after)
+            self.assertEqual({k: v for k, v in after.items() if k != "sent_confirmed"}, before)
+            self.assertEqual(after["status"], "approved")
+            self.assertIn('"status": "sent_confirmed"', (Path(out) / "approvals.log.jsonl").read_text(encoding="utf-8"))
+            cycle(out, inbox, t, T0 + timedelta(days=1, hours=3))
+            self.assertEqual(len(nudges(t)), 1)
+
+    def test_a_send_reply_before_the_nudge_time_means_no_nudge_at_all(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, ON):
+            t = FakeTeams()
+            out, inbox = approve(d, t)
+            t.timeline.append("R:送った 1")
+            cycle(out, inbox, t, T0 + timedelta(hours=3))
+            self.assertEqual(nudges(t), [])
+            self.assertIn("sent_confirmed", item_one(out))
+
+    def test_with_the_setting_off_a_send_reply_and_a_long_wait_change_no_post_and_no_record(self):
+        def flow(d, with_reply):
+            t = FakeTeams()
+            out, inbox = approve(d, t)
+            if with_reply:
+                t.timeline.append("R:送った 1")
+            cycle(out, inbox, t, T0 + timedelta(hours=5))
+            return t, out
+        with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b, mock.patch.dict(os.environ, OFF):
+            ta, outa = flow(a, True)
+            tb, _ = flow(b, False)
+            self.assertEqual(ta.posts, tb.posts)
+            self.assertEqual(nudges(ta), [])
+            self.assertFalse({"nudged_at", "sent_confirmed"} & set(item_one(outa)))
+            self.assertNotIn("nudge_day", json.loads((Path(outa) / "approvals.json").read_text(encoding="utf-8")))
+
+    def test_a_run_that_is_not_real_or_does_not_send_writes_no_nudge_and_reads_no_chat(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, ON):
+            t = FakeTeams()
+            out, inbox = approve(d, t)
+            t.timeline.append("R:送った 1")
+            before = (Path(out) / "approvals.json").read_bytes()
+            with mock.patch.object(t, "read", wraps=t.read) as read:
+                for real, send in ((False, True), (True, False)):
+                    notify.collect(out, t, real=real, send=send, now=T0 + timedelta(hours=5))
+                self.assertEqual(read.call_count, 0)
+            self.assertEqual((Path(out) / "approvals.json").read_bytes(), before)
+            self.assertEqual(nudges(t), [])
+
+    def test_a_locked_approvals_file_gets_no_nudge_and_no_write(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, ON):
+            t = FakeTeams()
+            out, _ = approve(d, t)
+            before = (Path(out) / "approvals.json").read_bytes()
+            with fsutil.exclusive(notify.lock_path(out)) as got:
+                self.assertTrue(got)
+                res = notify.collect(out, t, real=True, send=True, now=T0 + timedelta(hours=5))
+            self.assertTrue(res.busy)
+            self.assertEqual((Path(out) / "approvals.json").read_bytes(), before)
+            self.assertEqual(nudges(t), [])
+
+
+class TestThePhoneLineForAnUnsentReply(unittest.TestCase):
+    def test_the_line_names_the_count_and_the_numbers_and_nothing_else(self):
+        self.assertEqual(push.message([], 0, 0, [3, 5]), "kimeru: 未送信 2 件（#3, #5）。Teams の自分とのチャットを確認してください")
+
+    def test_without_unsent_replies_the_line_is_the_same_as_before(self):
+        self.assertEqual(push.message([1], 1, 0), "kimeru: 確認待ち 1 件（#1） / 自動決定の通知 1 件。Teams の自分とのチャットを確認してください")
+        self.assertEqual(push.message([1], 1, 2, []), push.message([1], 1, 2))
+        self.assertEqual(push.message([], 0, 0), "")
+
+    def test_the_unsent_numbers_follow_the_nudge_and_stop_at_a_send_reply(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, ON):
+            t = FakeTeams()
+            out, inbox = approve(d, t)
+            self.assertEqual(push.unsent_numbers(out, now=(T0 + timedelta(hours=5)).timestamp()), [])
+            cycle(out, inbox, t, T0 + timedelta(hours=2, minutes=20))
+            self.assertEqual(push.unsent_numbers(out, now=(T0 + timedelta(hours=3)).timestamp()), [1])
+            t.timeline.append("R:送った 1")
+            cycle(out, inbox, t, T0 + timedelta(hours=3, minutes=10))
+            self.assertEqual(push.unsent_numbers(out, now=(T0 + timedelta(hours=3, minutes=20)).timestamp()), [])
+
+    def test_the_phone_is_told_once_about_a_nudged_reply_and_no_name_or_text_leaves(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, ON):
+            t = FakeTeams()
+            out, _ = approve(d, t)                         # the route is not on yet, so these cycles never push
+            told = []
+
+            def sender(route, text):
+                told.append((route, text))
+            with mock.patch.dict(os.environ, PUSH_ENV):
+                push.run(out, now=(T0 + timedelta(hours=1)).timestamp(), sender=sender)                   # the baseline
+                notify.collect(out, t, real=True, send=True, now=T0 + timedelta(hours=2, minutes=20))   # the nudge
+                push.run(out, now=(T0 + timedelta(hours=2, minutes=30)).timestamp(), sender=sender)
+                push.run(out, now=(T0 + timedelta(hours=2, minutes=40)).timestamp(), sender=sender)
+        self.assertEqual(told, [("webhook", "kimeru: 未送信 1 件（#1）。Teams の自分とのチャットを確認してください")])
+        self.assertNotIn(APPROVED, told[0][1])
+
+
+class TestTheNudgeSettingAndDocs(unittest.TestCase):
+    def test_the_hours_setting_is_a_number_logged_and_shared_like_its_window(self):
+        self.assertEqual(config.SETTINGS["sent_nudge_hours"], ("KIMERU_SENT_NUDGE_HOURS", "2"))
+        self.assertIn("sent_nudge_hours", config.LOGGABLE)
+        self.assertIn("sent_nudge_hours", config.SHARE_VALUES)
+        self.assertNotIn("sent_nudge_hours", config.CHOICES)
+        self.assertEqual(notify.ACK["sent_confirmed"], "送った（催促を止めました）")
+
+    def test_the_docs_have_one_row_for_it_name_the_new_fields_and_list_the_reply(self):
+        ref = (ROOT / "docs" / "reference.md").read_text(encoding="utf-8")
+        self.assertEqual(ref.count("| `KIMERU_SENT_NUDGE_HOURS` |"), 1)
+        sec = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+        for field in ("nudged_at", "sent_confirmed", "nudge_day"):
+            self.assertIn(f"`{field}`", sec)
+        self.assertIn("| `送った N` |", (ROOT / "README.md").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

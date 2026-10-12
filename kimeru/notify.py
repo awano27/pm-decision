@@ -105,6 +105,15 @@ def parse_label(line):
     return (m.group(1), int(m.group(2)) if m.group(2) else None) if m else None
 
 
+SENT_REPLY = re.compile(r"^送った\s*#?(\d+)\s*[.。!！]*$")   # R28 `送った N`: the PM says the approved reply of #N was sent (sent.py, sent_watch=1). Not a REPLY word: it decides no state
+
+
+def parse_sent(line):
+    """The N of a `送った N` line ("送った 3", "送った３", "送った #3"); None for any other line."""
+    m = SENT_REPLY.match(unicodedata.normalize("NFKC", line).strip())
+    return m.group(1) if m else None
+
+
 def _hold_reply(line):
     """(number, None) for `保留 N`, (number, word) for `保留 N <いつ>` (R09, hold.py); None for any other line."""
     r = parse_reply(line)
@@ -144,7 +153,8 @@ def _reply_number(line):
         r = f(line)
         if r:
             return r[0]
-    return parse_redo_bad(line)
+    sent_number = parse_sent(line)   # R28: a `送った N` belongs to #N for the test/real split (scoped_timeline)
+    return sent_number if sent_number is not None else parse_redo_bad(line)
 
 
 def scoped_timeline(read, test=None):
@@ -1057,7 +1067,8 @@ def toast_text(out, posted, notices, unposted=0, sitting=False):
 ACK = {"approved": "承認", "rejected": "却下", "held": "保留", "ask_back": "聞き返し",
        "redrafted": "書き直し", "redraft_failed": "書き直せず", "redo": "再実行", "redo_ignored": "再実行（無視: 古い回数）", "redo_ahead": "再実行（回数が大きすぎます。その回数の結果が出たら 1 回だけ効きます）", "redo_malformed": "再実行（形が違います）", "closed": "済（閉じました）", "detail": "詳細を返信",
        "reposted": "文面を確認して OK し直してください",
-       "learned": "学習を採用しました（基準を変えました）", "learn_stale": "学習（基準が変わっていたため採用せず）"}
+       "learned": "学習を採用しました（基準を変えました）", "learn_stale": "学習（基準が変わっていたため採用せず）",
+       "sent_confirmed": "送った（催促を止めました）"}
 
 
 def ack_text(changes):
@@ -1373,6 +1384,26 @@ def fresh_replies(read, x_boundary=True):
     return [line for line, _ in fresh_entries(read, x_boundary)]
 
 
+def fresh_sent(read):
+    """[number] for the `送った N` replies on the screen, once each (R28). A reply counts only when it comes after the most recent visible
+    approval post "[kimeru #N]" of its number; a result post is no boundary (the send stays true when the result comes). fresh_entries and
+    the redo boundaries do not look at these lines, so they are the same with or without them. [] for an older reader (nothing is proven)."""
+    tl = scoped_timeline(read)
+    if tl is None:
+        return []
+    last_post = {}
+    for i, e in enumerate(tl):
+        if e.startswith("P:"):
+            last_post[e[2:]] = i
+    out = []
+    for i, e in enumerate(tl):
+        if e.startswith("R:"):
+            num = parse_sent(e[2:])
+            if num is not None and i > last_post.get(num, len(tl)) and num not in out:
+                out.append(num)
+    return out
+
+
 INSTRUCTION_MAX = 40   # a longer instruction is about one message, not a preference
 _INSTRUCTION_LINK = re.compile(r"https?:|ftp:|www\.|@", re.IGNORECASE)
 
@@ -1680,10 +1711,13 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
     send=True: what is posted while collecting (results, texts ready to copy) is sent; otherwise it is only pasted.
     real and send together (the first run with --send after an OK without it): the comments of such OKs are written now, once."""
     ap = Approvals(out)
-    from . import execute, memory
+    from . import execute, memory, sent
+    at = now or _naive_now()   # R28: the clock of the nudge and of its watch window (sent.py)
 
     def waiting(it):   # waiting for an answer, or approved but with an execution that failed / was left unsure (`再実行` / `済`),
         # or approved on a run without --send and not written yet (unwritten: the run with --send writes it)
+        if real and send and sent.awaiting(ap.data, it, at):   # R28: a nudged reply whose send is still watched, or one due for today's nudge
+            return True
         return it["posted"] and (it["status"] in ("pending", "held") or (
             real and it["status"] == "approved" and (any(execute.unresolved(v) for v in (it.get("exec") or {}).values())
                                                      or (send and unwritten(it)))))
@@ -1719,6 +1753,12 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
     if real and send:   # R26: `正しい S<k>` / `違う S<k>` label their card's decision (spot.py); no approval item is touched by them
         from . import spot
         spot.apply_safe(out, read, now or _naive_now())
+    if real and send and sent.enabled():   # R28: `送った N` (below its approval post) stops the nudge; then today's nudge, if one is due
+        for num in fresh_sent(read):
+            it = ap.data["items"].get(num)
+            if it and sent.confirm(it, at):
+                changes.append({"id": int(num), "status": "sent_confirmed"})
+        sent.nudge(ap.data, post, at)   # the post is put in the outbox (make_post) and flushed at the end of this step
     fresh = fresh_entries(read)
     replies = [line for line, _ in fresh]
     seen_results = {}   # for `再実行`: the highest result count of the item that stands before the reply (the context of the reply)

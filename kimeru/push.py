@@ -26,6 +26,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import config, fsutil
@@ -53,7 +54,7 @@ def min_interval():
         return 300
 
 
-def message(posted, notices, unposted):
+def message(posted, notices, unposted, unsent=()):
     """The only text that leaves the PC: counts, and the numbers of the items waiting."""
     parts = []
     if posted:
@@ -62,6 +63,8 @@ def message(posted, notices, unposted):
         parts.append(f"自動決定の通知 {notices} 件")
     if unposted:
         parts.append(f"投稿できていない確認待ち {unposted} 件")
+    if unsent:   # R28: approved replies nudged for `送った N` (sent.py); the numbers only
+        parts.append(f"未送信 {len(unsent)} 件（#" + ", #".join(str(n) for n in unsent[:5]) + ("…" if len(unsent) > 5 else "") + "）")
     return "kimeru: " + " / ".join(parts) + "。Teams の自分とのチャットを確認してください" if parts else ""
 
 
@@ -212,6 +215,17 @@ def pending(out):
     return posted, list(ap.data.get("notices", [])), unposted
 
 
+def unsent_numbers(out, now=None):
+    """The numbers of the approved replies that were nudged and whose send is still neither seen nor confirmed (sent.py, R28). Only
+    numbers leave; nothing is read at all unless sent_watch=1. `now`: epoch seconds (None: this moment)."""
+    from . import notify, sent
+    if not sent.enabled():
+        return []
+    when = datetime.fromtimestamp(time.time() if now is None else now, timezone.utc)
+    ap = notify.Approvals(out)
+    return sorted(int(n) for n, it in ap.data["items"].items() if sent.nudged_open(it, when))
+
+
 def begin_cycle(out, now=None):
     """Called first in a cycle that sends. A route seen for the first time is baselined NOW, before this cycle posts anything: what
     was pending until now is not sent, what this cycle posts is. Routes that are off lose their state (also when run() is not
@@ -237,7 +251,7 @@ def _begin_cycle_locked(out, now=None):
         changed = True
     if routes:
         posted, notices, unposted = pending(out)
-        everything = {k for _, k in posted} | {f"unposted:{n}" for n in unposted}
+        everything = {k for _, k in posted} | {f"unposted:{n}" for n in unposted} | {f"unsent:{n}" for n in unsent_numbers(out, now)}
         for route in routes:
             if "notice_n" not in data["routes"].get(route, {}):
                 data["routes"][route] = {"sent": sorted(everything), "notice_n": len(notices), "fails": 0,
@@ -285,7 +299,8 @@ def _run_locked(out, now=None, sender=None, routes=None, hold=None):
         return {}
     now = time.time() if now is None else now
     posted, notices, unposted = pending(out)
-    everything = {k for _, k in posted} | {f"unposted:{n}" for n in unposted}
+    unsent = unsent_numbers(out, now)
+    everything = {k for _, k in posted} | {f"unposted:{n}" for n in unposted} | {f"unsent:{n}" for n in unsent}
     for r in [r for r in data["routes"] if r not in routes]:
         del data["routes"][r]            # turned off: turning it on again starts from a fresh baseline
     result = {}
@@ -310,7 +325,8 @@ def _run_locked(out, now=None, sender=None, routes=None, hold=None):
         if now - st.get("last_at", 0) < min_interval():
             result[route] = "waiting for the minimum interval"
             continue
-        text = message([n for n, k in posted if k in new_send], new_notices, sum(1 for n in unposted if f"unposted:{n}" in new_send))
+        text = message([n for n, k in posted if k in new_send], new_notices, sum(1 for n in unposted if f"unposted:{n}" in new_send),
+                       [n for n in unsent if f"unsent:{n}" in new_send])
         try:
             if sender is None:
                 _sender(route)(text)

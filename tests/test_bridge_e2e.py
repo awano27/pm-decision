@@ -48,6 +48,15 @@ class TestBridgeE2E(unittest.TestCase):
         chat["messages"].append(text)
         self.chat.write_text(json.dumps(chat, ensure_ascii=False), encoding="utf-8")
 
+    def test_a_send_reply_is_handed_back_below_the_approval_post_and_counts_once(self):   # R28: the reader hands `送った N` back
+        bridge = notify.PowerShellBridge(script=FAKE)
+        notify.notify(self.out, bridge, send=True)
+        self.reply("送った 278")
+        self.reply("送った　２７８")
+        read = bridge.read()
+        self.assertIn("R:送った 278", read["timeline"])
+        self.assertEqual(notify.fresh_sent(read), ["278"])
+
     def test_notify_reply_approvals(self):
         bridge = notify.PowerShellBridge(script=FAKE)
         ids = notify.notify(self.out, bridge, send=True)

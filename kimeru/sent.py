@@ -9,7 +9,11 @@ and the chat's list signature has changed since the OK, the message is compared 
 
 Only the state, the time and the similarity are kept, on the approved item (`sent_seen`). No text, no chat is opened, nothing is clicked
 or sent, and the state of the item and the work do not change. It is a reading of the list, not a receipt: the list shows that a message
-of mine is there, not that the other person got it. Only the daily path calls observe() (real=True)."""
+of mine is there, not that the other person got it. Only the daily path calls observe() (real=True).
+
+R28 (C04b, the same setting): an approved reply that no send was seen for, `sent_nudge_hours` after the OK, is nudged once in its life, one
+post a day, to the self chat (`[kimeru 未送信 #N]`, numbers only). `送った N` (notify.parse_sent) says it was sent: the nudge stops and the
+item keeps `sent_confirmed`. Nothing else on the item changes, and nothing is nudged without sent_watch=1."""
 import difflib
 import re
 import unicodedata
@@ -21,11 +25,24 @@ EDITED_MIN = 0.4                        # similarity from which a message counts
 STATES = ("as_is", "edited", "other")
 BASE, SEEN = "sent_base", "sent_seen"   # on the approved item: the reply's chat and list signature at the OK; the state seen
 DAYS = 3                                # days after the OK in which the send is looked for (setting sent_watch_days)
+NUDGED, CONFIRMED = "nudged_at", "sent_confirmed"   # R28: when the nudge was put in the outbox; when `送った N` came
+NUDGE_DAY = "nudge_day"                 # R28, top level of approvals.json: the local day of the last nudge post
+NUDGE_HOURS = 2                         # hours after the OK before the nudge (setting sent_nudge_hours)
+NUDGE_LINE = "承認した返信が、自分とのチャットの一覧にまだ見えません。送り終えたら「送った N」と返信してください（例: 送った 3）。"
 _ELLIPSIS = re.compile(r"\.{3,}$")      # after NFKC, a cut list preview ends with "..."
 
 
 def enabled():
     return config.value("sent_watch") == "1"
+
+
+def nudge_hours():
+    """sent_nudge_hours: a whole number of hours, 1 or more; anything else is the default (2)."""
+    try:
+        n = int(config.value("sent_nudge_hours"))
+    except (TypeError, ValueError):
+        return NUDGE_HOURS
+    return n if n >= 1 else NUDGE_HOURS
 
 
 def days():
@@ -88,6 +105,8 @@ def note_approval(item, sigs, now):
     was on the list before. A new OK starts again: an earlier sighting is dropped. Nothing is kept when the chat is not on the list."""
     item.pop(SEEN, None)
     item.pop(BASE, None)
+    item.pop(NUDGED, None)       # R28: a new OK starts the nudge again (a nudge or `送った N` for an earlier OK does not count)
+    item.pop(CONFIRMED, None)
     for action in _reply_actions(item):
         chat_id = str(action["chat_id"])
         entry = sigs.get(chat_id)
@@ -142,3 +161,73 @@ def observe(out, own, now=None):
         if found:
             ap.save()
     return fsutil.BusyList(found)
+
+
+# ---- R28: the nudge and `送った N` (called by notify._collect with real=True and send=True only)
+
+def _day(when):
+    return _aware(when).astimezone().date().isoformat()
+
+
+def _open(item, when):
+    """The OK's time when the item's reply is still watched at `when`: approved, its chat kept at the OK, no send seen, no `送った N`,
+    within days() after the OK (the same window as observe). None otherwise."""
+    if not isinstance(item, dict) or item.get("status") != "approved" or SEEN in item or CONFIRMED in item:
+        return None
+    base = item.get(BASE)
+    if not isinstance(base, dict) or not isinstance(base.get("chat_id"), str):
+        return None
+    approved = _parse(base.get("approved_at"))
+    if approved is None or not approved <= when <= approved + timedelta(days=days()):
+        return None
+    return approved
+
+
+def nudge_due(item, when):
+    """A watched reply that is nudge_hours() old and has not been nudged yet."""
+    approved = _open(item, _aware(when))
+    return approved is not None and NUDGED not in item and _aware(when) >= approved + timedelta(hours=nudge_hours())
+
+
+def nudged_open(item, when):
+    """A nudged reply that is still watched: it counts for the phone (push.py, numbers only). Nothing while the setting is off."""
+    return enabled() and NUDGED in item and _open(item, _aware(when)) is not None
+
+
+def awaiting(data, item, when):
+    """True when this cycle has to read the self chat for the item: a nudged reply whose send is not seen or confirmed yet, or a due one on
+    a day when no nudge was posted yet (the nudge decides after the read, so a `送った N` already on the screen stops it). False when off."""
+    if not enabled():
+        return False
+    when = _aware(when)
+    if NUDGED in item:
+        return _open(item, when) is not None
+    return nudge_due(item, when) and data.get(NUDGE_DAY) != _day(when)
+
+
+def nudge(data, post, when):
+    """One nudge post a day: the items that are due (see nudge_due) are listed by number, once each, and the day is kept (nudge_day).
+    `post(text)` puts the text in the outbox (notify.make_post). Returns the numbers listed; [] writes nothing."""
+    if not enabled():
+        return []
+    when = _aware(when)
+    if data.get(NUDGE_DAY) == _day(when):
+        return []
+    items = data.get("items", {})
+    due = sorted((n for n, it in items.items() if nudge_due(it, when)), key=int)
+    if not due:
+        return []
+    post("[kimeru 未送信 " + " ".join(f"#{n}" for n in due) + "]\n" + NUDGE_LINE)
+    for n in due:
+        items[n][NUDGED] = _utc_iso(when)
+    data[NUDGE_DAY] = _day(when)
+    return due
+
+
+def confirm(item, when):
+    """`送った N` (R28): the PM says the approved reply was sent. Kept once, as a time. Only an approved item whose reply chat was kept at
+    the OK counts. The status, the record and the chat do not change. True when it was recorded now."""
+    if not isinstance(item, dict) or item.get("status") != "approved" or CONFIRMED in item or not isinstance(item.get(BASE), dict):
+        return False
+    item[CONFIRMED] = {"at": _utc_iso(when)}
+    return True

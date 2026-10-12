@@ -57,6 +57,17 @@ class TestBridgeE2E(unittest.TestCase):
         self.assertIn("R:送った 278", read["timeline"])
         self.assertEqual(notify.fresh_sent(read), ["278"])
 
+    def test_a_send_reply_below_the_nudge_counts_when_the_approval_post_is_off_the_screen(self):   # R28: the nudge is handed back as U:
+        bridge = notify.PowerShellBridge(script=FAKE)
+        notify.notify(self.out, bridge, send=True)
+        self.reply("[kimeru 未送信 #278]\n承認した返信が、自分とのチャットの一覧にまだ見えません。")
+        self.reply("送った 278")
+        with mock.patch.dict(os.environ, {"KIMERU_FAKE_TAIL": "2"}):   # only the nudge and the reply are on the screen
+            read = bridge.read()
+        self.assertIn("U:278", read["timeline"])
+        self.assertNotIn("P:278", read["timeline"])
+        self.assertEqual(notify.fresh_sent(read), ["278"])
+
     def test_notify_reply_approvals(self):
         bridge = notify.PowerShellBridge(script=FAKE)
         ids = notify.notify(self.out, bridge, send=True)

@@ -318,6 +318,7 @@ def _run_locked(out, now=None, sender=None, routes=None, hold=None):
         new = everything - set(st["sent"])
         new_notices = len(notices) - st["notice_n"]
         held = {k for n, k in posted if n in _held_for(hold, route)}   # R17: waits for the next sitting (not sent, not recorded as sent)
+        held |= {f"unsent:{n}" for n in unsent if n in _held_for(hold, route)}   # R28: a nudge waits too (attention.plan puts it in hold)
         new_send = new - held
         if not new_send and not new_notices:
             result[route] = "waiting for the next sitting" if held & new else "nothing new"

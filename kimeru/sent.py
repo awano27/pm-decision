@@ -207,7 +207,9 @@ def awaiting(data, item, when):
 
 def nudge(data, post, when):
     """One nudge post a day: the items that are due (see nudge_due) are listed by number, once each, and the day is kept (nudge_day).
-    `post(text)` puts the text in the outbox (notify.make_post). Returns the numbers listed; [] writes nothing."""
+    The state is set before `post(text)` runs: notify.make_post saves the outbox text and this state in one save, so a run that stops
+    in between never leaves the text in the outbox without the state (which would post a second nudge the same day). Returns the
+    numbers listed; [] writes nothing."""
     if not enabled():
         return []
     when = _aware(when)
@@ -217,10 +219,10 @@ def nudge(data, post, when):
     due = sorted((n for n, it in items.items() if nudge_due(it, when)), key=int)
     if not due:
         return []
-    post("[kimeru 未送信 " + " ".join(f"#{n}" for n in due) + "]\n" + NUDGE_LINE)
     for n in due:
         items[n][NUDGED] = _utc_iso(when)
     data[NUDGE_DAY] = _day(when)
+    post("[kimeru 未送信 " + " ".join(f"#{n}" for n in due) + "]\n" + NUDGE_LINE)
     return due
 
 

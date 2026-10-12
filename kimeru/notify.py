@@ -179,6 +179,9 @@ def scoped_timeline(read, test=None):
         elif head == "D":   # a detail post "[kimeru 詳細 #N]": the real reader only (a test never posts one that is read back)
             if not test:
                 out.append(e)
+        elif head == "U":   # R28: the nudge "[kimeru 未送信 #N ...]" (numbers only): the real reader only; it sets no kind for `last`
+            if not test:    # (so the reply boundaries and the test/real split of fresh_entries do not change), see fresh_sent
+                out.append(e)
         elif head == "R":
             num = _reply_number(rest)
             mine = last.get(num) == "T" if test else last.get(num) != "T"
@@ -1385,21 +1388,29 @@ def fresh_replies(read, x_boundary=True):
 
 
 def fresh_sent(read):
-    """[number] for the `送った N` replies on the screen, once each (R28). A reply counts only when it comes after the most recent visible
-    approval post "[kimeru #N]" of its number; a result post is no boundary (the send stays true when the result comes). fresh_entries and
-    the redo boundaries do not look at these lines, so they are the same with or without them. [] for an older reader (nothing is proven)."""
+    """[number] for the `送った N` replies on the screen, once each (R28). A reply counts when it comes after the most recent visible
+    approval post "[kimeru #N]" of its number, or after the most recent visible nudge "[kimeru 未送信 #N ...]" that names N (the nudge
+    is posted 2 hours or more after the OK, when the approval post has often scrolled off; the PM answers under the nudge). A result post
+    is no boundary (the send stays true when the result comes). A reply above both does not count, and a nudge for another number is no
+    boundary. fresh_entries and the redo boundaries do not look at these lines, so they are the same with or without them.
+    [] for an older reader (nothing is proven)."""
     tl = scoped_timeline(read)
     if tl is None:
         return []
-    last_post = {}
+    last_post, last_nudge = {}, {}
     for i, e in enumerate(tl):
         if e.startswith("P:"):
             last_post[e[2:]] = i
+        elif e.startswith("U:"):   # R28: the nudge's numbers, comma-separated (teams-self.ps1 hands "U:3,5" for "[kimeru 未送信 #3 #5]")
+            for num in filter(None, e[2:].split(",")):
+                last_nudge[num] = i
     out = []
     for i, e in enumerate(tl):
         if e.startswith("R:"):
             num = parse_sent(e[2:])
-            if num is not None and i > last_post.get(num, len(tl)) and num not in out:
+            if num is None or num in out:
+                continue
+            if i > last_post.get(num, len(tl)) or i > last_nudge.get(num, len(tl)):
                 out.append(num)
     return out
 
@@ -1712,11 +1723,11 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
     real and send together (the first run with --send after an OK without it): the comments of such OKs are written now, once."""
     ap = Approvals(out)
     from . import execute, memory, sent
-    at = now or _naive_now()   # R28: the clock of the nudge and of its watch window (sent.py)
+    clock = now or _naive_now()   # R28: the clock of the nudge and of its watch window (sent.py)
 
     def waiting(it):   # waiting for an answer, or approved but with an execution that failed / was left unsure (`再実行` / `済`),
         # or approved on a run without --send and not written yet (unwritten: the run with --send writes it)
-        if real and send and sent.awaiting(ap.data, it, at):   # R28: a nudged reply whose send is still watched, or one due for today's nudge
+        if real and send and sent.awaiting(ap.data, it, clock):   # R28: a nudged reply whose send is still watched, or one due for today's nudge
             return True
         return it["posted"] and (it["status"] in ("pending", "held") or (
             real and it["status"] == "approved" and (any(execute.unresolved(v) for v in (it.get("exec") or {}).values())
@@ -1756,9 +1767,9 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
     if real and send and sent.enabled():   # R28: `送った N` (below its approval post) stops the nudge; then today's nudge, if one is due
         for num in fresh_sent(read):
             it = ap.data["items"].get(num)
-            if it and sent.confirm(it, at):
+            if it and sent.confirm(it, clock):
                 changes.append({"id": int(num), "status": "sent_confirmed"})
-        sent.nudge(ap.data, post, at)   # the post is put in the outbox (make_post) and flushed at the end of this step
+        sent.nudge(ap.data, post, clock)   # the post is put in the outbox (make_post) and flushed at the end of this step
     fresh = fresh_entries(read)
     replies = [line for line, _ in fresh]
     seen_results = {}   # for `再実行`: the highest result count of the item that stands before the reply (the context of the reply)

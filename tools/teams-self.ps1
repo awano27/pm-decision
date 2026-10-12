@@ -1148,6 +1148,12 @@ if ($Action -eq 'read') {
         # the answer to `詳細 N` (full details): not an approval post and not a result post; it only closes the `詳細 N` replies above it
         $entry = "D:" + $Matches[1]
       }
+      elseif ($l -match '^\[kimeru 未送信((?:\s+#\d+)+)\]') {
+        # the nudge of an approved reply that was not seen (R28, sent.py): "U:3,5" for "[kimeru 未送信 #3 #5]". Not an approval post: a `送った N`
+        # below it counts (notify.fresh_sent); the numbers are the only thing kept
+        $nums = @([regex]::Matches($Matches[1], '\d+') | ForEach-Object { $_.Value })
+        $entry = 'U:' + ($nums -join ',')
+      }
       elseif ($l -match '^\[kimeru 試験 #(\d+)\]') {
         # a post of tools/check.ps1 (a test): it is not an approval post and not a boundary for the real reader (notify.scoped_timeline)
         $entry = "T:" + $Matches[1]

@@ -141,18 +141,29 @@ def waiting(out):
     return {int(n) for n, it in items.items() if it.get("posted") and it.get("status") in ("pending", "held") and not announce_now(it)}
 
 
+def unsent(out, now):
+    """R28 (sent_watch=1): the numbers of the approved replies that were nudged and whose send is still watched at `now`
+    (sent.nudged_open). Not urgent, so they wait with the posted items: the push holds them (push.py), nothing else reads them."""
+    from . import notify, sent   # lazily: notify imports the modules that read the settings this one is part of
+    if not sent.enabled():
+        return set()
+    items = notify.Approvals(out).data.get("items", {})
+    return {int(n) for n, it in items.items() if sent.nudged_open(it, now)}
+
+
 def plan(out, now, until=None):
     """What this cycle holds: {"sitting_at": the last sitting at or before now (or None), "hold": the waiting numbers}.
     Called after this cycle has posted what it posts, so the items of this cycle are in it. `until` (R27, control.quiet_until): the end
     of a 休み. Until it comes, no sitting is announced and the waiting numbers are held (the judgment recorded at decision time, not a
-    new one); when it has come, interrupt=sittings takes it as the sitting that announces what was held (the sitting it records)."""
+    new one); when it has come, interrupt=sittings takes it as the sitting that announces what was held (the sitting it records).
+    The hold includes the nudged replies still unsent (R28, unsent): their push waits like the not urgent items, and the same holds apply."""
     now = _local(now)
     if until is not None and now < until:
-        return {"sitting_at": None, "hold": waiting(out)}
+        return {"sitting_at": None, "hold": waiting(out) | unsent(out, now)}
     at = boundary(now)
     if until is not None and hours() and until.isoformat(timespec="minutes") > at:
         at = until.isoformat(timespec="minutes")
-    return {"sitting_at": at, "hold": waiting(out) if at else set()}
+    return {"sitting_at": at, "hold": (waiting(out) | unsent(out, now)) if at else set()}
 
 
 def status_lines(out, now=None):

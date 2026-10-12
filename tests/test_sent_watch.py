@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from kimeru import config, daily, fsutil, notify, pull, push, sent
+from kimeru import attention, config, daily, fsutil, notify, pull, push, sent
 from kimeru.backends import StubBackend
 from kimeru.cli import process
 from tests.test_daily import GRAPHS, PBS, FakeTeams, one_on_one
@@ -32,6 +32,8 @@ GOLDEN_POSTS = [   # taken from the code before R14 (the default path must keep 
     "[kimeru #1] 本日中に判断が必要: Sato「明日の件、確認できますか」\n→ 本日中に判断が必要: Sato「明日の件、確認できますか」\n案: 承知しました。明日までに確認します。\nOK 1 / NG 1 / 詳細 1",
     "[kimeru 送信用 #1]\n承知しました。明日までに確認します。",
 ]
+GOLDEN_BRIEF = ("[kimeru brief 2026-10-12] 今日の進め方\n実行候補はありません。未完了作業の状況は下記を確認してください\n\n"
+                "承認済み・未完了の作業:\n- #1 本日中に判断が必要: Sato「明日の件、確認できますか」")   # the 5 h cycle's brief with the setting off
 
 
 def write_reply_queue(out):
@@ -288,6 +290,11 @@ def nudges(t):
     return [p for p, _ in t.posts if p.startswith("[kimeru 未送信")]
 
 
+def tree(out):
+    """Every file under the state folder, by its name, with its bytes (what a run that must not write leaves behind)."""
+    return {str(p.relative_to(out)): p.read_bytes() for p in Path(out).rglob("*") if p.is_file()}
+
+
 class TestTheNudgeIsOnceADayAndOnceAnItem(unittest.TestCase):
     def setUp(self):
         patch = mock.patch.dict(os.environ, ON)
@@ -398,6 +405,7 @@ class TestASendReplyStopsTheNudge(unittest.TestCase):
             out, inbox = approve(d, t)
             cycle(out, inbox, t, T0 + timedelta(hours=2, minutes=20))
             self.assertEqual(nudges(t), ["[kimeru 未送信 #1]\n" + GOLD_NUDGE])
+            self.assertTrue(all(p.startswith("[kimeru") for p, _ in t.posts))
             self.assertEqual(getattr(t, "opened", []), [])
             self.assertIn("nudged_at", item_one(out))
             cycle(out, inbox, t, T0 + timedelta(hours=5))
@@ -440,6 +448,8 @@ class TestASendReplyStopsTheNudge(unittest.TestCase):
             ta, outa = flow(a, True)
             tb, _ = flow(b, False)
             self.assertEqual(ta.posts, tb.posts)
+            self.assertEqual([p for p, _ in ta.posts if not p.startswith("[kimeru brief")], GOLDEN_POSTS)   # the literal bytes (setting 0)
+            self.assertEqual([p for p, _ in ta.posts if p.startswith("[kimeru brief")], [GOLDEN_BRIEF])
             self.assertEqual(nudges(ta), [])
             self.assertFalse({"nudged_at", "sent_confirmed"} & set(item_one(outa)))
             self.assertNotIn("nudge_day", json.loads((Path(outa) / "approvals.json").read_text(encoding="utf-8")))
@@ -449,24 +459,27 @@ class TestASendReplyStopsTheNudge(unittest.TestCase):
             t = FakeTeams()
             out, inbox = approve(d, t)
             t.timeline.append("R:送った 1")
-            before = (Path(out) / "approvals.json").read_bytes()
+            before, posts = tree(out), len(t.posts)
             with mock.patch.object(t, "read", wraps=t.read) as read:
                 for real, send in ((False, True), (True, False)):
                     notify.collect(out, t, real=real, send=send, now=T0 + timedelta(hours=5))
                 self.assertEqual(read.call_count, 0)
-            self.assertEqual((Path(out) / "approvals.json").read_bytes(), before)
+            self.assertEqual(tree(out), before)                       # no file is created, changed or removed (approvals, executions, locks)
+            self.assertEqual(len(t.posts), posts)
             self.assertEqual(nudges(t), [])
+            self.assertTrue(all(p.startswith("[kimeru") for p, _ in t.posts))
 
     def test_a_locked_approvals_file_gets_no_nudge_and_no_write(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, ON):
             t = FakeTeams()
             out, _ = approve(d, t)
-            before = (Path(out) / "approvals.json").read_bytes()
+            before, posts = tree(out), len(t.posts)
             with fsutil.exclusive(notify.lock_path(out)) as got:
                 self.assertTrue(got)
                 res = notify.collect(out, t, real=True, send=True, now=T0 + timedelta(hours=5))
             self.assertTrue(res.busy)
-            self.assertEqual((Path(out) / "approvals.json").read_bytes(), before)
+            self.assertEqual(tree(out), before)
+            self.assertEqual(len(t.posts), posts)
             self.assertEqual(nudges(t), [])
 
 
@@ -505,6 +518,164 @@ class TestThePhoneLineForAnUnsentReply(unittest.TestCase):
                 push.run(out, now=(T0 + timedelta(hours=2, minutes=40)).timestamp(), sender=sender)
         self.assertEqual(told, [("webhook", "kimeru: 未送信 1 件（#1）。Teams の自分とのチャットを確認してください")])
         self.assertNotIn(APPROVED, told[0][1])
+
+
+class TestASendReplyBelowTheNudgeCounts(unittest.TestCase):
+    """The nudge is posted 2 hours or more after the OK, when the approval post has often scrolled off. A `送った N` below the visible
+    nudge of N counts; a reply above the nudge, or below a nudge for another number, does not."""
+    def test_a_send_reply_below_the_nudge_counts_when_the_approval_post_is_off_the_screen(self):
+        self.assertEqual(notify.fresh_sent({"timeline": ["U:1", "R:送った 1"]}), ["1"])
+        self.assertEqual(notify.fresh_sent({"timeline": ["R:送った 1", "U:1"]}), [])                   # above the nudge
+        self.assertEqual(notify.fresh_sent({"timeline": ["P:1", "U:1", "R:送った 1"]}), ["1"])          # approval post and nudge
+
+    def test_a_nudge_for_another_number_is_no_boundary(self):
+        self.assertEqual(notify.fresh_sent({"timeline": ["U:2", "R:送った 1"]}), [])
+        self.assertEqual(notify.fresh_sent({"timeline": ["U:1", "R:送った 2"]}), [])
+        self.assertEqual(notify.fresh_sent({"timeline": ["U:2,3", "R:送った 3"]}), ["3"])             # one nudge may name several
+        self.assertEqual(notify.fresh_sent({"timeline": ["U:1", "R:送った 1", "U:2", "R:送った 2"]}), ["1", "2"])
+
+    def test_a_test_post_is_no_boundary_and_a_reply_after_it_is_the_tests(self):
+        self.assertEqual(notify.fresh_sent({"timeline": ["T:1", "R:送った 1"]}), [])
+        self.assertEqual(notify.fresh_sent({"timeline": ["U:1", "T:1", "R:送った 1"]}), [])   # a reply after a test post of its number is the test's
+        self.assertEqual(notify.scoped_timeline({"timeline": ["U:1", "T:1"]}, test=True), ["P:1"])   # the test reader keeps its own posts only
+
+    def test_the_nudge_entry_is_kept_by_the_real_reader_and_dropped_by_the_test_reader(self):
+        self.assertEqual(notify.scoped_timeline({"timeline": ["U:1"]}), ["U:1"])
+        self.assertEqual(notify.scoped_timeline({"timeline": ["U:1"]}, test=True), [])
+
+
+class TestTheNudgeEntryChangesNoReplyOrRedoBoundary(unittest.TestCase):
+    BASES = (["P:7", "X:7:1", "R:再実行 7-1", "R:OK 7", "R:再実行 7-2"],
+             ["P:7", "T:7", "R:OK 7", "X:7:2", "R:再実行 7-2", "R:送った 7"],
+             ["P:7", "R:OK 7", "X:7:1", "R:再実行 7-1", "R:保留 7 明日"])
+
+    def test_a_nudge_entry_changes_no_reply_or_redo_boundary_wherever_it_stands(self):   # the reply rules of fresh_entries are not touched
+        for base in self.BASES:
+            for nudge in ("U:7", "U:7,8", "U:8"):
+                for at in range(len(base) + 1):
+                    tl = base[:at] + [nudge] + base[at:]
+                    for x_boundary in (True, False):
+                        self.assertEqual(notify.fresh_entries({"timeline": tl}, x_boundary), notify.fresh_entries({"timeline": base}, x_boundary))
+                    self.assertEqual(notify.fresh_replies({"timeline": tl}), notify.fresh_replies({"timeline": base}))
+                    self.assertEqual(notify.redo_k_entries({"timeline": tl}), notify.redo_k_entries({"timeline": base}))
+                    self.assertEqual(notify.redo_bad_kinds({"timeline": tl}), notify.redo_bad_kinds({"timeline": base}))
+                    self.assertEqual(notify.redo_bad_entries({"timeline": tl}), notify.redo_bad_entries({"timeline": base}))
+
+
+class TestTheNudgeStateIsSavedWithItsOutboxText(unittest.TestCase):
+    def setUp(self):
+        patch = mock.patch.dict(os.environ, ON)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def new_out(self, d):
+        out = Path(d) / "out"
+        ap = notify.Approvals(out)
+        ap.data["items"]["3"] = watched(3, T0)
+        ap.save()
+        return out
+
+    def test_the_nudge_state_and_its_outbox_text_are_saved_in_one_save(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = self.new_out(d)
+            ap = notify.Approvals(out)
+            post = notify.make_post(ap, FakeTeams(), send=True)
+            self.assertEqual(sent.nudge(ap.data, post, T0 + timedelta(hours=2)), ["3"])
+            saved = notify.Approvals(out).data
+            self.assertEqual(saved["outbox"], ["[kimeru 未送信 #3]\n" + GOLD_NUDGE])
+            self.assertEqual(saved["nudge_day"], "2026-10-12")
+            self.assertIn("nudged_at", saved["items"]["3"])
+            self.assertEqual(sent.nudge(saved, post, T0 + timedelta(hours=3)), [])                 # the same day: no second nudge
+
+    def test_a_run_that_stops_after_the_outbox_save_keeps_the_state_and_posts_once(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = self.new_out(d)
+            ap = notify.Approvals(out)
+            post = notify.make_post(ap, FakeTeams(), send=True)
+
+            def post_then_stop(text):
+                post(text)   # the outbox text is saved here, and with it the state (sent.nudge sets it before the post)
+                raise RuntimeError("the run stops before its last save")
+            with self.assertRaises(RuntimeError):
+                sent.nudge(ap.data, post_then_stop, T0 + timedelta(hours=2))
+            saved = notify.Approvals(out).data
+            self.assertEqual(saved["outbox"], ["[kimeru 未送信 #3]\n" + GOLD_NUDGE])
+            self.assertIn("nudged_at", saved["items"]["3"])
+            self.assertEqual(saved["nudge_day"], "2026-10-12")
+            ap2 = notify.Approvals(out)
+            self.assertEqual(sent.nudge(ap2.data, notify.make_post(ap2, FakeTeams(), send=True), T0 + timedelta(hours=3)), [])
+            self.assertEqual(len(notify.Approvals(out).data["outbox"]), 1)
+
+    def test_a_save_that_fails_leaves_neither_the_text_nor_the_state_on_disk(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = self.new_out(d)
+            ap = notify.Approvals(out)
+            post = notify.make_post(ap, FakeTeams(), send=True)
+            with mock.patch.object(ap, "save", side_effect=OSError("the disk is full")):
+                with self.assertRaises(OSError):
+                    sent.nudge(ap.data, post, T0 + timedelta(hours=2))
+            saved = notify.Approvals(out).data
+            self.assertNotIn("outbox", saved)
+            self.assertNotIn("nudge_day", saved)
+            self.assertNotIn("nudged_at", saved["items"]["3"])
+            ap2 = notify.Approvals(out)                                                            # the next run posts it once
+            self.assertEqual(sent.nudge(ap2.data, notify.make_post(ap2, FakeTeams(), send=True), T0 + timedelta(hours=2)), ["3"])
+            self.assertEqual(notify.Approvals(out).data["outbox"], ["[kimeru 未送信 #3]\n" + GOLD_NUDGE])
+
+
+class TestTheNudgeHoursInACycle(unittest.TestCase):
+    def test_a_cycle_with_three_hours_nudges_after_three_hours_and_not_before(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {**ON, "KIMERU_SENT_NUDGE_HOURS": "3"}):
+            t = FakeTeams()
+            out, inbox = approve(d, t)                                                             # the OK at 07:10
+            cycle(out, inbox, t, T0 + timedelta(hours=2, minutes=59))                              # 2 h 49 min after the OK
+            self.assertEqual(nudges(t), [])
+            cycle(out, inbox, t, T0 + timedelta(hours=3, minutes=15))                              # 3 h 5 min after the OK
+            self.assertEqual(nudges(t), ["[kimeru 未送信 #1]\n" + GOLD_NUDGE])
+            self.assertTrue(all(p.startswith("[kimeru") for p, _ in t.posts))
+
+
+class TestAnUnsentNudgeWaitsLikeTheNotUrgentItems(unittest.TestCase):
+    def test_a_nudge_is_held_during_a_quiet_and_sent_when_it_ends(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, ON):
+            t = FakeTeams()
+            out, inbox = approve(d, t)                                                             # the route is not on yet: no push here
+            told = []
+
+            def sender(route, text):
+                told.append((route, text))
+            until = T0 + timedelta(hours=3)                                                        # a 休み until 10:00
+            with mock.patch.dict(os.environ, PUSH_ENV):
+                push.run(out, now=(T0 + timedelta(hours=1)).timestamp(), sender=sender)            # the baseline
+                notify.collect(out, t, real=True, send=True, now=T0 + timedelta(hours=2, minutes=20))   # the nudge
+                self.assertEqual(nudges(t), ["[kimeru 未送信 #1]\n" + GOLD_NUDGE])
+                during = attention.plan(out, T0 + timedelta(hours=2, minutes=30), until=until)
+                self.assertEqual(during, {"sitting_at": None, "hold": {1}})
+                push.run(out, now=(T0 + timedelta(hours=2, minutes=30)).timestamp(), sender=sender, hold={"webhook": during["hold"]})
+                self.assertEqual(told, [])                                                         # held: not sent, not recorded as sent
+                after = attention.plan(out, T0 + timedelta(hours=3, minutes=5), until=until)
+                self.assertEqual(after, {"sitting_at": None, "hold": set()})
+                push.run(out, now=(T0 + timedelta(hours=3, minutes=5)).timestamp(), sender=sender, hold={"webhook": after["hold"]})
+            self.assertEqual(told, [("webhook", "kimeru: 未送信 1 件（#1）。Teams の自分とのチャットを確認してください")])
+
+    def test_without_the_setting_no_nudged_reply_is_held(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out"
+            ap = notify.Approvals(out)
+            ap.data["items"]["3"] = watched(3, T0, **{sent.NUDGED: "2026-10-12T09:20:00+00:00"})
+            ap.save()
+            with mock.patch.dict(os.environ, OFF):
+                self.assertEqual(attention.unsent(out, T0 + timedelta(hours=3)), set())
+            with mock.patch.dict(os.environ, ON):
+                self.assertEqual(attention.unsent(out, T0 + timedelta(hours=3)), {3})
+
+
+class TestTheReadersHandTheNudgeBack(unittest.TestCase):
+    def test_both_readers_hand_the_nudge_back_as_a_u_entry_with_its_numbers_only(self):
+        for name in ("tools/teams-self.ps1", "tests/fake-teams-self.ps1"):
+            text = (ROOT / name).read_text(encoding="utf-8")
+            self.assertIn("未送信((?:\\s+#\\d+)+)\\]", text, name)
+            self.assertIn("'U:' + ($nums -join ',')", text, name)
 
 
 class TestTheNudgeSettingAndDocs(unittest.TestCase):

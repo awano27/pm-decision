@@ -41,6 +41,7 @@ switch ($Action) {
       $c = $null
       if ($first -match '^\[kimeru #(\d+)\]') { $c = "P:" + $Matches[1] }
       elseif ($first -match '^\[kimeru 詳細 #(\d+)\]') { $c = "D:" + $Matches[1] }
+      elseif ($first -match '^\[kimeru 未送信((?:\s+#\d+)+)\]') { $nums = @([regex]::Matches($Matches[1], '\d+') | ForEach-Object { $_.Value }); $c = 'U:' + ($nums -join ',') }
       elseif ($first -match '^\[kimeru 試験 #(\d+)\]') { $c = "T:" + $Matches[1] }
       elseif ($first -match '^\[kimeru 試験 実行 #(\d+)(?:\s+(\d+))?\]') { $c = 'TX:{0}:{1}' -f $Matches[1], $(if ($Matches[2]) { [int]$Matches[2] } else { 0 }) }
       elseif ($first -match '^\[kimeru 確認 S(\d+)\]') { $c = 'S:' + $Matches[1] }

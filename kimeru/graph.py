@@ -205,6 +205,47 @@ def validate(g, playbooks=None):
             raise GraphError(f"path from {nid} exceeds the {MAX_STEPS}-step execution limit")
 
 
+# R38: how a question is written. `validate` prints these as warnings; a run never reads them and nothing is refused.
+NOUL_WARNING = "noul has and/or in it, so one question asks two things; ask one condition per question"
+CHOICE_WARNING = "choice has no 'none' option, so a message that fits no option is forced into one"
+SCORE_WARNING = "score level {i} is a degree word, not a situation; describe the case the level stands for"
+_COMPOUND = re.compile(r"\b(?:and|or)\b|または|かつ", re.IGNORECASE)
+_DEGREE = re.compile(r"(?:(?:very|somewhat|slightly|quite|fairly|rather|extremely|a little|a bit) )?"
+                     r"(?:low|medium|mid|moderate|high|small|large|minor|major|mild|severe|serious|critical|urgent|"
+                     r"normal|important|strong|weak|some|little|much)"
+                     r"(?: (?:level|priority|impact|severity|urgency|risk))?", re.IGNORECASE)
+_DEGREE_JA = frozenset(("低", "低い", "中", "中程度", "高", "高い", "小", "小さい", "大", "大きい", "軽微", "重大", "少し", "やや",
+                        "かなり", "普通", "多い", "少ない"))
+
+
+def _is_degree(level):
+    t = str(level).strip().rstrip(".。").strip()
+    return bool(_DEGREE.fullmatch(t)) or t in _DEGREE_JA
+
+
+def _has_none(options):
+    return any(str(k).strip().lower() == "none" or "該当なし" in str(v) or "none of" in str(v).lower()
+               for k, v in options.items())
+
+
+def lint(g):
+    """Warnings about how the judge questions are written, as "<node>: <text>" (ASCII only). Nothing is refused and the
+    graph is not changed: a question's wording is the judgment, so changing it is a decision of its own (a new version)."""
+    out = []
+    for nid, n in (g.get("nodes") or {}).items():
+        q = n.get("question") if isinstance(n, dict) and n.get("kind") == "judge" else None
+        if not isinstance(q, dict):
+            continue
+        crit = q.get("criteria")
+        if q.get("type") == "noul" and _COMPOUND.search(str(q.get("instructions") or "")):
+            out.append(f"{nid}: {NOUL_WARNING}")
+        if q.get("type") == "choice" and isinstance(crit, dict) and not _has_none(crit):
+            out.append(f"{nid}: {CHOICE_WARNING}")
+        if q.get("type") == "score" and isinstance(crit, list):
+            out += [f"{nid}: {SCORE_WARNING.format(i=i)}" for i, level in enumerate(crit) if _is_degree(level)]
+    return out
+
+
 def _split_non_adjacent(probs, at):
     """True if two levels that are not neighbours both hold >= `at` probability."""
     heavy = sorted(int(k) for k, p in probs.items() if str(k).isdigit() and p >= at)

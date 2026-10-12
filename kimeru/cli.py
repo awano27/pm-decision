@@ -1018,6 +1018,8 @@ def _main(argv=None):
         for kind, lst in gs.items():
             for g in lst:
                 print(f"ok  {g['name']} ({kind}, {len(g['nodes'])} nodes)")
+                for w in graph.lint(g):   # R38: warnings about how a question is written; the graph still passes
+                    print(f"warn  {g['name']}: {w}")
         return 0
 
     if a.cmd == "memory":   # R16: the earlier decisions of #N, in the terminal (nothing is written, nothing is posted)

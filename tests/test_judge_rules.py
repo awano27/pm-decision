@@ -3,11 +3,15 @@ try:   # isolation from the real state folder, whichever way the tests are start
 except ImportError:
     import isolate  # noqa: F401
 
+import copy
+import io
 import json
+import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-from kimeru import events, graph, plan
+from kimeru import cli, events, graph, plan
 from kimeru.backends import ReplayBackend
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -256,3 +260,116 @@ class TestRecoveryInAnotherSentence(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- R38: validate warns about how a question is written (never fails, never changes a graph) -------------------
+NOUL_WARNING = ("noul has and/or in it, so one question asks two things; ask one condition per question")
+CHOICE_WARNING = ("choice has no 'none' option, so a message that fits no option is forced into one")
+
+
+def score_warning(i):
+    return (f"score level {i} is a degree word, not a situation; describe the case the level stands for")
+
+
+def lint_question(question):
+    return graph.lint({"nodes": {"q": {"kind": "judge", "question": question, "routes": {}}}})
+
+
+def run_cli(*argv):
+    out, err = io.StringIO(), io.StringIO()
+    with tempfile.TemporaryDirectory() as d, redirect_stdout(out), redirect_stderr(err):
+        rc = cli.main(["--out", str(Path(d) / "out"), *argv])
+    return rc, out.getvalue(), err.getvalue()
+
+
+BUNDLED_WARNINGS = [   # the four questions the bundled graphs ask in a compound or 'none'-less way, fixed as they are now
+    ("workitem-intake", "ready: " + NOUL_WARNING),
+    ("minutes-followup", "item_type: " + CHOICE_WARNING),
+    ("minutes-followup", "has_due: " + NOUL_WARNING),
+    ("alert-triage", "noise_check: " + NOUL_WARNING),
+]
+COMPOUND_GRAPH = {"name": "compound-check", "event": "teams.chat", "start": "a", "nodes": {
+    "a": {"kind": "judge", "question": {"type": "noul", "instructions": "Does the message give a due date or a deadline?"},
+          "routes": {"yes": "b", "no": "b", "unsure": "b"}},
+    "b": {"kind": "decide", "actions": []}}}
+
+
+class TestQuestionWritingWarnings(unittest.TestCase):
+    """validate lists the questions written as two conditions in one, a choice without a none, and score levels that
+    are only degree words. A warning never stops validate and never changes a graph."""
+
+    def test_bundled_graphs_keep_exactly_the_same_warnings(self):
+        found = []
+        for path in sorted((ROOT / "graphs").glob("*.json")):
+            g = json.loads(path.read_text(encoding="utf-8"))
+            found += [(g["name"], text) for text in graph.lint(g)]
+        self.assertEqual(found, BUNDLED_WARNINGS)
+
+    def test_and_or_or_mark_a_noul_with_two_conditions_in_english_and_japanese(self):
+        for text in ("Does the item state a due date or a deadline?", "Is the owner AND the due date named?",
+                     "期限または担当者が書かれていますか？", "期限かつ担当者が書かれていますか？"):
+            self.assertEqual(lint_question({"type": "noul", "instructions": text}), ["q: " + NOUL_WARNING], text)
+
+    def test_words_that_only_contain_or_or_for_are_not_flagged(self):
+        for text in ("Does the message ask for a decision on the order?",
+                     "Does the alert warn about a problem expected to happen in the future, rather than a problem happening now?"):
+            self.assertEqual(lint_question({"type": "noul", "instructions": text}), [], text)
+
+    def test_a_choice_without_a_none_option_is_flagged_and_a_none_option_clears_it(self):
+        self.assertEqual(lint_question({"type": "choice", "instructions": "x",
+                                        "criteria": {"decision": "d", "info": "i"}}), ["q: " + CHOICE_WARNING])
+        self.assertEqual(lint_question({"type": "choice", "instructions": "x",
+                                        "criteria": {"decision": "d", "none": "small talk"}}), [])
+        self.assertEqual(lint_question({"type": "choice", "instructions": "x",
+                                        "criteria": {"decision": "d", "info": "i", "x": "該当なし"}}), [])
+        self.assertEqual(lint_question({"type": "choice", "instructions": "x",
+                                        "criteria": {"decision": "d", "info": "i", "x": "none of these"}}), [])
+
+    def test_a_score_level_that_is_only_a_degree_word_is_flagged(self):
+        self.assertEqual(lint_question({"type": "score", "instructions": "x", "criteria": ["Low", "Medium", "High"]}),
+                         ["q: " + score_warning(i) for i in range(3)])
+        self.assertEqual(lint_question({"type": "score", "instructions": "x", "criteria": ["very high", "中程度", "重大"]}),
+                         ["q: " + score_warning(i) for i in range(3)])
+
+    def test_score_levels_that_describe_a_situation_are_not_flagged(self):
+        self.assertEqual(lint_question({"type": "score", "instructions": "x", "criteria": [
+            "No deadline is stated or implied", "Within this week", "By end of today", "Blocking someone right now"]}), [])
+        self.assertEqual(lint_question({"type": "score", "instructions": "x",
+                                        "criteria": ["軽微な表示の崩れ", "重大な障害が起きている"]}), [])
+
+    def test_every_warning_is_ascii_so_the_console_can_print_it(self):
+        texts = [text for _, text in BUNDLED_WARNINGS]
+        texts += lint_question({"type": "score", "instructions": "x", "criteria": ["中程度", "重大"]})
+        texts += lint_question({"type": "choice", "instructions": "x", "criteria": {"決定": "d", "情報": "i"}})
+        for text in texts:
+            self.assertTrue(text.isascii(), text)
+
+    def test_lint_leaves_every_bundled_graph_as_it_was(self):
+        for path in sorted((ROOT / "graphs").glob("*.json")):
+            g = json.loads(path.read_text(encoding="utf-8"))
+            before = copy.deepcopy(g)
+            graph.lint(g)
+            self.assertEqual(g, before, path.name)
+
+    def test_loading_a_graph_prints_nothing_about_the_warnings(self):
+        out = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(io.StringIO()):
+            graph.load_dir(ROOT / "graphs", PBS)
+        self.assertEqual(out.getvalue(), "")
+
+    def test_validate_in_the_repo_prints_each_warning_and_still_exits_zero(self):
+        rc, out, err = run_cli("validate")
+        self.assertEqual(rc, 0, err)
+        lines = out.splitlines()
+        self.assertIn("ok  teams-chat-triage (teams.chat, ", out)
+        for name, text in BUNDLED_WARNINGS:
+            self.assertIn(f"warn  {name}: {text}", lines)
+
+    def test_a_graph_with_a_warning_still_validates_and_validate_exits_zero(self):
+        graph.validate(COMPOUND_GRAPH)   # a warning is not a GraphError
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "compound.json").write_text(json.dumps(COMPOUND_GRAPH, ensure_ascii=False), encoding="utf-8")
+            rc, out, err = run_cli("--graphs", d, "--playbooks", str(ROOT / "playbooks"), "validate")
+        self.assertEqual(rc, 0, err)
+        self.assertIn(f"warn  compound-check: a: {NOUL_WARNING}", out.splitlines())
+        self.assertNotIn("Traceback", err)

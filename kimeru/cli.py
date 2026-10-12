@@ -387,7 +387,8 @@ def _draft(res, ev, meter, writer, out=None, now=None):
     held = []
     t_writer = time.perf_counter()
     precedent = None
-    if out is not None and writer is not None and memory.writer_enabled():   # R36: the first draft of a case gets its earlier decisions
+    # R36: the first draft of a case gets its earlier decisions (writer_precedent=1); nothing is read for an event with nothing to draft
+    if out is not None and writer is not None and writer_mod.targets(res) and memory.writer_enabled():
         probe = {"event_kind": res.get("event_kind"), "event_id": res.get("event_id"), "event": _recorded_event(ev)}
         precedent = memory.writer_lines(out, probe, now=now)
     drafted_any = writer_mod.apply(res, ev, writer, precedent=precedent)

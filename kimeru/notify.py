@@ -1589,9 +1589,10 @@ STALE_ACTION_KEYS = ("drafted_by", "held_for", "writer_warning", "variant", "ask
 STALE_RECORD_KEYS = ("writer_error", "copilot_request", "copilot_sources", "memo", "redraft_note", "style_used")
 
 
-def _redraft(it, instruction, writer, out=None, n=None):
+def _redraft(it, instruction, writer, out=None, n=None, now=None):
     """Write the item again with the PM's instruction. Returns the change to log; the item is posted
-    again under the same number either way (a failure says so and keeps the previous draft)."""
+    again under the same number either way (a failure says so and keeps the previous draft). `now` (R36): the clock of the
+    earlier-decisions lookup (the cycle's clock from _collect; None: now)."""
     rec = it["record"]
     it["posted"], it["status"], it["request_posted"] = False, "pending", False
     hold.clear(it)
@@ -1605,7 +1606,7 @@ def _redraft(it, instruction, writer, out=None, n=None):
                 if a.get("drafted_by") and isinstance(a.get(writer_mod.FIELD[a["type"]]), str)}
     from . import memory   # local: memory loads notify lazily as well
     # R36 (writer_precedent=1 only; [] at 0, nothing read): the case's earlier decisions, from the record as it stands (n: this item)
-    precedent = memory.writer_lines(out, rec, n) if out is not None else []
+    precedent = memory.writer_lines(out, rec, n, now=now) if out is not None else []
     for a in rec.get("actions", []):
         for k in STALE_ACTION_KEYS:
             a.pop(k, None)
@@ -2008,7 +2009,7 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
         if rd:
             it = ap.data["items"].get(rd[0])
             if it and it["posted"] and it["status"] in ("pending", "held"):
-                changes.append({"id": int(rd[0]), **_redraft(it, rd[1], writer, out, n=int(rd[0]))})
+                changes.append({"id": int(rd[0]), **_redraft(it, rd[1], writer, out, n=int(rd[0]), now=now)})
             continue
         lb = parse_label(line)
         if lb:   # 違う N / 違う N k: a verdict on the decision (learn=1, the daily and approvals paths). It never changes the item

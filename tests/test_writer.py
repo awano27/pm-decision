@@ -10,6 +10,7 @@ except ImportError:
 import hashlib
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -1044,22 +1045,84 @@ class TestWriterPrecedent(unittest.TestCase):
         self.assertTrue(spies[0].prompts)
         self.assertEqual(spies[0].prompts, spies[1].prompts)
 
+    def redraft_of_held_item(self, out, now):
+        """The 修正 N of item 13 (held) while item 12 of the same chat is approved. `now` is the clock the lookup uses.
+        Returns (the change, the writer's prompt)."""
+        own = precedent_chat("19:c1#m-13")
+        precedent_state(out, [(12, precedent_chat("19:c1#m-12"), "approved", 3), (13, own, "held", 1)])
+        rec = {**own, "material_event": {"kind": "teams.chat", "author": "佐藤", "chat_id": "19:c1",
+                                         "text": "来週火曜にリリースを延期できますか"},
+               "actions": [{"type": "teams.reply", "to": "佐藤", "text": "確認して今日中に返信します。",
+                            "template_text": "受領しました。", "drafted_by": "fake"}]}
+        it = {"key": "teams-chat-triage:19:c1#m-13:plan_decision", "posted": True, "status": "pending", "record": rec}
+        spy = PromptSpy([{"a1": "延期の件、承知しました。順番に確認します。"}])
+        with mock.patch.dict(os.environ, {"KIMERU_REDRAFT_PREV": "0"}):
+            change = notify._redraft(it, "もっと短く", spy, out, n=13, now=now)
+        return change, spy.prompts[0]
+
     def test_a_redraft_gets_the_earlier_lines_of_the_case_but_not_its_own_entries(self):
         with self.setting("1"), tempfile.TemporaryDirectory() as d:
-            out = Path(d)
-            own = precedent_chat("19:c1#m-13")
-            precedent_state(out, [(12, precedent_chat("19:c1#m-12"), "approved", 3), (13, own, "held", 1)])
-            rec = {**own, "material_event": {"kind": "teams.chat", "author": "佐藤", "chat_id": "19:c1",
-                                             "text": "来週火曜にリリースを延期できますか"},
-                   "actions": [{"type": "teams.reply", "to": "佐藤", "text": "確認して今日中に返信します。",
-                                "template_text": "受領しました。", "drafted_by": "fake"}]}
-            it = {"key": "teams-chat-triage:19:c1#m-13:plan_decision", "posted": True, "status": "pending", "record": rec}
-            spy = PromptSpy([{"a1": "延期の件、承知しました。順番に確認します。"}])
-            with mock.patch.dict(os.environ, {"KIMERU_REDRAFT_PREV": "0"}):
-                change = notify._redraft(it, "もっと短く", spy, out, n=13)
+            change, prompt = self.redraft_of_held_item(Path(d), PRECEDENT_NOW)
         self.assertEqual(change["status"], "redrafted")
-        self.assertIn("#12 OK", spy.prompts[0])
-        self.assertNotIn("#13 保留", spy.prompts[0])
+        self.assertIn("#12 OK", prompt)
+        self.assertNotIn("#13 保留", prompt)
+
+    def test_a_redraft_at_the_naive_clock_of_the_cycle_gets_the_same_earlier_lines(self):
+        """_collect passes the clock the cycle has, which is naive local time (notify._naive_now)."""
+        with self.setting("1"), tempfile.TemporaryDirectory() as d:
+            change, prompt = self.redraft_of_held_item(Path(d), datetime(2026, 10, 12, 9, 0))
+        self.assertEqual(change["status"], "redrafted")
+        self.assertIn("#12 OK", prompt)
+        self.assertNotIn("#13 保留", prompt)
+
+    def test_the_naive_and_the_aware_clock_read_the_same_lines(self):
+        with self.setting("1"), tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            precedent_state(out, [(12, precedent_chat("19:c1#m-12"), "approved", 3)])
+            aware = memory.writer_lines(out, precedent_chat("19:c1#m-13"), 13, now=PRECEDENT_NOW)
+            naive = memory.writer_lines(out, precedent_chat("19:c1#m-13"), 13, now=datetime(2026, 10, 12, 9, 0))
+        self.assertEqual(len(aware), 1)
+        self.assertEqual(naive, aware)
+
+    def test_the_lookup_is_not_read_for_an_event_with_nothing_to_draft(self):
+        from kimeru import cli
+        res = {"node": "n", "path": [], "outcome": "decide", "event_kind": "teams.chat",
+               "actions": [{"type": "teams.task", "title": "確認"}]}
+        with self.setting("1"), tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(memory, "writer_lines", side_effect=AssertionError("read with nothing to draft")):
+            cli._draft(res, {"kind": "teams.chat", "text": "x"}, cli.Meter(StubBackend()), PromptSpy([{}]), out=Path(d),
+                       now=PRECEDENT_NOW)
+        self.assertNotIn("drafted_by", res["actions"][0])
+
+    def auto_sender(self, payload):
+        """A stand-in for the PowerShell script that m365-auto runs: it keeps the text of the prompt file and answers `payload`."""
+        sent = []
+
+        def run(cmd, **kwargs):
+            sent.append(Path(cmd[cmd.index("-PromptFile") + 1]).read_text(encoding="utf-8-sig"))
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload, ensure_ascii=False), stderr="")
+        return sent, mock.patch.object(writer.subprocess, "run", side_effect=run)
+
+    def test_the_microsoft_365_auto_request_carries_the_precedent_only_with_the_setting_on(self):
+        for value, expected in (("0", False), ("1", True)):
+            sent, patch = self.auto_sender({"ok": True, "text": '{"a1": "延期の件、承知しました。順番に確認します。"}'})
+            res = reply_res()
+            with self.setting(value), patch:
+                writer.apply(res, REDRAFT_EVENT, writer.M365AutoWriter(), "もっと短く", precedent=self.PRECEDENT)
+            self.assertEqual(len(sent), 1, value)
+            self.assertEqual(writer.PRECEDENT_HEAD in sent[0], expected, value)
+            self.assertEqual(self.PRECEDENT[1] in sent[0], expected, value)
+            self.assertNotIn("copilot_request", res, value)
+
+    def test_the_paste_in_request_of_microsoft_365_auto_does_not_carry_the_precedent(self):
+        _, patch = self.auto_sender({"ok": False, "error": "stub"})
+        res = reply_res()
+        with self.setting("1"), patch, mock.patch.object(writer.M365AutoWriter, "_rest"):
+            writer.apply(res, REDRAFT_EVENT, writer.M365AutoWriter(), "もっと短く", precedent=self.PRECEDENT)
+        self.assertIn("stub", res["writer_error"])
+        self.assertEqual(res["copilot_request"], writer.human_request(reply_res(), REDRAFT_EVENT, "もっと短く"))
+        self.assertNotIn(writer.PRECEDENT_HEAD, res["copilot_request"])
+        self.assertNotIn(self.PRECEDENT[0], res["copilot_request"])
 
     def test_the_lookup_writes_no_file_and_changes_no_byte_of_the_state_folder(self):
         with self.setting("1"), tempfile.TemporaryDirectory() as d:

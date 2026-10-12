@@ -35,7 +35,10 @@ def enabled():
 
 
 def _now(now):
-    return now or datetime.now(timezone.utc)
+    """The clock of a lookup: the one given (a naive one is local time, as the cycle's clock is: notify._naive_now), else now in UTC."""
+    if now is None:
+        return datetime.now(timezone.utc)
+    return now if now.tzinfo else now.astimezone()
 
 
 def _when(value):

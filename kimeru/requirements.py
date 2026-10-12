@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 
-from . import fsutil, notify
+from . import fsutil, learn, notify
 
 FIELDS = ("must_have", "optional", "out_of_scope", "acceptance_criteria", "open_questions")
 ARTIFACT_FIELDS = {"schema_version", "case", "answers", "unknown_categories", "generated_open_questions",
@@ -116,7 +116,7 @@ def _case(out, number):
     # approvals.json is atomically replaced; a read sees either the old or new full snapshot.
     items = notify.Approvals(out).data.get("items", {})
     item = items.get(str(number)) if isinstance(items, dict) else None
-    if not isinstance(item, dict) or not isinstance(item.get("record"), dict):
+    if not isinstance(item, dict) or not isinstance(item.get("record"), dict) or learn.is_card(item):
         return None
     return json.loads(json.dumps(item, ensure_ascii=False))
 

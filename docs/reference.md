@@ -4,7 +4,7 @@
 
 ### コマンド
 
-- 判断の正誤を付ける・週の集計・係数の調整: `kimeru review` / `kimeru digest --week [--share]` / `kimeru calibrate [--apply | --revert | --allow-wider]` / `kimeru config show --share`（[下の節](#判断の正誤の確認と係数の調整)、[1 週間の試し方](trial-week.md)）
+- 判断の正誤を付ける・週の集計・係数の調整: `kimeru review` / `kimeru digest --week [--share]` / `kimeru calibrate [--apply | --revert | --allow-wider]` / `kimeru learn list | revert L<n>` / `kimeru config show --share`（[下の節](#判断の正誤の確認と係数の調整)、[1 週間の試し方](trial-week.md)）
 
 ```bash
 python -m kimeru validate
@@ -93,7 +93,8 @@ python -m kimeru --out <出力先> delivery confirm KIND TARGET --confirm-delive
 - Teams の返信での正誤（設定 `KIMERU_LEARN=1`）: `違う N` は #N の最終結果が違ったという印です。`違う N k` は、直前の `詳細 N` に番号で示した「迷った質問」の k 番が正しい答えだったという印です。どちらも `kimeru review` と同じ `reviews.jsonl`・`fixtures_user.jsonl` に残り、`kimeru calibrate` が読みます。件の状態・投稿・承認・実行は変わりません。出力先の `labels.log.jsonl` には、鍵・正誤・k・時刻だけを残します（返信の文字は残しません）。
 - `kimeru digest --week [--share]`: 直近 7 日の件数、自動と人の割合、規則で決めた件数、重大な通知、承認の結果、同じ修正指示の繰り返し（別の項目で）、判断の一致率。前の 7 日との比較、種類別の届いた件数、1 件あたりの返信、自動で決めた判断に「違う」が付いた件、提案が一度も変わらなかった OK（下書きのある項目だけ）、投稿から OK を見るまでの中央値（今週と前の 7 日）、calibrate の正誤の残り問数も出します。性能の行（「違う」・変わらなかった OK・中央値）は、Jev の判断と判断モデルが分からない判断を分母分子から外し、その件数を出します。測れた件数が 1〜4 件のものは「参考」、0 件のものは「不明」です。`--share` は、Issue に貼れる形です（数値と環境だけ。同梱のグラフ以外の名前は「追加のグラフ N」に伏せ、本文・人名・件名・ID・パスは出ません）。**一致率は、Jev の判断を数えません**（期間や出力先が違っても）。Jev の性能の数値は、公開できません（TypeSafe の利用規約）
 - `kimeru config show --share`: Issue に貼れる設定の一覧です。パス、ADO の組織とプロジェクト、サブスクリプション、メールの宛先、接続先の URL は出さず、「設定あり」とだけ出します。1 行目に、kimeru の版、OS、Python、画面の倍率が出ます。不具合の報告には、`config show` ではなく、これを貼ってください
-- `kimeru calibrate [--apply | --revert | --allow-wider] [--min-questions N]`: 記録した回答を、別の係数で読み直して、`conf_scale` と `noul_scale` の変更を探します（条件は 1 週間の試し方）。**判断モデルごとに分けて**探し、適用します。Jev・Kev・CLM の判断を確かめた記録だけが対象で、stub など判断モデルの分からない記録からは、探さず、適用せず、理由を出します。`--apply` は、状態フォルダの `thresholds.json` に書きます。グラフと `profiles.py` は書き換えません。`--revert` は、このファイルを消します
+- `kimeru learn list | revert L<n>`（設定 `learn=1`）: 正誤を 30 問以上付けた質問ごとに、人に回す向きの変更（確信の基準を上げる、または判断に迷う幅を広げる）だけの提案を、承認の札（`[kimeru #N] 学習の提案`）で出します。札を OK と返すと、その質問の基準だけが変わります（状態フォルダの `thresholds.json` の `nodes`）。探した側で確信して間違える件数が減り、確かめた側で増えないものだけを出し、1 週間に最大 2 件、待っている札がある間は出しません。NG なら 28 日は同じ質問を出しません。グラフ・処理済みの記録・判断の記録は変わりません。`list` は待っている札と採用の記録、`revert L<n>` は 1 件の採用を元に戻します（履歴の行は残ります）。札の数と正誤の内訳は、Jev の判断では出しません。
+- `kimeru calibrate [--apply | --revert | --allow-wider] [--min-questions N]`: 記録した回答を、別の係数で読み直して、`conf_scale` と `noul_scale` の変更を探します（条件は 1 週間の試し方）。**判断モデルごとに分けて**探し、適用します。Jev・Kev・CLM の判断を確かめた記録だけが対象で、stub など判断モデルの分からない記録からは、探さず、適用せず、理由を出します。`--apply` は、状態フォルダの `thresholds.json` に書きます。グラフと `profiles.py` は書き換えません。`--revert` は、判断モデルごとの係数を消します（質問ごとの採用は残ります。下の `kimeru learn`）。
 
 ### 要件ドラフト
 
@@ -108,7 +109,8 @@ python -m kimeru --out <出力先> delivery confirm KIND TARGET --confirm-delive
 | `config.json` | 設定ファイル（上の節） |
 | `reviews.jsonl` | `kimeru review` の正誤（判断の識別子、正誤、時刻、判断モデルの名前）。本文は入りません |
 | `fixtures_user.jsonl` | `kimeru review` で作った評価用の例（元のイベントと、正しい答え）。`python eval/run_eval.py score answers.jsonl --fixtures <このファイル>` で読めます |
-| `thresholds.json` | `kimeru calibrate --apply` が書いた係数の上書き（判断モデルごと）。`eval/` のスクリプトは、既定では読みません（`--user-thresholds` を付けたときだけ読み、出力にそのことを出します） |
+| `learned.jsonl` | `kimeru learn` の採用と取り消し（札の番号 L<n>、質問の鍵、前後の基準、採用の時刻。判断モデルが Jev なら件数は入りません）。消しません。取り消しは `kimeru learn revert L<n>` で、行は残ります | 自動では消さない |
+| `thresholds.json` | `kimeru calibrate --apply` が書いた係数の上書き（判断モデルごと）、と `kimeru learn` で OK した質問ごとの基準（`nodes`）。`eval/` のスクリプトは、既定では読みません（`--user-thresholds` を付けたときだけ読み、出力にそのことを出します） |
 
 ### 設定ファイル
 
@@ -144,7 +146,7 @@ python -m kimeru config path
 | `KIMERU_CYCLE_BUDGET` | 1 サイクルの時間の上限（秒。未設定は自動運転の間隔） |
 | `KIMERU_PLAN_LEAN` / `KIMERU_BATCH` | 不要な手順の期限を聞かない（既定 0）／グラフの質問を 1 回にまとめる（既定 0） |
 | `KIMERU_HOLD_STALE_DAYS` | 日付のない保留（`保留 N`）を、朝のまとめで「長く保留: #N（N 日）」と書くまでの日数（既定 0 = 書かない）。1 以上のとき、その日数より長く保留している件だけ書きます。`保留 N <いつ>` の件（`保留 #N（10/15 に再表示）`）には関係しません |
-| `KIMERU_LEARN` | Teams の返信 `違う N` / `違う N k` を正誤として記録し、`詳細 N` に「迷った質問」の番号を付ける（既定 0。0 のときは、この返信に反応せず、投稿の文も変わりません） |
+| `KIMERU_LEARN` | Teams の返信 `違う N` / `違う N k` を正誤として記録し、`詳細 N` に「迷った質問」の番号を付ける。正誤がたまると、1 週間に最大 2 件、「確信の基準を上げる」提案を承認の札で出します（`kimeru learn`。OK のときだけ、その質問の基準が変わります）（既定 0。0 のときは、この返信に反応せず、投稿の文も変わりません）
 | `KIMERU_POST_REASON` | `1` で、承認の投稿の `→` の次と `詳細 N` の先頭に、「迷った点」の 1 行を足す（判断モデルが迷った問いの名前と近い選択肢。規則で人へ回った件は、その規則。既定 0。0 のときは投稿・詳細の文が変わりません）。確率の数値は出しません |
 | `KIMERU_BRIEF_DELTA` | `1` で、朝のまとめに「前回のまとめ以降」の返信数（OK / NG / 保留 / 修正）と「閉じた: n 件」を先頭に出し、番号付きの件に `（新）`・`（継続 N 日目）` を付ける。4 日続けて内容も順位帯も変わらない番号付きの件は名前を出さず `変わらず N 件（#…）` に畳む（通知・重大な件は畳まない。番号の無い手順と未投稿の件は畳まない）。前回と同じ判断モデルが付けた点は再利用し、新しい件だけを尋ねる。数えるのは `brief_history.jsonl`・`approvals.log.jsonl`・`approvals.json` の読み取りだけで、新しく記録しない（既定 0。0 のときは、朝のまとめの文も判断モデルへの問いもこれまでどおり） |
 | `KIMERU_BRIEF_STYLE` | 朝のまとめの並べ方。`rank`（既定）は判断モデルが件ごとに「1 日遅れたときの影響」を付けて並べ、writer が今日の要点を書く。`desk` は固定順（重大・通知 → 期限超過と今日 → 今週 → その他。同じ段の中は集まった順）にし、判断モデルへの順位付けも writer の要点も呼ばない（判断は変わらず、確認待ちは今までどおり PM に回る）。判断モデルが止まっているときは、どちらでも朝のまとめを確定しない |

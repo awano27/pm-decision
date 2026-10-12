@@ -131,7 +131,7 @@ def index(out, items, now=None):
     for r in _tail_rows(out / "approvals.log.jsonl"):   # the PM's replies (OK, NG, 保留, 修正, 聞き返し), with their times
         word = autorun.REPLY_NAMES.get(r.get("status"))
         t = _when(r.get("at"))
-        if not word or t is None or t < since or autorun._key_is_sample(r.get("key")):
+        if not word or t is None or t < since or autorun._key_is_sample(r.get("key")) or autorun._card_key(r.get("key")):
             continue
         item = items.get(str(r.get("id")))
         rec = item.get("record") if isinstance(item, dict) else None

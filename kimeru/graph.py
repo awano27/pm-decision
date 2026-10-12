@@ -38,7 +38,7 @@ import json
 import re
 from pathlib import Path
 
-from . import config
+from . import config, profiles
 from .backends import BackendAnswerError
 
 TERMINALS = ("decide", "advise")
@@ -427,7 +427,7 @@ def run(g, event, backend, state=None, playbooks=None, batch=None):
             if batch and not pre:
                 pre = backend.ask(state, {k: nodes[k]["question"] for k in reachable_judges(nodes, nid, event)})
             ans = pre[nid] if nid in pre else backend.ask(state, {nid: n["question"]})[nid]
-            edge, nxt = route(n, ans, getattr(backend, "profile", None))
+            edge, nxt = route(n, ans, profiles.for_node(getattr(backend, "profile", None), g, nid))   # R21: this question's own bar, if learned
         except BackendAnswerError as e:   # a malformed answer is not a judgment: the safe route, never a lost event
             batch, pre = False, {}   # a batch with a bad answer is not trusted: ask the remaining questions one by one
             trace.append({"node": nid, "answer": {"invalid": str(e)[:200]}, "edge": "unsure"})

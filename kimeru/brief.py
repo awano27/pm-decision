@@ -12,7 +12,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import autorun, config, fsutil, hold, memory
+from . import autorun, config, fsutil, hold, learn, memory
 from .backends import judge_name
 
 HARM = ["No real harm", "Minor inconvenience for the team",
@@ -69,7 +69,7 @@ def collect(out, now=None, days=2):
 
     ap = json.loads((out / "approvals.json").read_text(encoding="utf-8")) if (out / "approvals.json").exists() else {"items": {}}
     queued = set()
-    for n, it in ap["items"].items():
+    for n, it in learn.cases(ap["items"]).items():   # R21: a learn card is no case
         queued.add(it["key"])
         if it["status"] in ("pending", "held"):
             what = it['record'].get('advice') or it['record'].get('graph')
@@ -78,7 +78,7 @@ def collect(out, now=None, days=2):
             add(f"approval:{n}", "approval", f"{head}: {what}{same}", f"Waiting for the PM's approval: {what}", 0, it["record"])
     for rec in reversed(_rows(out / "queue.jsonl")):
         key = f"{rec.get('graph')}:{rec.get('event_id')}:{rec.get('node')}"
-        if key not in queued:
+        if key not in queued and not learn.is_card(rec):
             what = rec.get('advice') or rec.get('graph')
             add(f"queue:{key}", "approval", f"確認待ち（未投稿）: {what}", f"Waiting for the PM's approval: {what}", 0, rec)
     decisions = _rows(out / "decisions.jsonl")
@@ -461,7 +461,7 @@ def _replies(out, start):
     counts = {status: 0 for status in REPLY_STATUSES}
     for r in autorun._rows(Path(out) / "approvals.log.jsonl"):
         t = _when(r.get("at"))
-        if t is None or t < start or autorun._key_is_sample(r.get("key")):
+        if t is None or t < start or autorun._key_is_sample(r.get("key")) or autorun._card_key(r.get("key")):
             continue
         if r.get("status") in counts:
             counts[r["status"]] += 1

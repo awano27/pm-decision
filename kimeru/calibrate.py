@@ -136,11 +136,25 @@ def apply(profile_name, values):
 
 
 def revert():
+    """Remove the judge-level coefficients. The question-level entries (R21, "nodes") stay: they are the PM's own OKs and are
+    taken back one by one with `kimeru learn revert`. The file goes only when nothing is left in it. True when a coefficient was removed."""
     p = profiles.override_path()
-    if p.exists():
+    if not p.exists():
+        return False
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):   # a file that cannot be read holds nothing that can be kept
         p.unlink()
         return True
-    return False
+    removed = [k for k in data if k in set(profiles.JUDGE_PROFILE.values())]
+    kept = {k: v for k, v in data.items() if k not in removed}
+    if not kept:
+        p.unlink()
+    elif removed:
+        p.write_text(json.dumps(kept, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return bool(removed) or not kept
 
 
 def run(out, graphs, min_questions=MIN_QUESTIONS, allow_wider=False, do_apply=False, print_fn=print):

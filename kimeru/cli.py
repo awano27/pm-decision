@@ -703,7 +703,8 @@ def _main(argv=None):
              "trial": "record and report the one-week trial (before/after minutes; docs/trial-week.md)",
              "requirements": "build / approve / status of a local requirements draft (docs/requirements.md)"}
     helps["diagnose"] = "one sheet on unknown deliveries, judgment paths and cycle errors (numbers only; sends nothing)"
-    for name in ("onboarding", "trial", "requirements", "diagnose"):
+    helps["learn"] = "list the threshold cards (learn=1) and their adoptions; revert L<n> takes one adoption back (learn.py)"
+    for name in ("onboarding", "trial", "requirements", "diagnose", "learn"):
         passthrough = sub.add_parser(name, help=helps[name])
         passthrough.add_argument("args", nargs=argparse.REMAINDER)
     diag_args = None   # `diagnose` takes its own options (argparse.REMAINDER does not take a first word that starts with --)
@@ -747,6 +748,10 @@ def _main(argv=None):
     if a.cmd == "diagnose":
         from . import diagnose
         return diagnose.dispatch(a.args, Path(a.out))
+
+    if a.cmd == "learn":   # R21: the cards' adoptions (learn.py); nothing here reads Teams or the judge
+        from . import learn
+        return learn.dispatch(a.args, out)
 
     if a.cmd in ("onboarding", "trial", "requirements"):
         from . import onboarding, requirements, trial
@@ -923,7 +928,8 @@ def _main(argv=None):
 
     if a.cmd == "calibrate" and a.revert:
         from . import calibrate
-        print("removed the local thresholds file" if calibrate.revert() else "there was no local thresholds file")
+        print("removed the judge coefficients (the question entries from kimeru learn are kept)" if calibrate.revert()
+              else "there were no judge coefficients to remove")
         return 0
 
     if a.cmd == "report":

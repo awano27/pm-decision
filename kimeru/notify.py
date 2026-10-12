@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 import unicodedata
 from pathlib import Path
 
-from . import actions, config, explain, fsutil, hold, labels
+from . import actions, config, explain, fsutil, hold, labels, learn
 from . import writer as writer_mod
 
 HERE = Path(__file__).resolve().parent.parent
@@ -333,6 +333,8 @@ def format_post(n, rec, full=None, marks=None, precedent=None, promise=None, rel
     `precedent` (R16, memory.precedent): the text that ends the arrow line; None (memory=0) leaves the post as it was.
     `promise` (R18, promises.post_note): the open promise of the same chat, at the end of the arrow line too; None (promises=0) adds nothing.
     `related` (R19, link.post_note): the `↔` text of the same case, at the end of the arrow line too; None (link_related=0) adds nothing."""
+    if learn.is_card(rec):   # R21: a card of learn=1 says what OK changes (learn.py); it is no case
+        return learn.format_post(n, rec)
     from . import execute
     memo = rec.get("memo") or {}
     plan = rec.get("plan") or {}
@@ -406,6 +408,8 @@ def format_detail(n, rec, full=None, precedent=None, promise=None):
     (fulltext.load): the post then shows it and the earlier messages. `precedent` (R16, memory.history): the lines of
     「これまでの経緯」, shown above the reply line; None or empty (memory=0) adds nothing. `promise` (R18, promises.detail_lines): the
     chat's open promises, under 「この相手の約束」 above the reply line; None (promises=0) adds nothing."""
+    if learn.is_card(rec):   # R21: the numbers behind a card (learn.py)
+        return learn.format_detail(n, rec)
     from . import execute
     ev = rec.get("event_kind", "")
     memo = rec.get("memo") or {}
@@ -1045,7 +1049,8 @@ def toast_text(out, posted, notices, unposted=0, sitting=False):
 
 ACK = {"approved": "承認", "rejected": "却下", "held": "保留", "ask_back": "聞き返し",
        "redrafted": "書き直し", "redraft_failed": "書き直せず", "redo": "再実行", "redo_ignored": "再実行（無視: 古い回数）", "redo_ahead": "再実行（回数が大きすぎます。その回数の結果が出たら 1 回だけ効きます）", "redo_malformed": "再実行（形が違います）", "closed": "済（閉じました）", "detail": "詳細を返信",
-       "reposted": "文面を確認して OK し直してください"}
+       "reposted": "文面を確認して OK し直してください",
+       "learned": "学習を採用しました（基準を変えました）", "learn_stale": "学習（基準が変わっていたため採用せず）"}
 
 
 def ack_text(changes):
@@ -1675,9 +1680,18 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
     flushed = True
     if send and ap.data.get("outbox"):
         flushed = flush_outbox(ap, bridge, True)   # results that could not be posted last time
+    adopted = []   # R21: an OK on a learn card that was given on a run without real and send is adopted now (learn.py; Teams is not read)
+    if real and send:
+        for num, it in ap.data["items"].items():
+            if learn.is_card(it) and it.get("learn_state") == "pending":
+                got = learn.adopt(out, it, now=now or _naive_now(), real=real, send=send)
+                if got:
+                    adopted.append({"id": int(num), "status": "learned" if got["state"] == "adopted" else "learn_stale", "learn": got})
+        if adopted:
+            ap.save()
     # nothing is waiting for an answer: do not touch Teams at all (reading switches it to the self chat)
     if not any(waiting(it) for it in ap.data["items"].values()):
-        return []
+        return adopted
     post = make_post(ap, bridge, send)
     if real:
         execute.report_unknown(ap, post)
@@ -1851,10 +1865,11 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
             continue
         it["status"] = new
         hold.clear(it)
+        learn.on_status(it, new, now)   # R21: a card's own state (OK waits to be adopted; NG keeps the question quiet for 28 days)
         if new == "approved":
             measurement_for(it).setdefault("approval_observed_at", measurement_now())
             from . import sent   # R14: with sent_watch=1, the list signature of the reply's chat is kept, to see the send later (sent.py)
-            if sent.enabled():
+            if sent.enabled() and not learn.is_card(it):
                 sent.note_approval(it, sent.list_signatures(out), now)
         if new in ("approved", "rejected"):   # the full text is kept only while the item waits
             from . import fulltext
@@ -1865,7 +1880,10 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
         if new == "approved":
             ch["executed"] = [actions.execute(a, dry_run=True) for a in it["record"].get("actions", [])]
             ch["real"] = _after_approval(out, ap, int(num), it, bridge, real=real, send=send)
+            if learn.is_card(it):   # R21: written only with real and send (learn.adopt); otherwise it waits for such a run
+                ch["learn"] = learn.adopt(out, it, now=now, real=real, send=send)
         changes.append(ch)
+    changes = adopted + changes
     ap.save()
     if send and flushed and ap.data.get("outbox"):
         flush_outbox(ap, bridge, True)   # the results of this step, all together (once per cycle)

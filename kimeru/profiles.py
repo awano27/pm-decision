@@ -100,6 +100,76 @@ def effective(profile=None):
     return {**p, **o} if o else p
 
 
+# R21: one question's bar, learned from the PM's OK on a card (learn.py). It lives under "nodes" in the same file, keyed by
+# "<graph name>:<node id>", and scales the judge's coefficients for that question only. Only a question whose unsure route goes
+# straight to a person (an advise, or a decide with queue) can have one: where unsure leads to another judge or to a plain
+# decision, the entry is ignored, whatever the file says.
+NODE_KEY = "nodes"
+NODE_COEFFS = ("conf_scale", "noul_scale")
+NODE_RANGE = (0.1, 3.0)
+JUDGE_NAMES = ("jev", "kev", "clm")
+
+
+def thresholds_raw():
+    """The whole local file as read now (no cache: a card's OK must be seen by the next question). {} when unreadable."""
+    import json
+    try:
+        raw = json.loads(override_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _usable(v):
+    import math
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and NODE_RANGE[0] <= v <= NODE_RANGE[1]
+
+
+def node_overrides():
+    """{"<graph>:<node>": {"conf_scale": x, "noul_scale": y}} from the local file. A value that is not a number in range, a key
+    that is not a coefficient, or an entry that is not an object is dropped (it changes nothing and never raises)."""
+    nodes = thresholds_raw().get(NODE_KEY)
+    out = {}
+    if not isinstance(nodes, dict):
+        return out
+    for key, vals in nodes.items():
+        if not isinstance(key, str) or not isinstance(vals, dict):
+            continue
+        ok = {k: float(v) for k, v in vals.items() if k in NODE_COEFFS and _usable(v)}
+        if ok:
+            out[key] = ok
+    return out
+
+
+def node_key(graph, nid):
+    return f"{graph['name']}:{nid}"
+
+
+def learnable(graph, nid):
+    """A judge whose unsure route is an advise, or a decide that waits for the PM (queue), and no other judge or decision."""
+    nodes = (graph or {}).get("nodes") or {}
+    node = nodes.get(nid) or {}
+    if node.get("kind") != "judge":
+        return False
+    target = nodes.get((node.get("routes") or {}).get("unsure")) or {}
+    return target.get("kind") == "advise" or (target.get("kind") == "decide" and bool(target.get("queue")))
+
+
+def for_node(profile, graph, nid):
+    """The profile to route one question with: the judge's coefficients (local file included), scaled by the question's own entry
+    when it has one. The name carries the question, so the file's judge-level coefficients are not laid over it a second time.
+    Eval scripts (ignoring_overrides), stub and unknown judges, and every question without an entry get the plain profile."""
+    base = effective(profile)
+    if _ignore["on"] or base.get("name") not in JUDGE_NAMES or not learnable(graph, nid):
+        return base
+    o = node_overrides().get(node_key(graph, nid))
+    if not o:
+        return base
+    return {**base, "conf_scale": base["conf_scale"] * o.get("conf_scale", 1.0),
+            "noul_scale": base["noul_scale"] * o.get("noul_scale", 1.0),
+            "name": f"{base['name']}|{node_key(graph, nid)}"}
+
+
 # The judge that made a recorded answer -> the profile its coefficients belong to. Any other judge (the offline stub, an
 # unknown one) has no profile of its own: nothing is tuned or applied for it.
 JUDGE_PROFILE = {"Jev": "jev", "Kev": "kev", "CLM": "clm"}

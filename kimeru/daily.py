@@ -10,7 +10,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import actions, attention, brief as brief_mod, config, control, events, fsutil, fulltext, graph, hold, notify, pull, push, sent
+from . import actions, attention, brief as brief_mod, config, control, events, fsutil, fulltext, graph, hold, learn, notify, pull, push, sent
 from .backends import BackendUnavailable, is_jev
 
 
@@ -356,6 +356,9 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
         if is_jev(backend):   # Jev's speed is not written anywhere (TypeSafe's terms); the counts stay
             perf = {k: v for k, v in perf.items() if k != "judge_sec"}
         r["perf"] = perf
+    if real and learn.enabled():   # R21 (learn=1 only, once a week, the daily path only): a card for a question the labels show to be answered wrongly
+        _step(out, "learn", lambda: learn.offer(out, graphs, backend, now=now), r)   # (queued here; posted by the notify step below)
+
     def do_notify():
         got = notify.notify(out, bridge, send=send, real=real)
         if getattr(got, "busy", False):

@@ -9,7 +9,7 @@ import json
 import time
 from datetime import datetime
 from pathlib import Path
-from . import trial
+from . import learn, trial
 
 KIND = {"match": ("規則", "rule"), "judge": ("判断", "model"), "plan": ("進め方", "plan")}
 SRC = {"teams.chat": "Teams", "monitor.alert": "アラート", "ado.workitem.created": "ADO", "meeting.item": "議事録"}
@@ -234,6 +234,7 @@ def build(out, graphs, title="kimeru 判断レポート"):
     out = Path(out)
     decisions = _rows(out / "decisions.jsonl")
     ap = json.loads((out / "approvals.json").read_text(encoding="utf-8")) if (out / "approvals.json").exists() else {"items": {}}
+    ap = {**ap, "items": learn.cases(ap.get("items", {}))}   # R21: the cards are no case of the report
     by_key, by_event = _case_indexes(out, ap.get("items", {}))
     executions = _execution_states(out, ap.get("items", {}))
     kinds = {}

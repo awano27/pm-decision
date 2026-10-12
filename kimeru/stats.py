@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
 
-from . import __version__, autorun, calibrate, config, profiles, review
+from . import __version__, autorun, calibrate, config, learn, profiles, review
 from .backends import JevBackend
 
 HERE = Path(__file__).resolve().parent.parent
@@ -181,7 +181,7 @@ def _approval_items(out):
     from . import notify
     data = notify.Approvals(out).data
     items = data.get("items") if isinstance(data, dict) else None
-    return items if isinstance(items, dict) else {}
+    return learn.cases(items) if isinstance(items, dict) else {}   # R21: a learn card is no case
 
 
 def _unchanged_oks(out, week_replies):
@@ -275,7 +275,7 @@ def collect(out, now=None):
     since = now - timedelta(days=7)
     out = Path(out)
     decision_rows = _dicts(review.read_jsonl(out / "decisions.jsonl"))
-    approval_rows = _dicts(review.read_jsonl(out / "approvals.log.jsonl"))
+    approval_rows = [r for r in _dicts(review.read_jsonl(out / "approvals.log.jsonl")) if not learn.is_card_key(r.get("key"))]   # R21: a card's OK is no approval
     review_rows = _dicts(review.read_jsonl(review.reviews_path()))
     decisions = _within(decision_rows, "at", since, now)
     dated = _within(approval_rows, "at", since, now)

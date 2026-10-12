@@ -6,7 +6,7 @@ import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from . import fsutil, notify
+from . import fsutil, learn, notify
 
 STATES = ("approved", "in_progress", "done", "blocked")
 SEND_READY = {"teams.reply", "teams.post"}
@@ -103,7 +103,7 @@ def set_state(out, case, state, *, owner=None, due=None, completion_condition=No
         history_path = Path(out) / "work-state.jsonl"
         _recover_pending(ap, history_path)
         item = ap.data.get("items", {}).get(str(case))
-        if not item or item.get("status") != "approved":
+        if not item or learn.is_card(item) or item.get("status") != "approved":
             raise WorkError(f"case #{case} is not explicitly approved")
         previous = item.get("work") if isinstance(item.get("work"), dict) else {}
         previous_state = previous.get("state") if previous.get("state") in STATES else "Unknown"
@@ -143,7 +143,7 @@ def list_work(out):
     """Approved cases with explicit tracked fields; absent progress is exposed as Unknown."""
     ap = notify.Approvals(out)
     rows = []
-    for number, item in ap.data.get("items", {}).items():
+    for number, item in learn.cases(ap.data.get("items", {})).items():
         if item.get("status") != "approved":
             continue
         record = item.get("record") or {}

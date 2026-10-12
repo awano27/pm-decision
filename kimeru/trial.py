@@ -7,7 +7,7 @@ from datetime import datetime
 from statistics import median
 from pathlib import Path
 
-from . import fsutil, notify, onboarding, review, sent
+from . import fsutil, learn, notify, onboarding, review, sent
 
 _FILE = "trial.json"
 
@@ -245,7 +245,7 @@ def measurement_collect(out, observations, share=False, now=None):
     """Only aggregates leave this function. No implicit trial or actual-arrival evidence. `now` (epoch seconds) is the time the
     intervals must end by; it defaults to the current time."""
     now = time.time() if now is None else now
-    items = notify.Approvals(out).data.get("items", {})
+    items = learn.cases(notify.Approvals(out).data.get("items", {}))   # R21: a learn card is no case
     groups = {source: {"delivery_wait": [], "approval_latency": [], "total_case_wait": [], "pending_age": [],
                        "arrival_to_ready": [], "arrival_to_approval": [],
                        "processing": [], "ambiguous_delivery": 0, "human_delivery_confirmations": 0,
@@ -335,7 +335,7 @@ def approval_latencies(out, now=None):
     from . import autorun
     now = time.time() if now is None else now
     data = notify.Approvals(out).data
-    items = data.get("items") if isinstance(data, dict) else None
+    items = learn.cases(data.get("items")) if isinstance(data, dict) else None
     found = []
     for item in (items.values() if isinstance(items, dict) else []):
         if not isinstance(item, dict) or item.get("status") != "approved":

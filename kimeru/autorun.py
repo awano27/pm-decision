@@ -62,6 +62,10 @@ def is_sample(event_kind, event_id):
     return event_kind == "ado.workitem.created" and str(event_id) == SAMPLE_ID
 
 
+def _card_key(key):   # R21: the key of a learn card (learn.py); its replies are not cases' approvals
+    return isinstance(key, str) and key.startswith("kimeru.learn:")
+
+
 def _key_is_sample(key):
     """An approval or a processed key of the fictional item: "<graph>:<id>:<node>" (approvals) or "<graph>@<v>:<kind>:<id>"."""
     parts = str(key or "").split(":")
@@ -257,7 +261,7 @@ def build_report(out, since=None, until=None, now=None):
 
     replies, ready, sample_reply = {}, 0, ""
     for r in _rows(out / "approvals.log.jsonl"):
-        if not _in(_local(r.get("at")), lo, hi):
+        if not _in(_local(r.get("at")), lo, hi) or _card_key(r.get("key")):   # R21: a learn card's reply is no approval
             continue
         word = REPLY_NAMES.get(r.get("status"))
         if _key_is_sample(r.get("key")):

@@ -89,6 +89,8 @@ def payloads(n):
 
 
 def main():
+    if hasattr(sys.stdout, "reconfigure"):   # a cp932 console cannot show every character of a post (⚠ is one): replace it, do not stop
+        sys.stdout.reconfigure(errors="replace")
     ap = argparse.ArgumentParser()
     ap.add_argument("--backend", choices=["stub", "jev", "kev"], default="kev")
     ap.add_argument("--writer", default="copilot")

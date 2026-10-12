@@ -13,7 +13,7 @@ $ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
-Write-Host "kimeru 自動の確認（何も送らない・チャットを開かない・質問しない）" -ForegroundColor Green
+Write-Host "kimeru 自動の確認（何も送らない・貼らない・質問しない。自分とのチャットは開くことがあります）" -ForegroundColor Green
 $sw = [Diagnostics.Stopwatch]::StartNew()
 
 Write-Host ""

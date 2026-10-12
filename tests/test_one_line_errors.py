@@ -107,6 +107,22 @@ class TestOneLine(Base):
         self.assertIn("demo_day.json はイベントの形式ではありません", err)
         self.assertIn("teams-chat-triage", text)
 
+    def test_watch_names_a_non_payload_in_one_line_and_still_judges_the_next_file(self):
+        inbox = Path(self.dir.name) / "inbox"
+        inbox.mkdir()
+        (inbox / "demo_day.json").write_bytes((ROOT / "examples" / "demo_day.json").read_bytes())
+        (inbox / "teams_chat.json").write_bytes((ROOT / "examples" / "teams_chat.json").read_bytes())
+        rc, text, err = self.cli("--backend", "stub", "watch", str(inbox), "--once")
+        self.assertEqual(rc, 0)
+        self.assertNotIn("Traceback", err)
+        self.assertNotIn("error demo_day.json", err)
+        named = [l for l in err.splitlines() if "はイベントの形式ではありません" in l]
+        self.assertEqual(len(named), 1, err)
+        self.assertIn("kimeru: demo_day.json はイベントの形式ではありません", named[0])
+        self.assertTrue((inbox / "done" / "demo_day.json.error").exists())
+        self.assertIn("teams-chat-triage", text)
+        self.assertTrue((inbox / "done" / "teams_chat.json").exists())
+
     def test_review_without_a_terminal_is_one_line(self):
         with mock.patch("sys.stdin", io.StringIO("")):
             rc, _, err = self.cli("review")

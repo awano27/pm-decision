@@ -380,6 +380,59 @@ class TestAStatusQuestionFromAChatWithAnOverduePromise(unittest.TestCase):
             self.assertEqual({c.args[1] for c in snapshot.call_args_list}, {MON})
 
 
+class TestADamagedLineInTheDecisionsFileDoesNotStopThePromises(unittest.TestCase):
+    """promises=1 reads decisions.jsonl through the bounded tail (memory._tail_rows), as the memory and link readers do: a torn append,
+    a line that is JSON but not an object, and a row whose path is not a list are skipped. A valid decision_later row after them still
+    shows, and the chat's overdue promise still reaches the post, 詳細 N and the status question."""
+
+    TORN = '{"graph": "teams_chat", "event_kind": "teams.chat", "event_id": "m-3", "node": "decision_la'
+
+    def damaged(self, d, *rows):
+        lines = [self.TORN, "42", "[1, 2]", "null", json.dumps({**decision_later(eid="m-4"), "path": 5}, ensure_ascii=False)]
+        lines += [json.dumps(r, ensure_ascii=False) for r in rows]
+        (Path(d) / "decisions.jsonl").write_text("".join(line + "\n" for line in lines), encoding="utf-8")
+
+    def test_the_ledger_skips_the_damaged_lines_and_the_decision_after_them_is_still_shown(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.damaged(d, decision_later(chat="19:c9", eid="m-5"))
+            rows = promises.snapshot(d, FRI)["rows"]
+            self.assertEqual([(r["src"], r["chat"]) for r in rows], [("b", "19:c9")])
+            self.assertEqual(promises.brief_section(d, FRI), "約束: 今日 1 件\n・判断依頼（今週中と判定）: 今日まで（高橋）")
+
+    def test_a_new_post_still_ends_with_the_overdue_promise_when_the_damaged_lines_are_there(self):
+        now = datetime.now().astimezone()
+        made, due = (now - timedelta(days=4)).date(), (now - timedelta(days=2)).date()
+        reply = f"{due.month}/{due.day}までに回答します。"
+        note = f"（約束: {made.month}/{made.day} #2「{due.month}/{due.day}までに回答」 期限切れ 2 日）"
+        post = {"graph": "teams_chat", "event_kind": "teams.chat", "event_id": "m-9", "node": "plan_decision",
+                "advice": "金曜の件の進め方を確認したい", "at": MON.isoformat(timespec="seconds"),
+                "actions": [{"type": "teams.reply", "chat_id": "19:c1", "text": "確認して返信します"}],
+                "event": {"kind": "teams.chat", "author": "佐藤", "chat_id": "19:c1", "chat_title": "佐藤", "text": "金曜の件、進め方を教えてください"}}
+        with tempfile.TemporaryDirectory() as d:
+            write_approvals(d, {"2": approved_promise(text=reply, observed=now - timedelta(days=4))})
+            self.damaged(d)
+            write_queue(d, post)
+            bridge = FakeBridge()
+            with mock.patch.dict(os.environ, {"KIMERU_PROMISES": "1"}):
+                notify.notify(d, bridge, send=False)
+            [(body, _)] = bridge.posts
+            self.assertEqual(body, notify.format_post(3, post, promise=note))
+
+    def test_a_status_question_from_a_chat_with_an_overdue_promise_still_goes_to_the_pm(self):
+        event = {"kind": "teams.chat", "id": "m-20", "chat_id": "19:c1", "chat_title": "佐藤", "author": "佐藤",
+                 "text": "金曜の件はその後どうなりましたか？", "unread": True, "mentions_me": False}
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            write_approvals(d, {"2": approved_promise()})
+            self.damaged(d, decision_later(chat="19:c9", eid="m-5"))
+            be = ReplayBackend({"intent": {"choice": "status", "confidence": 0.9, "probabilities": {}}})
+            with mock.patch.dict(os.environ, {"KIMERU_PROMISES": "1"}):
+                res = cli.process(event, GRAPHS, be, out, PBS, now=MON)[0]
+            self.assertEqual((res["node"], res["outcome"]), ("reply_status", "decide"))
+            self.assertTrue(res["needs_human"])
+            self.assertEqual(res["advice"], ADVICE)
+
+
 class TestNothingIsWrittenAndTheRankIsAskedAsBefore(unittest.TestCase):
 
     def test_reading_the_ledger_and_the_brief_writes_no_byte_and_adds_no_file(self):

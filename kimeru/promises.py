@@ -17,7 +17,7 @@ import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from . import brief, config, fsutil, plan
+from . import brief, config, fsutil, memory, plan
 
 PROMISE_KEEP_DAYS = 7       # an (a) or (c) promise is shown this many days after its day, then left out
 DECISION_SHOW_DAYS = 2      # a (b) decision is shown until this many days after its day (the brief drops it on that day)
@@ -134,8 +134,9 @@ def _when(value):
 
 
 def _urgency(rec):
-    """The urgency score of a decision_later row (its trace), or None."""
-    for step in rec.get("path") or []:
+    """The urgency score of a decision_later row (its trace), or None. A trace that is not a list is no trace."""
+    path = rec.get("path")
+    for step in path if isinstance(path, list) else []:
         if isinstance(step, dict) and step.get("node") == "urgency":
             score = (step.get("answer") or {}).get("score")
             return float(score) if isinstance(score, (int, float)) and not isinstance(score, bool) else None
@@ -172,9 +173,11 @@ def _from_item(n, item, rec, ev):
 
 
 def _from_decisions(out, today):
-    """The (b) rows: the newest decision_later judgment of each event, with a this-week urgency, until DECISION_SHOW_DAYS after its day."""
+    """The (b) rows: the newest decision_later judgment of each event, with a this-week urgency, until DECISION_SHOW_DAYS after its day.
+    Reads the bounded tail of decisions.jsonl (memory._tail_rows, as the memory and link readers do): a torn line or a line that is
+    not an object is skipped, so one damaged line cannot stop the ledger, the post, 詳細 N or a status question."""
     rows, seen = [], set()
-    for rec in reversed(brief._rows(Path(out) / "decisions.jsonl")):
+    for rec in reversed(memory._tail_rows(Path(out) / "decisions.jsonl")):
         if rec.get("event_kind") != "teams.chat" or rec.get("node") != "decision_later" or rec.get("outcome") != "decide":
             continue
         if rec.get("event_id") in seen:

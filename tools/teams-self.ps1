@@ -1155,6 +1155,10 @@ if ($Action -eq 'read') {
       elseif ($l -match '^\[kimeru 試験 実行 #(\d+)(?:\s+(\d+))?\]') {
         $entry = 'TX:{0}:{1}' -f $Matches[1], $(if ($Matches[2]) { [int]$Matches[2] } else { 0 })
       }
+      elseif ($l -match '^\[kimeru 確認 S(\d+)\]') {
+        # a card of the spot check (spot.py, R26): "S:k" is its own number, never an approval post; a reply below it is answered
+        $entry = 'S:' + $Matches[1]
+      }
       elseif ($l -match '^\[kimeru 実行 #(\d+)(?:\s+(\d+))?\]') {
         # a result post about #N, the k-th one ("[kimeru 実行 #N k]"; 0 for a post of an earlier version that has no count):
         # replies to #N before it were answered (notify.fresh_entries). The count keeps two result posts from being folded into one line.
@@ -1176,6 +1180,10 @@ if ($Action -eq 'read') {
         # a verdict on a decision (notify.parse_label, learn=1): `違う N` (the final result was wrong) or `違う N k` (the k-th option of the question 詳細 N showed)
         $c = if ($Matches[2]) { '違う {0} {1}' -f $Matches[1], $Matches[2] } else { '違う {0}' -f $Matches[1] }
         $entry = "R:" + $c
+      }
+      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(正しい|違う)\s*S(\d+)$') {
+        # an answer to a card of the spot check (spot.py, R26): `正しい S<k>` or `違う S<k>`; it counts only below the card's own S:k entry
+        $entry = 'R:{0} S{1}' -f $Matches[1], $Matches[2]
       }
       elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^再実行\s*#?(\d+)\s*[-ー−‐‑‒–—―─ｰ]\s*(\d+)\s*[.。!！]*$') {
         # `再実行 N-k`: run again, under the k-th result post of #N (notify.parse_redo_k). Every dash a phone or an IME may type is read as "-"

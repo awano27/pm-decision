@@ -10,7 +10,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import actions, attention, brief as brief_mod, config, control, events, fsutil, fulltext, graph, hold, learn, notify, pull, push, sent
+from . import actions, attention, brief as brief_mod, config, control, events, fsutil, fulltext, graph, hold, learn, notify, pull, push, sent, spot
 from .backends import BackendUnavailable, is_jev
 
 
@@ -502,6 +502,9 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
                     return "error: brief delivery_unknown; use delivery show/confirm/retry"
                 return f"error: brief delivery {status}"
             _step(out, "brief", do_brief, r)
+    if real and send and spot.enabled():   # R26 (spot_check_per_day, default 0): after the morning brief, the day's cards to confirm
+        brief_done = fsutil.read_json(st_path, {}).get("brief_date") == today
+        _step(out, "spot", lambda: spot.step(out, bridge, now=now, brief_done=brief_done, real=real, send=send), r)
     stuck = fulltext.failures()
     if stuck:   # a full text that could not be deleted is still on the disk: it is shown, not only written to warnings.jsonl
         r["full_text_delete_failed"] = stuck

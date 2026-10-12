@@ -87,6 +87,7 @@ SETTINGS = {
     "control_words": ("KIMERU_CONTROL_WORDS", "1"),                # 1 = my own self-chat line 停止 stops the daily cycle (nothing is taken from Teams, judged, posted, run or collected; the time-limit purges go on) and 再開 resumes it (control.py); 0 = the two words mean nothing
     "redraft_prev": ("KIMERU_REDRAFT_PREV", "0"),                  # 1 = 修正 N gives the writer the posted draft as data (the request only), and a first draft with a date or number the material lacks is asked once more (writer.py); 0 = as before
     "weekly_report": ("KIMERU_WEEKLY_REPORT", "0"),                # 1 = the Monday morning brief ends with six lines of the week's report (stats.weekly_lines: arrival to judgment and to OK, the observed sends, the label increments, the adopted learning before and after, the top three with a same-day reply or work record); read only, the writer never gets them (daily.py)
+    "spot_check_per_day": ("KIMERU_SPOT_CHECK_PER_DAY", "0"),      # 1 to 5 = after the morning brief, that many of the day's automatic decisions are posted to the self chat as cards to confirm (spot.py); 正しい S<k> / 違う S<k> label them; 0 = no cards
 }
 # command-line flag -> setting, for the "source: arg" record
 FLAGS = {"--backend": "backend", "--ado-org": "ado_org", "--ado-project": "ado_project",
@@ -95,7 +96,7 @@ SECRET_ENV = ("TYPESAFE_API_KEY", "KEV_API_KEY", "CLM_API_KEY", "KIMERU_PUSH_TEA
 SECRET_KEY = re.compile(r"key|token|secret|passw|credential|auth|hook.*url|push.*url|teams_url", re.I)
 # settings whose value may be written to the daily log (the others are recorded by name and source only)
 LOGGABLE = ("backend", "writer", "writer_model", "codex_model", "codex_effort", "grok_model", "toast", "brief_hour",
-            "push", "push_min_minutes", "execute", "read_full", "record_event_full", "judge_text_max", "priority", "cycle_budget_sec", "plan_lean", "batch_questions", "learn", "post_reason", "post_kind_mark", "hold_stale_days", "sent_watch", "sent_watch_days", "brief_delta", "brief_style", "memory", "promises", "interrupt", "sit_hours", "link_related", "control_words", "judge_context", "redraft_prev", "weekly_report")
+            "push", "push_min_minutes", "execute", "read_full", "record_event_full", "judge_text_max", "priority", "cycle_budget_sec", "plan_lean", "batch_questions", "learn", "post_reason", "post_kind_mark", "hold_stale_days", "sent_watch", "sent_watch_days", "brief_delta", "brief_style", "memory", "promises", "interrupt", "sit_hours", "link_related", "control_words", "judge_context", "redraft_prev", "weekly_report", "spot_check_per_day")
 
 # settings with a fixed set of values: checked by `config set` and again when read. A value is first read forgivingly
 # (case, spaces, on/off, true/false, yes/no); if it is still not allowed, `backend` stops the command (it decides where the
@@ -108,7 +109,7 @@ CHOICES = {
     "plan_lean": _ONOFF, "batch_questions": _ONOFF, "learn": _ONOFF, "post_reason": _ONOFF, "post_kind_mark": _ONOFF, "sent_watch": _ONOFF, "read_full": _ONOFF, "read_click": _ONOFF, "record_event_full": _ONOFF, "open_chat_link": _ONOFF,
     "send_ready_post": _ONOFF, "execute_signature": _ONOFF, "kev_url_remote_ok": _ONOFF, "clm_url_remote_ok": _ONOFF,
     "brief_delta": _ONOFF, "brief_style": ("rank", "desk"), "memory": _ONOFF, "link_related": _ONOFF, "promises": _ONOFF, "control_words": _ONOFF, "judge_context": _ONOFF, "redraft_prev": _ONOFF, "weekly_report": _ONOFF,
-    "interrupt": ("all", "sittings"),
+    "interrupt": ("all", "sittings"), "spot_check_per_day": ("0", "1", "2", "3", "4", "5"),
 }
 _YES, _NO = ("1", "on", "true", "yes"), ("0", "off", "false", "no")
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
@@ -365,7 +366,7 @@ def rows():
 SHARE_VALUES = ("backend", "writer", "toast", "brief_hour", "priority", "cycle_budget_sec", "plan_lean", "batch_questions", "learn", "post_reason", "post_kind_mark",
                 "sent_watch", "sent_watch_days", "execute", "execute_signature", "send_ready_post", "open_chat_link", "read_full", "record_event_full",
                 "read_max_open", "read_budget_sec", "read_messages", "read_min_preview", "read_idle_sec", "read_click", "read_max_defer", "preview_cut_len", "full_text_keep_days", "inbox_done_keep_days", "judge_text_max", "title_max", "push",
-                "push_min_minutes", "idle_sec", "codex_effort", "hold_stale_days", "brief_delta", "brief_style", "memory", "promises", "interrupt", "sit_hours", "link_related", "control_words", "judge_context", "redraft_prev", "weekly_report")
+                "push_min_minutes", "idle_sec", "codex_effort", "hold_stale_days", "brief_delta", "brief_style", "memory", "promises", "interrupt", "sit_hours", "link_related", "control_words", "judge_context", "redraft_prev", "weekly_report", "spot_check_per_day")
 
 
 def share_rows():

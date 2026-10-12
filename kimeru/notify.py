@@ -1699,8 +1699,12 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
                     adopted.append({"id": int(num), "status": "learned" if got["state"] == "adopted" else "learn_stale", "learn": got})
         if adopted:
             ap.save()
-    # nothing is waiting for an answer: do not touch Teams at all (reading switches it to the self chat)
+    # nothing is waiting for an answer: do not touch Teams at all (reading switches it to the self chat). The one exception is a card
+    # of the day's spot check that waits for its answer (R26, spot.py): the reply is read for it, and nothing else is touched
     if not any(waiting(it) for it in ap.data["items"].values()):
+        if real and send:
+            from . import spot
+            spot.answers(out, bridge, now or _naive_now())
         return adopted
     post = make_post(ap, bridge, send)
     if real:
@@ -1712,6 +1716,9 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
     writer = writer if writer is not None else writer_mod.get_writer()
     changes = []
     read = bridge.read()
+    if real and send:   # R26: `正しい S<k>` / `違う S<k>` label their card's decision (spot.py); no approval item is touched by them
+        from . import spot
+        spot.apply_safe(out, read, now or _naive_now())
     fresh = fresh_entries(read)
     replies = [line for line, _ in fresh]
     seen_results = {}   # for `再実行`: the highest result count of the item that stands before the reply (the context of the reply)

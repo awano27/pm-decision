@@ -109,6 +109,43 @@ def _decisions(out):
             if r.get("event") and r.get("path") is not None}
 
 
+def row_of(out, key):
+    """The decision record of `key` as `kimeru review` reads it (with its event and path); None when there is none."""
+    return _decisions(out).get(key)
+
+
+def _expect(row):
+    """The labels of the questions the model answered on the way, as `y` in kimeru review writes them: {node: label}."""
+    shipped = _shipped()
+    if shipped is None:
+        return {}
+    return {nid: lab for nid, node, a, edge in review.judged(row, shipped[0])
+            if (lab := review.label_of(node, a, edge)) is not None}
+
+
+def record_spot(out, key, word, k, now):
+    """R26 (spot.py): the PM's verdict on card S<k> of decision `key`. `正しい` is yes (the decision was right; its example is kept as
+    `y` in kimeru review keeps it), `違う` is wrong (the final result was wrong, as `w`). The same rows as the terminal review, from
+    Teams. A decision that has a review already keeps it ("already"). None when the decision record is not there. The caller holds
+    the approvals lock and saves the card: the item (status, post, execution) is never touched here."""
+    row = _decisions(out).get(key)
+    if row is None:
+        return None
+    if any(r.get("key") == key for r in review.read_jsonl(review.reviews_path())):
+        verdict = "already"
+    elif word == "正しい":
+        expect = _expect(row)
+        if expect:   # the example first: a review without it would be read as "no question to fix"
+            review._append(review.fixtures_path(), review.fixture_row(row, expect))
+        review._append(review.reviews_path(), review.review_row(row, "yes", now, source="teams"))
+        verdict = "yes"
+    else:
+        review._append(review.reviews_path(), review.review_row(row, "wrong", now, source="teams"))
+        verdict = "wrong"
+    _log(out, {"key": key, "verdict": verdict, "spot": k})
+    return verdict
+
+
 def _refused(out, it, key, reason, k):
     """A label that cannot be recorded leaves a reason in the log, once per reason and number."""
     seen = it.get("label_refused") or []

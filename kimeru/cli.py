@@ -640,6 +640,7 @@ class _Parser(argparse.ArgumentParser):
 
 UNREACHABLE = ("kimeru: 判断モデルに接続できません: {}。Kev を起動する（README の「しくみ」）か、"
                "--backend stub（キーワードの簡易判定）で試してください")
+NOT_A_PAYLOAD = "kimeru: {} はイベントの形式ではありません（対応: Teams・監視アラート・ADO・議事録）"
 
 
 def main(argv=None):
@@ -1114,10 +1115,17 @@ def _main(argv=None):
                 return 1 if failed or r.get("waiting") else 0
             time.sleep(a.interval)
     if a.cmd == "run":
-        for f in a.files:
-            for r in process(json.loads(Path(f).read_text(encoding="utf-8")), gs, be, out, pbs):
+        rc = 0
+        for f in a.files:   # a file that is not an event is named and skipped: the other files are still judged
+            try:
+                results = process(json.loads(Path(f).read_text(encoding="utf-8")), gs, be, out, pbs)
+            except events.NotAPayload:
+                print(NOT_A_PAYLOAD.format(f), file=sys.stderr)
+                rc = 1
+                continue
+            for r in results:
                 print(_fmt(r))
-        return 0
+        return rc
 
     inbox = Path(a.inbox)
     done = inbox / "done"
@@ -1131,6 +1139,9 @@ def _main(argv=None):
             except BackendUnavailable as e:   # keep the file; retried next round (decided events are skipped)
                 print(f"waiting: {e}", file=sys.stderr, flush=True)
                 break
+            except events.NotAPayload:   # not an event file: named in one line and parked like the other bad files
+                print(NOT_A_PAYLOAD.format(f.name), file=sys.stderr, flush=True)
+                f.replace(done / (f.name + ".error"))
             except Exception as e:  # keep the loop alive; park the bad file
                 print(f"error {f.name}: {e}", file=sys.stderr, flush=True)
                 f.replace(done / (f.name + ".error"))

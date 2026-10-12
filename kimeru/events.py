@@ -12,6 +12,10 @@ from datetime import datetime
 KINDS = ("teams.chat", "monitor.alert", "ado.workitem.created", "meeting.item")
 
 
+class NotAPayload(ValueError):
+    """A JSON value that is not an event payload (run and watch name the file and say so in one line)."""
+
+
 _BLOCK_END = re.compile(r"<br\s*/?>|</(?:p|div|li|tr|ul|ol|table|blockquote|pre|h[1-6])\s*>", re.I)
 _INVISIBLE = dict.fromkeys(map(ord, "​‌‍⁠﻿­"))
 
@@ -216,10 +220,12 @@ def detect(p):
         return "minutes"
     if "body" in p or "resourceData" in p:
         return "teams"
-    raise ValueError("unknown payload type")
+    raise NotAPayload("unknown payload type")
 
 
 def normalize(p, source=None):
+    if not isinstance(p, dict):
+        raise NotAPayload("unknown payload type")
     if "kind" in p and p["kind"] in KINDS:
         return [p]
     return NORMALIZERS[source or detect(p)](p)

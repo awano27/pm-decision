@@ -4,7 +4,8 @@
   1. tools\check-update.ps1  - the latest changes, in a temporary folder (U0-U9)
   2. tools\check.ps1 -Auto   - environment, tests, sample judgments, Teams read-only checks when Teams is already running,
                                the local Kev when it is already running, a Windows notification (T0 T1 T3 T6 T7 T8 T12 T13 T14 T16 T23)
-  Every question is answered "no": nothing is sent, no chat is opened, nothing is downloaded, Teams and Kev are not started.
+  Every question is answered "no": nothing is sent or pasted, the self chat may be opened and Teams brought to the front
+  (the previous chat is not restored), nothing is downloaded, Teams and Kev are not started.
   The result (OK/NG and counts only, no message text) goes to the clipboard and kimeru-auto-check-result.txt, with the list
   of the checks that need a person (sending to your own chat, a reply from your phone, writing to ADO, opening a chat).
 #>

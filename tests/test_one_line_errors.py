@@ -92,6 +92,21 @@ class TestOneLine(Base):
         self.assertEqual(rc, 2)
         self.assertIn("デモの台本が見つかりません", err)
 
+    def test_a_file_that_is_not_an_event_is_one_line_and_exit_1(self):
+        rc, _, err = self.cli("--backend", "stub", "run", str(ROOT / "examples" / "demo_day.json"))
+        self.assertEqual(rc, 1)
+        self.assertNotIn("Traceback", err)
+        self.assertIn("demo_day.json はイベントの形式ではありません", err)
+        self.assertLessEqual(len(err.strip().splitlines()), 1)
+
+    def test_a_payload_after_a_bad_file_is_still_judged(self):
+        rc, text, err = self.cli("--backend", "stub", "run", str(ROOT / "examples" / "demo_day.json"),
+                                 str(ROOT / "examples" / "teams_chat.json"))
+        self.assertEqual(rc, 1)
+        self.assertNotIn("Traceback", err)
+        self.assertIn("demo_day.json はイベントの形式ではありません", err)
+        self.assertIn("teams-chat-triage", text)
+
     def test_review_without_a_terminal_is_one_line(self):
         with mock.patch("sys.stdin", io.StringIO("")):
             rc, _, err = self.cli("review")

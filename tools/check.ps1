@@ -641,35 +641,40 @@ if ($uia -and (Want 'T19')) {
 }
 
 # ---- T18: does Microsoft 365 Copilot name the mail / meetings it used? (needs a real subject you know) ----
-if ($uia -and $py -and (Want 'T18')) {
-  Say "T18 M365 Copilot の出典（実際のメール・会議を参照できるか）"
-  $go = $false
-  $topic = Read-Host "   Copilot が参照できる、最近の会議名かメールの件名の一部（Copilot にだけ送ります。結果シートには書きません。Enter でスキップ）"
-  if (-not $topic) { Rec 'T18' 'SKIP' }
-  elseif (-not (YesNo "   Teams で Copilot のチャットが開いていて、他のチャットの側パネル・別ウィンドウは閉じていますか（依頼文を貼って送信します）")) { Rec 'T18' 'SKIP' }
-  else {
-    # a check run is a deliberate attempt: ignore (and reset) the rest the automatic route took after an earlier failure
-    $env:KIMERU_M365_NO_REST = '1'
-    Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $(if ($env:KIMERU_STATE_DIR) { $env:KIMERU_STATE_DIR } else { Join-Path $env:LOCALAPPDATA 'kimeru' }) 'm365-auto.json')
-    # nothing is sent until a paste test (paste a short text into the Copilot box, read it back, remove it) has passed
-    $pt = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'teams-copilot.ps1') -Action pastetest 2>&1 | Out-String
-    $pj = $null; try { $pj = $pt.Trim().TrimStart([char]0xFEFF) | ConvertFrom-Json } catch {}
-    if (-not $pj -or -not $pj.ok) {
-      Rec 'T18' ("SKIP 送信せず: 貼り付けテストに通りませんでした " + (Safe-Error $pt))
-      Rec 'T18-diag' (DiagText)
-    } else { Rec 'T18-paste' ("OK " + $pj.info); $go = $true }
+$noRestPrev = $env:KIMERU_M365_NO_REST   # T18 turns the REST route off; the value is put back when T18 ends (T16 and T17 must not see it)
+try {
+  if ($uia -and $py -and (Want 'T18')) {
+    Say "T18 M365 Copilot の出典（実際のメール・会議を参照できるか）"
+    $go = $false
+    $topic = Read-Host "   Copilot が参照できる、最近の会議名かメールの件名の一部（Copilot にだけ送ります。結果シートには書きません。Enter でスキップ）"
+    if (-not $topic) { Rec 'T18' 'SKIP' }
+    elseif (-not (YesNo "   Teams で Copilot のチャットが開いていて、他のチャットの側パネル・別ウィンドウは閉じていますか（依頼文を貼って送信します）")) { Rec 'T18' 'SKIP' }
+    else {
+      # a check run is a deliberate attempt: ignore (and reset) the rest the automatic route took after an earlier failure
+      $env:KIMERU_M365_NO_REST = '1'
+      Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $(if ($env:KIMERU_STATE_DIR) { $env:KIMERU_STATE_DIR } else { Join-Path $env:LOCALAPPDATA 'kimeru' }) 'm365-auto.json')
+      # nothing is sent until a paste test (paste a short text into the Copilot box, read it back, remove it) has passed
+      $pt = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'teams-copilot.ps1') -Action pastetest 2>&1 | Out-String
+      $pj = $null; try { $pj = $pt.Trim().TrimStart([char]0xFEFF) | ConvertFrom-Json } catch {}
+      if (-not $pj -or -not $pj.ok) {
+        Rec 'T18' ("SKIP 送信せず: 貼り付けテストに通りませんでした " + (Safe-Error $pt))
+        Rec 'T18-diag' (DiagText)
+      } else { Rec 'T18-paste' ("OK " + $pj.info); $go = $true }
+    }
+    if ($go) {
+      $d = Py @('eval\drafts.py', '--backend', 'stub', '--writer', 'm365-auto', '--n', '1', '--kinds', 'teams.chat', '--topic', $topic)
+      $sum = ($d -split "`n") | Where-Object { $_ -match '^events=' } | Select-Object -First 1
+      $m = [regex]::Match([string]$sum, 'texts=(\d+) drafted=(\d+) held=\d+ sources=(\d+) sources_key=(\d+) failed_events=(\d+)')
+      $err = [string](($d -split "`n") | Where-Object { $_ -match 'ERROR ' } | Select-Object -First 1)
+      $err = ($err -replace '.*ERROR ', '').Replace($topic, '<件名>')
+      if ($err.Length -gt 300) { $err = $err.Substring(0, 300) }
+      if (-not $m.Success) { Rec 'T18' 'NG 実行できませんでした（件名は記録しません）' }
+      elseif ($m.Groups[5].Value -ne '0') { Rec 'T18' ("NG writer が失敗: " + $err); Rec 'T18-diag' (DiagText) }
+      else { Rec 'T18' ("drafted=$($m.Groups[2].Value)/$($m.Groups[1].Value) 出典=$($m.Groups[3].Value) 件 出典欄への回答=$(if ($m.Groups[4].Value -ne '0') { 'あり' } else { 'なし' }) 失敗=$($m.Groups[5].Value)" + $(if ($m.Groups[3].Value -ne '0') { '' } elseif ($m.Groups[4].Value -ne '0') { '（Copilot は「参照なし」と答えた: 件名が見つからなかった可能性）' } else { '（Copilot は出典欄に答えなかった: 依頼文の反映を確認）' })) }
+    }
   }
-  if ($go) {
-    $d = Py @('eval\drafts.py', '--backend', 'stub', '--writer', 'm365-auto', '--n', '1', '--kinds', 'teams.chat', '--topic', $topic)
-    $sum = ($d -split "`n") | Where-Object { $_ -match '^events=' } | Select-Object -First 1
-    $m = [regex]::Match([string]$sum, 'texts=(\d+) drafted=(\d+) held=\d+ sources=(\d+) sources_key=(\d+) failed_events=(\d+)')
-    $err = [string](($d -split "`n") | Where-Object { $_ -match 'ERROR ' } | Select-Object -First 1)
-    $err = ($err -replace '.*ERROR ', '').Replace($topic, '<件名>')
-    if ($err.Length -gt 300) { $err = $err.Substring(0, 300) }
-    if (-not $m.Success) { Rec 'T18' 'NG 実行できませんでした（件名は記録しません）' }
-    elseif ($m.Groups[5].Value -ne '0') { Rec 'T18' ("NG writer が失敗: " + $err); Rec 'T18-diag' (DiagText) }
-    else { Rec 'T18' ("drafted=$($m.Groups[2].Value)/$($m.Groups[1].Value) 出典=$($m.Groups[3].Value) 件 出典欄への回答=$(if ($m.Groups[4].Value -ne '0') { 'あり' } else { 'なし' }) 失敗=$($m.Groups[5].Value)" + $(if ($m.Groups[3].Value -ne '0') { '' } elseif ($m.Groups[4].Value -ne '0') { '（Copilot は「参照なし」と答えた: 件名が見つからなかった可能性）' } else { '（Copilot は出典欄に答えなかった: 依頼文の反映を確認）' })) }
-  }
+} finally {
+  if ($null -eq $noRestPrev) { Remove-Item Env:KIMERU_M365_NO_REST -ErrorAction SilentlyContinue } else { $env:KIMERU_M365_NO_REST = $noRestPrev }
 }
 
 # ---- T16: Windows notification on this PC (self-chat posts never notify your own devices) ----

@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
-from kimeru import daily, events, graph, notify, plan
+from kimeru import daily, events, graph, notify, plan, push
 from kimeru.backends import BackendUnavailable, StubBackend
 from kimeru.cli import process
 
@@ -401,3 +401,31 @@ class TestWeeklyReport(unittest.TestCase):
             on, r = self.brief_posts(MONDAY, weekly="1")
         self.assertEqual(on, off)
         self.assertEqual(r["brief"], 2)
+
+    def push_texts(self, weekly):
+        """The texts a webhook route is sent in the Monday cycle. The sender is a fake: nothing leaves the test."""
+        sent = []
+
+        class Answer:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def fake(req, timeout=0):
+            sent.append(json.loads(req.data.decode("utf-8"))["text"])
+            return Answer()
+        route = {"KIMERU_PUSH": "webhook", "KIMERU_PUSH_WEBHOOK_URL": "https://example.invalid/hooks/TEST"}
+        with mock.patch.dict(os.environ, route), mock.patch.object(push, "_urlopen", fake):
+            self.brief_posts(MONDAY, weekly=weekly)
+        return sent
+
+    def test_a_push_route_on_the_monday_gets_only_counts_and_numbers_with_the_setting_on_or_off(self):
+        off = self.push_texts("0")
+        on = self.push_texts("1")
+        self.assertEqual(off, ["kimeru: 確認待ち 2 件（#1, #2）。Teams の自分とのチャットを確認してください"])   # push.message: counts and numbers
+        self.assertEqual(on, off)
+        self.assertFalse(any(label in text for text in on for label in SIX_LABELS))

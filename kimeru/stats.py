@@ -283,20 +283,31 @@ def _local_day(value):
     return d.astimezone().date().isoformat() if d is not None else None
 
 
+def _sample_or_demo_item(item):
+    """True for the trial's fictional item (by its key or its event) and for a demo item: no R24 row counts them."""
+    rec = item.get("record") if isinstance(item.get("record"), dict) else {}
+    timing = item.get("measurement") if isinstance(item.get("measurement"), dict) else {}
+    reference = rec.get("measurement") if isinstance(rec.get("measurement"), dict) else {}
+    return (timing.get("source") == "demo" or reference.get("source") == "demo" or autorun._key_is_sample(item.get("key"))
+            or autorun.is_sample(rec.get("event_kind"), rec.get("event_id")))
+
+
+def _sample_or_demo_decision(row):
+    """The same rule for a line of decisions.jsonl: a demo decision, or the fictional item's."""
+    metadata = row.get("measurement") if isinstance(row.get("measurement"), dict) else {}
+    return metadata.get("source") == "demo" or autorun.is_sample(row.get("event_kind"), row.get("event_id"))
+
+
 def _counted_cases(out):
     """(item, timing, reference) of the approval items that count in the R24 rows: a case (no learn card), not the demo, not the
     fictional item, and a judge that is named and is not Jev."""
     found = []
     for item in _approval_items(out).values():
-        if not isinstance(item, dict):
+        if not isinstance(item, dict) or _sample_or_demo_item(item):
             continue
         rec = item.get("record") if isinstance(item.get("record"), dict) else {}
         timing = item.get("measurement") if isinstance(item.get("measurement"), dict) else {}
         reference = rec.get("measurement") if isinstance(rec.get("measurement"), dict) else {}
-        if timing.get("source") == "demo" or reference.get("source") == "demo":
-            continue
-        if autorun._key_is_sample(item.get("key")) or autorun.is_sample(rec.get("event_kind"), rec.get("event_id")):
-            continue
         if _performance_judge(_record_judge_name(rec)):
             found.append((item, timing, reference))
     return found
@@ -334,10 +345,14 @@ def _sends(cases, since, now):
 
 
 def _labels(decision_rows, review_rows, since, now):
-    """R03: the labels the week added, by where they came from: a reply (`違う N`, source teams) or `kimeru review`."""
+    """R03: the labels the week added, by where they came from: a reply (`違う N`, source teams) or `kimeru review`. A `違う` on the
+    fictional item or on a demo decision is a label too, so those are left out here (as in the other R24 rows)."""
     judge_of_key = {review.decision_key(r): _record_judge_name(r) for r in decision_rows}
+    left_out = {review.decision_key(r) for r in decision_rows if _sample_or_demo_decision(r)}
     found = {"teams": 0, "terminal": 0}
     for r in _within(review_rows, "at", since, now):
+        if r.get("key") in left_out or autorun._key_is_sample(r.get("key")):
+            continue
         if r.get("verdict") not in ("yes", "no", "wrong") or not _performance_judge(_judge_of_review(r, judge_of_key)):
             continue
         found["teams" if r.get("source") == "teams" else "terminal"] += 1
@@ -349,10 +364,7 @@ def _judged_between(rows, judge, start, end):
     total = human = 0
     for r in rows:
         at = _parse(r.get("at"))
-        if at is None or not start <= at < end or _record_judge_name(r) != judge:
-            continue
-        metadata = r.get("measurement") if isinstance(r.get("measurement"), dict) else {}
-        if metadata.get("source") == "demo" or autorun.is_sample(r.get("event_kind"), r.get("event_id")):
+        if at is None or not start <= at < end or _record_judge_name(r) != judge or _sample_or_demo_decision(r):
             continue
         total += 1
         human += bool(r.get("needs_human"))
@@ -391,18 +403,20 @@ def _learning(decision_rows, since, now):
 def _top_three(out, since, now):
     """R04: of the morning brief's top three rows that carry an approval number (the denominator), how many had a reply or a `work set`
     on the same local day as the brief (out/brief_history.jsonl x approvals.log.jsonl and work-state.jsonl). A weak signal: a look
-    without an answer, or a reply made elsewhere, is in no log. A brief whose judge is Jev or unnamed is left out."""
+    without an answer, or a reply made elsewhere, is in no log. A brief whose judge is Jev or unnamed is left out, and so is every row
+    of the fictional item or a demo item (their approval numbers, in the brief, the reply log and the work log)."""
     from . import brief
+    left_out = {n for n, item in _approval_items(out).items() if isinstance(item, dict) and _sample_or_demo_item(item)}
     replied = set()
     for r in _dicts(review.read_jsonl(Path(out) / "approvals.log.jsonl")):
-        if learn.is_card_key(r.get("key")) or autorun._key_is_sample(r.get("key")):
+        if learn.is_card_key(r.get("key")) or autorun._key_is_sample(r.get("key")) or str(r.get("id")) in left_out:
             continue
         day = _local_day(r.get("at"))
         if day is not None:
             replied.add((str(r.get("id")), day))
     for r in _dicts(review.read_jsonl(Path(out) / "work-state.jsonl")):
         day = _local_day(r.get("at"))
-        if day is not None:
+        if day is not None and str(r.get("case")) not in left_out:
             replied.add((str(r.get("case")), day))
     first, last = since.astimezone().date().isoformat(), now.astimezone().date().isoformat()
     numbered = hit = 0
@@ -417,7 +431,7 @@ def _top_three(out, since, now):
             rank, key = (row.get("rank"), row.get("key")) if isinstance(row, dict) else (None, None)
             if not isinstance(rank, int) or isinstance(rank, bool) or not 1 <= rank <= 3:
                 continue
-            if not isinstance(key, str) or not key.startswith(brief.APPROVAL_PREFIX):
+            if not isinstance(key, str) or not key.startswith(brief.APPROVAL_PREFIX) or key[len(brief.APPROVAL_PREFIX):] in left_out:
                 continue
             numbered += 1
             hit += (key[len(brief.APPROVAL_PREFIX):], date) in replied

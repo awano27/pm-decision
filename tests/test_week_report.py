@@ -396,7 +396,7 @@ class TestWeeklyRows(Base):
         for line in self.EXPECTED:
             self.assertIn(line, text)
 
-    def test_jev_the_fictional_item_and_the_week_before_are_left_out_of_every_row(self):
+    def test_jev_and_the_week_before_are_left_out_of_every_row(self):
         self.seed()
         text = stats.week(self.out, now=NOW)
         six = [l for l in text.splitlines() if l.startswith(SIX)]
@@ -404,6 +404,40 @@ class TestWeeklyRows(Base):
         self.assertNotIn("Jev", "\n".join(six))
         self.assertNotIn("1000", "\n".join(six))                # Jev's arrival of 1000 seconds would move the median
         self.assertNotIn("採用 2 件", text)                      # the reverted adoption and Jev's are not counted
+
+    def test_the_fictional_item_and_the_demo_move_no_row_and_no_figure(self):
+        self.seed()
+        before = [l for l in stats.week(self.out, now=NOW).splitlines() if l.startswith(SIX)]
+        # the trial's fictional item (number 999001: its key, and an ADO event for one of CLM's decisions) and a demo item. Each is an
+        # approved case with a late arrival and an as-is send, has a decision and a reply (wrong, or no), and CLM's decision of each
+        # sits in the adoption's window. The reply log row, the work row and the brief row carry the fictional item's number on
+        # another day
+        sample = decision("teams-chat-triage", "999001", "decision_today", "teams.chat", days=1)
+        demo = decision("teams-chat-triage", "910", "decision_today", "teams.chat", days=1, source="demo")
+        clm_sample = decision("teams-chat-triage", "999001", "decision_today", "ado.workitem.created", days=1, judge="CLM", needs_human=True)
+        clm_demo = decision("monitor-alert", "908", "alert", "monitor.alert", days=1, judge="CLM", needs_human=True, source="demo")
+        with (self.out / "decisions.jsonl").open("a", encoding="utf-8") as f:
+            f.write("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in [sample, demo, clm_sample, clm_demo]))
+        data = json.loads((self.out / "approvals.json").read_text(encoding="utf-8"))
+        data["items"].update(dict([arrived(7, sample, 1, 1000), arrived(8, demo, 1, 1000)]))
+        data["items"]["7"]["sent_seen"] = {"state": "as_is", "at": at(1)}
+        data["items"]["8"]["sent_seen"] = {"state": "as_is", "at": at(1)}
+        data["next"] = 9
+        (self.out / "approvals.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        with (self.out / "approvals.log.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"at": noon_of(5)[0], "key": "teams-chat-triage:999001:decision_today", "id": 7, "status": "approved"}) + "\n")
+        with (self.out / "work-state.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"transition_id": "t2", "at": noon_of(5)[0], "case": "7", "from": "approved", "to": "in_progress"}) + "\n")
+        with (self.out / "brief_history.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"date": noon_of(5)[1], "backend": "Kev", "rows": [{"key": "approval:7", "kind": "teams", "rank": 1,
+                                                                                    "harm": 0.5}]}) + "\n")
+        for rec, verdict in ((sample, "wrong"), (demo, "no")):
+            review._append(review.reviews_path(), {"key": review.decision_key(rec), "verdict": verdict, "at": at(1), "judge": "Kev",
+                                                   "source": "teams"})
+        text = stats.week(self.out, now=NOW)
+        for line in self.EXPECTED:
+            self.assertIn(line, text)
+        self.assertEqual([l for l in text.splitlines() if l.startswith(SIX)], before)
 
     def test_a_row_with_no_record_says_unknown_and_nothing_raises(self):
         text = stats.week(self.out, now=NOW)                     # an empty folder

@@ -118,6 +118,15 @@ def _with_key_points(text):
     return "\n".join([head, f"今日の要点（{label}）:"] + [f"・{p}" for p in points] + rest)
 
 
+def _with_attention(out, text):
+    """R37: the line that names the senders whose items are announced at once (attention.brief_line), after the writer's key points and
+    never given to the writer. A failure leaves the brief as it was."""
+    try:
+        return attention.brief_line(out, text)
+    except Exception:
+        return text
+
+
 def _with_weekly(out, text, now):
     """R24 (weekly_report=1, on a Monday): the six lines of the week's report go to the end of the brief, after the writer's key points
     and before the delivery, so the writer never gets them. A failure leaves the six lines out and the brief as it was."""
@@ -225,6 +234,16 @@ def _sittings(out, now):
     except Exception as e:
         _log(out, {"step": "attention", "error": f"{type(e).__name__}: {str(e)[:120]}"})
         return {"sitting_at": None, "hold": set()}
+
+
+def _chase(out, now, sit):
+    """R37: keeps the held numbers and their revisions, and lists the senders who chased a held item (attention.note). True when a sender
+    was listed now. A failure reads as nothing listed; the log names the error type only, never a sender."""
+    try:
+        return bool(attention.note(out, now, sit["hold"]))
+    except Exception as e:
+        _log(out, {"step": "attention", "chase": f"{type(e).__name__}: {str(e)[:120]}"})
+        return False
 
 
 def _alert_left_open(out, alerts, toaster, bridge=None, send=False):
@@ -395,6 +414,8 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
     if left:
         r["left_for_next_cycle"] = left
     sit = _sittings(out, now) if send else {"sitting_at": None, "hold": set()}   # R17: read after this cycle's posts, so they are in it
+    if send and _chase(out, now, sit):   # R37: a sender listed just now is announced at once in this cycle too, so the sitting is read again
+        sit = _sittings(out, now)
     at = sit["sitting_at"]   # the last sitting at or before now; None unless interrupt=sittings
     if send and toaster and notify.toast_enabled():
         # self-chat posts never notify the PM's own devices: a Windows notification on this PC does. It is built
@@ -501,6 +522,7 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
                 shown = brief_mod.named(ranked)   # the post names the first three; the history keeps every item
                 if len(shown) >= 2 and not brief_mod.is_desk():   # a one-line day needs no summary, and an empty one must not invent one; desk: no writer
                     text = _with_key_points(text)
+                text = _with_attention(out, text)   # R37: after the writer's points, and only when a sender is listed (never given to the writer)
                 if config.value("weekly_report") == "1" and now.weekday() == 0:   # R24: after the writer, before the delivery
                     text = _with_weekly(out, text, now)
                 result = notify.deliver_brief(out, bridge, text, send, today, built_at=built_at)

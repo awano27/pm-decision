@@ -755,6 +755,11 @@ def _main(argv=None):
     p_p.add_argument("--project")
     p_p.add_argument("--subscription")
     p_p.add_argument("--login", action="store_true", help="ado: first `az login` into the organization's tenant")
+    p_att = sub.add_parser("attention", help="the senders whose waiting items are announced at once after a chase (interrupt=sittings): list | remove NAME")
+    att_sub = p_att.add_subparsers(dest="attention_action", required=True, parser_class=_Parser)
+    att_sub.add_parser("list", help="list the senders (read only)")
+    p_att_rm = att_sub.add_parser("remove", help="take one sender off the list (the name as list shows it)")
+    p_att_rm.add_argument("name")
     p_work = sub.add_parser("work", help="track progress separately from approval and execution")
     work_sub = p_work.add_subparsers(dest="work_action", required=True, parser_class=_Parser)
     work_sub.add_parser("list", help="list approved cases and their explicit progress")
@@ -806,7 +811,8 @@ def _main(argv=None):
     if a.out is None:   # the demo gets a folder of its own, so it never meets the records of run / daily / schedule
         a.out = str(Path("out") / "demo") if a.cmd == "demo" else "out"
     out = Path(a.out)
-    if a.cmd not in READ_ONLY and not (a.cmd == "schedule" and a.action in ("remove", "status", "report")):
+    if a.cmd not in READ_ONLY and not (a.cmd == "schedule" and a.action in ("remove", "status", "report")) \
+            and not (a.cmd == "attention" and a.attention_action == "list"):   # R37: the list writes nothing
         from . import demo as _demo
         try:   # a command that writes real records here: this folder is no longer the demo's to clear
             (out / _demo.MARK).unlink(missing_ok=True)
@@ -833,6 +839,25 @@ def _main(argv=None):
     if a.cmd == "learn":   # R21: the cards' adoptions (learn.py); nothing here reads Teams or the judge
         from . import learn
         return learn.dispatch(a.args, out)
+
+    if a.cmd == "attention":   # R37: the senders listed after a chase (attention.py); nothing here reads Teams or the judge
+        if a.attention_action == "list":
+            rows = attention.listed(out)
+            if not rows:
+                print("すぐ知らせる送信者はありません")
+            for name, why, since in rows:
+                reason = {"minutes": "時間が経ってから", "words": "催促の語"}.get(why, "不明")
+                print(f"{name} / 理由: {reason} / {since} から")
+            return 0
+        taken = attention.unlist(out, a.name)
+        if taken is None:
+            print("kimeru: approvals.json is in use; nothing was changed (try again)", file=sys.stderr)
+            return 1
+        if not taken:
+            print("kimeru: 一致する送信者はありません（kimeru attention list で名前を確かめてください）", file=sys.stderr)
+            return 1
+        print(f"{a.name} を外しました（次からは、まとめの時刻を待ちます）")
+        return 0
 
     if a.cmd in ("onboarding", "trial", "requirements"):
         from . import onboarding, requirements, trial

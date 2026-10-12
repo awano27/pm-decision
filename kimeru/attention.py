@@ -25,14 +25,18 @@ The sittings are kept per route: approvals.json `sitting_toast` for the PC notif
 phone route. A route whose last recorded sitting is not the current one has it due; the sitting is recorded only after the
 announcement succeeded, so a failed one is tried again in the next cycle (see daily.cycle).
 """
+import json
 import re
 import unicodedata
 from datetime import datetime, time, timedelta
+from pathlib import Path
 
-from . import config, control, graph
+from . import config, control, fsutil, graph
 
 DEFAULT_WORDS = "至急|本日中|今日中|大至急|緊急|ASAP"   # the default of urgent_words (config.SETTINGS)
 CRITICAL = ("critical_incident", "critical_bug", "critical_outage")
+CHASE_MINUTES = 30   # R37: a follow-up that comes this long after the first ready time of a waiting item is a chase
+CHASE_WORDS = "まだ|催促|督促|返事|返信|いかが|どうなり|進捗"   # R37: a follow-up with one of these words is a chase at any time
 
 
 def enabled():
@@ -135,10 +139,13 @@ def next_sitting(now):
 
 
 def waiting(out):
-    """The numbers of the posted items (pending or held) that wait for the next sitting: the ones not urgent (announce_now)."""
+    """The numbers of the posted items (pending or held) that wait for the next sitting: the ones not urgent (announce_now). R37: the
+    items of a sender listed in out/attention.json are not waiting (they are announced at once)."""
     from . import notify   # lazily: notify imports the modules that read the settings this one is part of
     items = notify.Approvals(out).data.get("items", {})
-    return {int(n) for n, it in items.items() if it.get("posted") and it.get("status") in ("pending", "held") and not announce_now(it)}
+    listed = senders(out)
+    return {int(n) for n, it in items.items()
+            if it.get("posted") and it.get("status") in ("pending", "held") and not announce_now(it) and _author(it) not in listed}
 
 
 def unsent(out, now):
@@ -177,3 +184,175 @@ def status_lines(out, now=None):
     left = sum(1 for n in waiting(out) if not (items.get(str(n)) or {}).get("toasted"))
     when = nxt.strftime("%H:%M") if nxt.date() == now.date() else "明日 " + nxt.strftime("%H:%M")
     return [f"次のまとめ {when}・待っている告知 {left}"]
+
+
+# ---- R37: a sender who chases an item that waits for the sitting is announced at once from then on (interrupt=sittings only) ----
+#
+# The held numbers and their revisions are kept in approvals.json (`sitting_waited`, top level, not in the item: a merge clears the
+# item, cli._merge_locked). A later cycle that finds a held item with a higher revision (a follow-up, not a thanks or OK) lists its
+# sender in out/attention.json when that follow-up came CHASE_MINUTES or more after the first ready time, or has a chasing word
+# (CHASE_WORDS). A listed sender's waiting items are announced at once (waiting), and the morning brief names them (brief_line).
+# Two follow-ups in a row, with neither the time nor a word, list nobody. The sender's name stays in out/attention.json and the
+# brief: never in the push, in --share, or in daily.log (the counts only). A listing only ever raises an item's urgency.
+
+def _author(it):
+    """The sender of a chat item as its record keeps it ("" when there is none)."""
+    rec = it.get("record") if isinstance(it.get("record"), dict) else {}
+    ev = rec.get("event") if isinstance(rec.get("event"), dict) else {}
+    return " ".join(str(ev.get("author") or "").split())
+
+
+def _revision(it):
+    """The revision of an approvals item (1 when it has none), as cli._merge_locked counts it."""
+    rec = it.get("record") if isinstance(it.get("record"), dict) else {}
+    return int(it.get("revision") or rec.get("revision") or 1)
+
+
+def _first_ready(it):
+    """The first ready time of an item (its measurement, or the record's): read only, nothing is filled in."""
+    rec = it.get("record") if isinstance(it.get("record"), dict) else {}
+    for meas in (it.get("measurement"), rec.get("measurement")):
+        if isinstance(meas, dict) and (meas.get("first_ready_at") or meas.get("ready_at")):
+            return meas.get("first_ready_at") or meas.get("ready_at")
+    return None
+
+
+def _minutes_since(value, now):
+    """Minutes from an ISO time (aware, or naive local) to `now` (naive local); None when the time is missing or not a time."""
+    if not value:
+        return None
+    try:
+        when = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    if when.tzinfo is not None:
+        when = when.astimezone().replace(tzinfo=None)
+    return (_local(now) - when).total_seconds() / 60
+
+
+def _path(out):
+    return Path(out) / "attention.json"
+
+
+def _rows(out):
+    """The listed senders as the file keeps them, in the order they were listed (read only; no setting is read)."""
+    data = fsutil.read_json(_path(out), {"senders": []})
+    rows = data.get("senders") if isinstance(data, dict) else None
+    return [r for r in (rows or []) if isinstance(r, dict) and str(r.get("name") or "")]
+
+
+def senders(out):
+    """R37: the senders whose waiting items are announced at once. Nothing is listed unless interrupt=sittings."""
+    if not enabled():
+        return set()
+    return {str(r["name"]) for r in _rows(out)}
+
+
+def _chase_rule(it, before, now):
+    """Why the follow-ups of a held item since revision `before` are a chase: "words" (a chasing word), "minutes" (CHASE_MINUTES or
+    more after its first ready time), or None (an ordinary follow-up, or two in a row with neither)."""
+    rec = it.get("record") if isinstance(it.get("record"), dict) else {}
+    rows = [r for r in (rec.get("followups") or []) if isinstance(r, dict)]
+    new = rows[-(_revision(it) - before):]
+    text = " ".join(" ".join(str(r.get("text") or "").split()) for r in new)
+    if re.search(CHASE_WORDS, unicodedata.normalize("NFKC", text)):
+        return "words"
+    minutes = _minutes_since(_first_ready(it), now)
+    return "minutes" if minutes is not None and minutes >= CHASE_MINUTES else None
+
+
+def _list_senders(out, pairs, now):
+    """Adds the senders not listed yet (name, why) to out/attention.json; the previous copy stays as .bak until the list changes again.
+    Returns how many were added."""
+    rows = _rows(out)
+    have = {r["name"] for r in rows}
+    added = 0
+    for name, why in pairs:
+        if name in have:
+            continue
+        rows.append({"name": name, "since": _local(now).isoformat(timespec="minutes"), "why": why})
+        have.add(name)
+        added += 1
+    if added:
+        fsutil.write_atomic(_path(out), json.dumps({"senders": rows}, ensure_ascii=False, indent=1))
+    return added
+
+
+def note(out, now, held):
+    """R37 (interrupt=sittings only; nothing is read or written otherwise): keeps the held numbers and their revisions for the next
+    cycle, and lists the sender of a held item whose revision went up since then when that follow-up was a chase (_chase_rule).
+    `held` is this cycle's hold (plan). Returns how many senders were listed now, or None when approvals.json is in use (the next
+    cycle tries again with the same marks)."""
+    if not enabled():
+        return 0
+    from . import notify   # lazily: notify imports the modules that read the settings this one is part of
+    out = Path(out)
+    with fsutil.exclusive(notify.lock_path(out)) as got:
+        if not got:
+            return None
+        ap = notify.Approvals(out)
+        items = ap.data.get("items", {})
+        mark = ap.data.get("sitting_waited") if isinstance(ap.data.get("sitting_waited"), dict) else {}
+        chased = []
+        for n, rev in mark.items():
+            it = items.get(str(n))
+            if not isinstance(it, dict) or not _author(it):
+                continue
+            try:
+                before = int(rev)
+            except (TypeError, ValueError):
+                continue
+            if _revision(it) > before:
+                why = _chase_rule(it, before, now)
+                if why:
+                    chased.append((_author(it), why))
+        kept = {}
+        for n in held:
+            it = items.get(str(n))
+            if (isinstance(it, dict) and it.get("posted") and it.get("status") in ("pending", "held") and _author(it)
+                    and not it.get("toasted")):   # a notice that already went out is not waiting for anything
+                kept[str(n)] = _revision(it)
+        added = _list_senders(out, chased, now) if chased else 0
+        if kept != mark:
+            if kept:
+                ap.data["sitting_waited"] = kept
+            else:
+                ap.data.pop("sitting_waited", None)
+            ap.save()
+        return added
+
+
+def brief_line(out, text):
+    """R37: the line of the morning brief that says whose items are announced at once. It comes after the writer's key points and is
+    never given to the writer. Nothing is added unless interrupt=sittings and a sender is listed."""
+    names = [r["name"] for r in _rows(out)] if enabled() else []
+    if not names:
+        return text
+    shown = "・".join(f"{n}さん" for n in names[:3]) + (f" ほか {len(names) - 3} 人" if len(names) > 3 else "")
+    return f"{text}\n今後 {shown}はすぐ知らせます（外すには kimeru attention remove）"
+
+
+def listed(out):
+    """`kimeru attention list`: (name, why, since) of each listed sender, in the order they were listed (read only)."""
+    return [(r["name"], r.get("why"), r.get("since")) for r in _rows(out)]
+
+
+def unlist(out, name):
+    """`kimeru attention remove NAME`: takes one sender off the list, and its previous copy (.bak) goes too. Returns how many were taken
+    off (0: no such name), or None when approvals.json is in use."""
+    from . import notify   # lazily: notify imports the modules that read the settings this one is part of
+    out = Path(out)
+    with fsutil.exclusive(notify.lock_path(out)) as got:
+        if not got:
+            return None
+        rows = _rows(out)
+        keep = [r for r in rows if r["name"] != name]
+        taken = len(rows) - len(keep)
+        if taken:
+            path = _path(out)
+            if keep:
+                fsutil.write_atomic(path, json.dumps({"senders": keep}, ensure_ascii=False, indent=1))
+            else:
+                path.unlink(missing_ok=True)
+            path.with_name(path.name + ".bak").unlink(missing_ok=True)
+        return taken

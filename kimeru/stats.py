@@ -489,6 +489,21 @@ def _report_lines(rep):
     return lines
 
 
+def _sit_hours(dated):
+    """R37: the three local hours of the day at which the approvals of the week came most often, in hour order: a suggestion for
+    sit_hours that nothing applies by itself. None with fewer than three approvals that have a time."""
+    counts = {}
+    for r in dated:
+        when = _parse(r.get("at"))
+        if when is not None:
+            hour = when.astimezone().hour
+            counts[hour] = counts.get(hour, 0) + 1
+    if sum(counts.values()) < 3:
+        return None
+    top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:3]
+    return sorted(hour for hour, _ in top)
+
+
 def collect(out, now=None):
     now = now or datetime.now(timezone.utc)
     since = now - timedelta(days=7)
@@ -529,7 +544,7 @@ def collect(out, now=None):
         "auto": sum(g["auto"] for g in per_graph.values()), "human": sum(g["human"] for g in per_graph.values()),
         "rule": sum(g["rule"] for g in per_graph.values()),
         "critical": sum(1 for r in decisions if r.get("notify")),
-        "per_graph": per_graph, "approvals": statuses, "approvals_undated": undated,
+        "per_graph": per_graph, "approvals": statuses, "approvals_undated": undated, "sit_hours_candidate": _sit_hours(dated),
         "instruction_repeats": _repeated_instructions(dated),
         "invalid_evidence": invalid_evidence, "future_evidence": future_evidence,
         "judges": judges, "models": models, "reviewed_yes": yes, "reviewed_no": no,
@@ -666,6 +681,8 @@ def render(s, share=False):
         lines.append("承認の結果: " + "、".join(f"{LABEL.get(k, k)} {v}" for k, v in sorted(s["approvals"].items(), key=lambda kv: str(kv[0]))))
     else:
         lines.append("承認の結果: 日時つきの記録なし")
+    if not share and s.get("sit_hours_candidate"):   # R37: a suggestion only; --share never has it, and nothing is changed by it
+        lines.append("sit_hours の候補: " + ",".join(str(h) for h in s["sit_hours_candidate"]) + "（承認が多かった時刻。自動では変えません）")
     if wk:
         if wk["replied_items"]:
             lines.append(f"1 件あたりの返信: {wk['replies'] / wk['replied_items']:.1f} 回"

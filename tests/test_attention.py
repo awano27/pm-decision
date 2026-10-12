@@ -11,12 +11,12 @@ import json
 import os
 import tempfile
 import unittest
-from contextlib import redirect_stderr
-from datetime import datetime
+from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
-from kimeru import attention, cli, config, control, daily, notify, push
+from kimeru import attention, cli, config, control, daily, notify, push, stats
 from kimeru.backends import StubBackend
 from kimeru.cli import process
 from tests.test_daily import GRAPHS, PBS, FakeTeams
@@ -812,6 +812,346 @@ class TestQuietDocs(unittest.TestCase):
         self.assertEqual(config.CHOICES["quiet_words"], ("0", "1"))
         self.assertIn("quiet_words", config.LOGGABLE)
         self.assertIn("quiet_words", config.SHARE_VALUES)
+
+
+# ---- R37: a sender who chases an item that waits for the sitting is announced at once from then on (interrupt=sittings only) ----
+
+NOW = datetime(2026, 9, 28, 10, 20)   # naive local, as the cycle's clock is
+NOW_UTC = datetime(2026, 10, 12, 0, 0, tzinfo=timezone.utc)
+SITTING_ENV = {"KIMERU_INTERRUPT": "sittings", "KIMERU_SIT_HOURS": "9,13,17"}
+# the golden texts of `digest --week` (no share), written before the change: two approvals, and six at 9, 9, 13, 13, 13, 17 o'clock
+WEEK_TWO = """kimeru の直近 7 日（2026-10-05 から）
+判断: 0 件
+前の 7 日（2026-09-28 から）: 判断 0 件
+承認の結果: OK 2
+1 件あたりの返信: 1.0 回（返信のあった件 2 件・参考）
+同じ修正指示の繰り返し（別の項目で）: 0 件
+自動で決めた判断で、正誤に「違う」が付いた件: 不明（対象 0 件）
+提案が一度も変わらなかった OK: 不明（下書きのある OK 0 件）
+投稿から OK を見るまで（中央値）: 今週 不明、前の 7 日 不明
+calibrate の正誤（判断モデルごと。下限 100 問）: CLM 0 問（あと 100 問）、Kev 0 問（あと 100 問）
+到着から判断完了まで（PC が見た時刻から）: 不明（記録なし）
+到着から承認まで（PC が見た時刻から）: 不明（記録なし）
+OK の後の送信（自分のチャットの一覧で見た。届いたことの証明ではない）: 不明（記録なし）
+正誤のラベルの増分（今週）: 不明（記録なし）
+採用した学習の前後（今週）: 不明（記録なし）
+朝のまとめの上位 3 件で、同じ日に返信か作業の記録があった件: 不明（承認番号のある件 0 件）
+判断の一致率: まだ確かめた判断がありません（kimeru review）"""
+WEEK_SIX = """kimeru の直近 7 日（2026-10-05 から）
+判断: 0 件
+前の 7 日（2026-09-28 から）: 判断 0 件
+承認の結果: OK 6
+1 件あたりの返信: 1.0 回（返信のあった件 6 件）
+同じ修正指示の繰り返し（別の項目で）: 0 件
+自動で決めた判断で、正誤に「違う」が付いた件: 不明（対象 0 件）
+提案が一度も変わらなかった OK: 不明（下書きのある OK 0 件）
+投稿から OK を見るまで（中央値）: 今週 不明、前の 7 日 不明
+calibrate の正誤（判断モデルごと。下限 100 問）: CLM 0 問（あと 100 問）、Kev 0 問（あと 100 問）
+到着から判断完了まで（PC が見た時刻から）: 不明（記録なし）
+到着から承認まで（PC が見た時刻から）: 不明（記録なし）
+OK の後の送信（自分のチャットの一覧で見た。届いたことの証明ではない）: 不明（記録なし）
+正誤のラベルの増分（今週）: 不明（記録なし）
+採用した学習の前後（今週）: 不明（記録なし）
+朝のまとめの上位 3 件で、同じ日に返信か作業の記録があった件: 不明（承認番号のある件 0 件）
+判断の一致率: まだ確かめた判断がありません（kimeru review）"""
+POST_GOLDEN = "[kimeru #1] 確認の依頼\n→ 内容を確認してください\nOK 1 / NG 1 / 詳細 1"
+
+
+def waiting_item(author, revision=1, followups=(), first_ready=datetime(2026, 9, 28, 10, 0), toasted=False):
+    """An approvals item the way a cycle keeps a posted, non-urgent chat item: its sender, its followups, its first ready time."""
+    ready = first_ready.astimezone().isoformat(timespec="milliseconds")
+    return {"key": f"k-{author}-{revision}", "status": "pending", "posted": True, "toasted": toasted, "revision": revision,
+            "record": {"node": "ask_pm", "revision": revision, "attn": {"urgent": False, "why": []},
+                       "event": {"kind": "teams.chat", "author": author, "chat_id": "19:c@unq", "text": "これは何ですか"},
+                       "followups": [{"text": t, "at": "2026-09-28T10:00:00+00:00"} for t in followups]},
+            "measurement": {"schema": 1, "source": "test", "generation": 1, "ready_at": ready, "first_ready_at": ready,
+                            "case_key": "k"}}
+
+
+def read_json_file(path):
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+class TestChaseBase(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.out = Path(self.dir.name) / "out"
+        env = mock.patch.dict(os.environ, SITTING_ENV)
+        env.start()
+        self.addCleanup(env.stop)
+
+    def save(self, items, **keys):
+        """approvals.json with these items as the numbers 1, 2, ... (and any other top-level keys)."""
+        self.out.mkdir(parents=True, exist_ok=True)
+        data = {"next": len(items) + 1, "items": {str(i): it for i, it in enumerate(items, 1)}, **keys}
+        (self.out / "approvals.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    def approvals(self):
+        return read_json_file(self.out / "approvals.json")
+
+    def follow_up(self, n, text, revision_up=True):
+        """A follow-up of item n as the merge writes it: one more followup row, and the revision up unless it is an acknowledgement."""
+        data = self.approvals()
+        it = data["items"][str(n)]
+        it["record"]["followups"] = list(it["record"].get("followups") or []) + [{"text": text, "at": "2026-09-28T10:10:00+00:00"}]
+        if revision_up:
+            it["revision"] = int(it["revision"]) + 1
+            it["record"]["revision"] = it["revision"]
+        (self.out / "approvals.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    def hold_at(self, now):
+        """One cycle at `now`: what waits for the sitting is held (attention.note). Returns what note returns."""
+        return attention.note(self.out, now, attention.waiting(self.out))
+
+    def promote(self, author="田中", n=1):
+        """Item n of `author` is held, then chased 45 minutes after its first ready time: the sender is listed."""
+        self.save([waiting_item(author, first_ready=datetime(2026, 9, 28, 9, 30))])
+        self.hold_at(datetime(2026, 9, 28, 9, 40))
+        self.follow_up(n, "資料を追加しました")
+        self.assertEqual(self.hold_at(datetime(2026, 9, 28, 10, 15)), 1)
+
+
+class TestChaseRule(TestChaseBase):
+    def test_a_held_item_keeps_its_number_and_revision_and_nothing_is_listed_yet(self):
+        self.save([waiting_item("田中", first_ready=datetime(2026, 9, 28, 9, 50))])
+        self.assertEqual(attention.waiting(self.out), {1})
+        self.assertEqual(self.hold_at(NOW), 0)
+        self.assertEqual(self.approvals()["sitting_waited"], {"1": 1})
+        self.assertFalse((self.out / "attention.json").exists())
+
+    def test_two_quick_follow_ups_without_a_chase_word_do_not_promote_the_sender(self):
+        self.save([waiting_item("田中")])
+        self.hold_at(datetime(2026, 9, 28, 10, 0))
+        self.follow_up(1, "資料を追加しました")
+        self.follow_up(1, "修正版です")
+        self.assertEqual(attention.waiting(self.out), set())   # the item is announced at once, as it is today
+        self.assertEqual(self.hold_at(datetime(2026, 9, 28, 10, 5)), 0)
+        self.assertEqual(attention.senders(self.out), set())
+        self.assertFalse((self.out / "attention.json").exists())
+
+    def test_a_follow_up_about_thirty_minutes_after_the_first_ready_time_promotes_the_sender(self):
+        self.save([waiting_item("田中", first_ready=datetime(2026, 9, 28, 9, 30))])
+        self.hold_at(datetime(2026, 9, 28, 9, 40))
+        self.follow_up(1, "資料を追加しました")
+        self.assertEqual(self.hold_at(datetime(2026, 9, 28, 10, 15)), 1)   # 45 minutes after the first ready time
+        self.assertEqual(attention.senders(self.out), {"田中"})
+        self.assertEqual(read_json_file(self.out / "attention.json")["senders"][0]["why"], "minutes")
+
+    def test_a_chasing_word_promotes_the_sender_even_a_few_minutes_after_the_first_ready_time(self):
+        self.save([waiting_item("田中")])
+        self.hold_at(datetime(2026, 9, 28, 10, 2))
+        self.follow_up(1, "まだですか")
+        self.assertEqual(self.hold_at(datetime(2026, 9, 28, 10, 5)), 1)
+        self.assertEqual(attention.senders(self.out), {"田中"})
+        self.assertEqual(read_json_file(self.out / "attention.json")["senders"][0]["why"], "words")
+
+    def test_an_acknowledgement_is_never_a_chase_because_it_moves_no_revision(self):
+        self.save([waiting_item("田中", first_ready=datetime(2026, 9, 28, 9, 30))])
+        self.hold_at(datetime(2026, 9, 28, 9, 40))
+        self.follow_up(1, "ありがとうございます まだですか", revision_up=False)
+        self.assertEqual(self.hold_at(datetime(2026, 9, 28, 10, 30)), 0)
+        self.assertEqual(attention.senders(self.out), set())
+
+    def test_an_item_already_announced_at_its_sitting_is_not_held_so_a_later_follow_up_is_no_chase(self):
+        self.save([waiting_item("田中", first_ready=datetime(2026, 9, 28, 9, 30), toasted=True)])
+        self.assertEqual(self.hold_at(datetime(2026, 9, 28, 9, 40)), 0)
+        self.assertEqual(self.approvals().get("sitting_waited", {}), {})   # not kept: its notice already went out
+        self.follow_up(1, "資料を追加しました")
+        self.assertEqual(self.hold_at(datetime(2026, 9, 28, 10, 15)), 0)
+        self.assertEqual(attention.senders(self.out), set())
+
+    def test_a_follow_up_on_an_item_that_was_never_held_does_not_promote(self):
+        self.save([waiting_item("田中", revision=2, followups=["資料を追加しました"], first_ready=datetime(2026, 9, 28, 9, 30))])
+        self.assertEqual(self.hold_at(NOW), 0)
+        self.assertEqual(attention.senders(self.out), set())
+
+    def test_a_merge_that_clears_the_item_keeps_the_mark_in_the_approvals_state(self):
+        self.save([waiting_item("田中", first_ready=datetime(2026, 9, 28, 9, 30))])
+        self.hold_at(datetime(2026, 9, 28, 9, 40))
+        data = self.approvals()
+        it = data["items"]["1"]
+        measurement = it["measurement"]
+        it.clear()   # cli._merge_locked: the item is cleared and rebuilt; the mark is not in the item, so it is not lost
+        it.update({"measurement": measurement, "revision": 2, "status": "pending", "posted": False, "toasted": False,
+                   "record": {"node": "ask_pm", "revision": 2, "attn": {"urgent": False, "why": []},
+                              "event": {"kind": "teams.chat", "author": "田中", "chat_id": "19:c@unq"},
+                              "followups": [{"text": "資料を追加しました", "at": "2026-09-28T10:10:00+00:00"}]}})
+        (self.out / "approvals.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        self.assertEqual(self.hold_at(datetime(2026, 9, 28, 10, 20)), 1)
+        self.assertEqual(attention.senders(self.out), {"田中"})
+
+    def test_the_promoted_sender_has_its_next_item_announced_at_once_while_another_sender_still_waits(self):
+        self.save([waiting_item("田中", first_ready=datetime(2026, 9, 28, 9, 30)), waiting_item("佐藤")])
+        self.hold_at(datetime(2026, 9, 28, 9, 40))
+        self.follow_up(1, "資料を追加しました")
+        self.assertEqual(self.hold_at(datetime(2026, 9, 28, 10, 15)), 1)
+        data = self.approvals()
+        data["items"]["3"] = waiting_item("田中")   # a new question of the chasing sender
+        data["next"] = 4
+        (self.out / "approvals.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        self.assertEqual(attention.waiting(self.out), {2})   # 佐藤 still waits; 田中 is announced at once
+
+    def test_the_note_returns_a_count_and_no_name_leaves_the_function(self):
+        self.save([waiting_item("田中", first_ready=datetime(2026, 9, 28, 9, 30))])
+        self.hold_at(datetime(2026, 9, 28, 9, 40))
+        self.follow_up(1, "資料を追加しました")
+        result = self.hold_at(datetime(2026, 9, 28, 10, 15))
+        self.assertIs(type(result), int)
+        self.assertEqual(result, 1)
+
+    def test_under_interrupt_all_nothing_is_kept_listed_or_held_and_the_brief_is_the_same(self):
+        with mock.patch.dict(os.environ, {"KIMERU_INTERRUPT": "all"}):
+            self.save([waiting_item("田中", first_ready=datetime(2026, 9, 28, 9, 30))])
+            self.assertEqual(self.hold_at(datetime(2026, 9, 28, 9, 40)), 0)
+            self.follow_up(1, "まだですか")
+            self.assertEqual(self.hold_at(datetime(2026, 9, 28, 10, 20)), 0)
+            self.assertNotIn("sitting_waited", self.approvals())
+            self.assertFalse((self.out / "attention.json").exists())
+            self.assertEqual(attention.senders(self.out), set())
+            self.assertEqual(attention.brief_line(self.out, "本文"), "本文")
+
+    def test_a_busy_approvals_lock_skips_the_chase_and_the_next_cycle_tries_it_again(self):
+        self.save([waiting_item("田中", first_ready=datetime(2026, 9, 28, 9, 30))])
+        self.hold_at(datetime(2026, 9, 28, 9, 40))
+        self.follow_up(1, "資料を追加しました")
+
+        class Busy:
+            def __enter__(self):
+                return False
+
+            def __exit__(self, *exc):
+                return False
+        with mock.patch("kimeru.fsutil.exclusive", return_value=Busy()):
+            self.assertIsNone(self.hold_at(datetime(2026, 9, 28, 10, 15)))
+        self.assertEqual(self.approvals()["sitting_waited"], {"1": 1})   # nothing changed: the mark is still there
+        self.assertFalse((self.out / "attention.json").exists())
+        self.assertEqual(self.hold_at(datetime(2026, 9, 28, 10, 15)), 1)
+        self.assertEqual(attention.senders(self.out), {"田中"})
+
+
+class TestChaseAnnouncement(TestChaseBase):
+    def test_a_listed_sender_items_wait_for_no_sitting_and_others_still_do(self):
+        self.promote("田中")
+        self.assertEqual(attention.senders(self.out), {"田中"})
+        data = self.approvals()
+        data["items"]["5"] = waiting_item("佐藤")
+        data["items"]["6"] = waiting_item("田中", first_ready=datetime(2026, 9, 28, 10, 0))
+        data["next"] = 7
+        (self.out / "approvals.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        self.assertEqual(attention.waiting(self.out), {5})
+
+    def test_the_morning_brief_line_names_the_listed_senders_after_the_text_and_never_the_others(self):
+        self.promote("田中")
+        text = "朝のまとめ\n・件 1\n今日の要点（writer）:\n・要点"
+        self.assertEqual(attention.brief_line(self.out, text),
+                         text + "\n今後 田中さんはすぐ知らせます（外すには kimeru attention remove）")
+
+    def test_the_brief_line_counts_the_senders_beyond_three_without_naming_them(self):
+        for name in ("田中", "佐藤", "鈴木", "高橋"):
+            self.promote(name)
+        line = attention.brief_line(self.out, "本文").split("\n")[-1]
+        self.assertTrue(line.startswith("今後 田中さん・佐藤さん・鈴木さん ほか 1 人はすぐ知らせます"), line)
+        self.assertNotIn("高橋", line)
+
+
+class TestChaseCli(TestChaseBase):
+    def run_cli(self, *args):
+        buf, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(buf), redirect_stderr(err):
+            rc = cli.main(["--out", str(self.out), *args])
+        return rc, buf.getvalue(), err.getvalue()
+
+    def test_attention_list_names_the_senders_and_remove_takes_one_out_with_its_backup(self):
+        self.promote("田中")
+        self.promote("佐藤")   # a second write leaves attention.json.bak behind
+        self.assertTrue((self.out / "attention.json.bak").exists())
+        rc, listed, _ = self.run_cli("attention", "list")
+        self.assertEqual(rc, 0)
+        self.assertIn("田中", listed)
+        self.assertIn("佐藤", listed)
+        rc, _, _ = self.run_cli("attention", "remove", "田中")
+        self.assertEqual(rc, 0)
+        self.assertEqual(attention.senders(self.out), {"佐藤"})
+        self.assertFalse((self.out / "attention.json.bak").exists())
+
+    def test_removing_a_name_that_is_not_listed_changes_nothing_and_says_so(self):
+        self.promote("田中")
+        before = (self.out / "attention.json").read_text(encoding="utf-8")
+        rc, _, err = self.run_cli("attention", "remove", "山田")
+        self.assertEqual(rc, 1)
+        self.assertIn("一致", err)
+        self.assertEqual((self.out / "attention.json").read_text(encoding="utf-8"), before)
+
+    def test_attention_list_says_so_when_nobody_is_listed_and_works_under_interrupt_all(self):
+        with mock.patch.dict(os.environ, {"KIMERU_INTERRUPT": "all"}):
+            rc, listed, _ = self.run_cli("attention", "list")
+        self.assertEqual(rc, 0)
+        self.assertIn("ありません", listed)
+
+
+class TestChaseDigest(TestChaseBase):
+    def write_log(self, hours):
+        self.out.mkdir(parents=True, exist_ok=True)
+        rows = [{"at": datetime(2026, 10, 10, h, 30).astimezone().isoformat(timespec="seconds"), "key": f"k{i}", "id": i,
+                 "status": "approved"} for i, h in enumerate(hours)]
+        (self.out / "approvals.log.jsonl").write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n",
+                                                      encoding="utf-8")
+
+    def test_two_approvals_are_too_few_for_a_suggestion_and_the_digest_is_byte_for_byte_the_same(self):
+        self.write_log((9, 13))
+        self.assertEqual(stats.render(stats.collect(self.out, NOW_UTC), share=False), WEEK_TWO)
+
+    def test_the_week_digest_suggests_three_sit_hours_from_the_approval_times_and_changes_nothing(self):
+        self.write_log((9, 9, 13, 13, 13, 17))
+        text = stats.render(stats.collect(self.out, NOW_UTC), share=False)
+        expected = WEEK_SIX.replace("承認の結果: OK 6\n", "承認の結果: OK 6\nsit_hours の候補: 9,13,17（承認が多かった時刻。自動では変えません）\n")
+        self.assertEqual(text, expected)
+
+    def test_the_share_text_never_has_the_suggestion(self):
+        self.write_log((9, 9, 13, 13, 13, 17))
+        self.assertNotIn("sit_hours の候補", stats.render(stats.collect(self.out, NOW_UTC), share=True))
+
+
+class TestChaseGoldenAndCycles(Cycles):
+    """The texts the default keeps (written before the change), and what a real cycle keeps under each setting."""
+
+    def test_the_approval_post_text_is_byte_for_byte_the_same(self):
+        rec = {"node": "ask_pm", "event": {"kind": "teams.chat", "author": "田中", "text": "これは何ですか"}, "actions": [],
+               "revision": 1, "followups": [], "summary": "確認の依頼", "notify": False}
+        self.assertEqual(notify.format_post(1, rec), POST_GOLDEN)
+
+    def test_a_default_cycle_keeps_no_held_numbers_and_lists_no_sender(self):
+        self.open_day()
+        self.chat(f"これは何ですか {BODY}", "10:15")
+        self.cycle(10, 20)
+        self.assertNotIn("sitting_waited", read_json_file(self.out / "approvals.json"))
+        self.assertFalse((self.out / "attention.json").exists())
+
+    def test_under_sittings_a_held_question_keeps_its_number_and_revision_and_nobody_is_listed_yet(self):
+        self.sittings()
+        self.open_day()
+        self.chat(f"これは何ですか {BODY}", "10:15")
+        self.cycle(10, 20)
+        self.assertEqual(read_json_file(self.out / "approvals.json")["sitting_waited"], {"1": 1})
+        self.assertEqual(self.shown, [])
+        self.assertFalse((self.out / "attention.json").exists())
+
+
+class TestChaseDocs(unittest.TestCase):
+    def test_the_reference_security_and_changelog_name_the_attention_command_and_file(self):
+        ref = (ROOT / "docs" / "reference.md").read_text(encoding="utf-8")
+        self.assertIn("kimeru attention list", ref)
+        self.assertIn("kimeru attention remove", ref)
+        sec = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+        self.assertIn("attention.json", sec)
+        self.assertIn("sitting_waited", sec)
+        log = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        unreleased = log.split("## 未リリース", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("kimeru attention", unreleased)
+
+    def test_the_chase_adds_no_setting_so_the_default_is_the_interrupt_setting(self):
+        self.assertFalse([k for k in config.SETTINGS if "attention" in k or "chase" in k])
 
 
 if __name__ == "__main__":

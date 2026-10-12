@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest import mock
 
 from kimeru import cli, config, events, graph, plan
+from kimeru import writer as writer_mod
 from kimeru.backends import ClmBackend, JevBackend, KevBackend, ReplayBackend, StubBackend, is_local_judge
 from kimeru.cli import Meter
 from tests.test_daily import GRAPHS, PBS
@@ -338,6 +339,107 @@ class TestTheDecisionsOfAContextRun(unittest.TestCase):
             st = spy.calls[0][0]
             self.assertEqual(len(st["text"]), 900)
             self.assertLessEqual(len(st["text"]) + sum(len(e) for e in st["earlier"]), 1200)
+
+
+def raw_payloads():
+    """One raw payload of each other source, and a chat message whose payload has no chat id (the normalizer leaves it out)."""
+    return {
+        "ado": {"eventType": "workitem.created", "resource": {"id": 501, "fields": {
+            "System.Title": "テスト項目", "System.WorkItemType": "Bug", "System.CreatedBy": {"displayName": "Ito"},
+            "System.Description": "<p>説明</p>", "System.CreatedDate": ago(0)}}},
+        "alert": {"schemaId": "azureMonitorCommonAlertSchema", "data": {"essentials": {
+            "alertId": "al-1", "alertRule": "rule-1", "severity": "Sev1", "monitorCondition": "Fired",
+            "firedDateTime": ago(0), "description": "d"}}},
+        "minutes": {"title": "定例 2026-10-12", "date": TODAY, "text": "- 次回までに確認する"},
+        "chat_without_id": {"id": "cur-1", "createdDateTime": ago(0), "from": {"user": {"displayName": "Sato"}},
+                            "body": {"content": "よろしくお願いします"}, "mentions": [{}]},
+    }
+
+
+class TestTheOtherSourcesAndAChatWithoutAChatIdAreJudgedAsBefore(unittest.TestCase):
+    def judged(self, payload, value):
+        """(what the judge was asked, the node and outcome of each result, the results) for one payload under judge_context=value.
+        The folder holds the same earlier rows each time, so a run that wrongly read them would show in the questions."""
+        rows = [seen_row("e1", 1, "前の依頼"), seen_row("e2", 0.5, "後の依頼")]
+        with tempfile.TemporaryDirectory() as d, settings(judge_context=value):
+            spy = SpyKev()
+            results = run(spy, fresh(d, "out", rows), payload)
+        return spy.calls, [(r.get("node"), r.get("outcome")) for r in results], results
+
+    def test_an_ado_item_an_alert_a_meeting_item_and_a_chat_without_a_chat_id_get_the_same_questions_and_answers(self):
+        cases = {**raw_payloads(), "chat_id_empty": {**teams_event(), "chat_id": ""},
+                 "chat_id_missing": {k: v for k, v in teams_event().items() if k != "chat_id"}}
+        for name, payload in cases.items():
+            with self.subTest(name):
+                off_calls, off_nodes, _ = self.judged(payload, "0")
+                on_calls, on_nodes, on_results = self.judged(payload, "1")
+                self.assertTrue(off_calls)
+                self.assertEqual(on_calls, off_calls)
+                self.assertEqual(on_nodes, off_nodes)
+                for state, questions in on_calls:
+                    self.assertNotIn("earlier", state)
+                    self.assertNotIn("today", state)
+                    self.assertNotIn("Today is", json.dumps(questions, ensure_ascii=False))
+                for result in on_results:
+                    self.assertNotIn("context_used", result)
+
+    def test_the_same_earlier_rows_do_reach_a_chat_with_a_chat_id_so_the_check_above_is_not_empty(self):
+        calls, _, results = self.judged(teams_event(), "1")
+        self.assertEqual(calls[0][0]["earlier"], ["Sato: 前の依頼", "Sato: 後の依頼"])
+        self.assertEqual(results[0]["context_used"], {"earlier": 2})
+
+    def test_the_guard_gives_no_context_to_a_source_other_than_a_chat_or_to_a_chat_without_an_id(self):
+        with tempfile.TemporaryDirectory() as d, settings(judge_context="1"):
+            out = fresh(d, "out", [seen_row("e1", 1, "前の依頼")])
+            for ev in ({"kind": "ado.workitem.created", "id": "501", "chat_id": CHAT},
+                       {"kind": "monitor.alert", "id": "al-1", "chat_id": CHAT},
+                       {"kind": "meeting.item", "id": "m-1", "chat_id": CHAT},
+                       {**teams_event(), "chat_id": None}):
+                with self.subTest(kind=ev["kind"], chat_id=ev.get("chat_id")):
+                    self.assertIsNone(cli._judge_context(SpyKev(), out, ev, NOW))
+            self.assertIsNotNone(cli._judge_context(SpyKev(), out, teams_event(), NOW))
+
+
+class TestTheThreadAndTheWriterNeverGetTheEarlierText(unittest.TestCase):
+    def test_a_thread_on_the_seeded_row_or_on_the_current_event_never_reaches_the_judge(self):
+        old = seen_row("e1", 1, "前の依頼")
+        old["event"]["thread"] = ["THREADSENTINEL-ROW"]
+        cur = {**teams_event(), "thread": ["THREADSENTINEL-CUR"]}
+        with tempfile.TemporaryDirectory() as d, settings(judge_context="1"):
+            spy = SpyKev()
+            run(spy, fresh(d, "out", [old]), cur)
+        self.assertEqual(spy.calls[0][0]["earlier"], ["Sato: 前の依頼"])
+        self.assertNotIn("THREADSENTINEL", json.dumps(spy.calls, ensure_ascii=False))
+
+    def test_the_writer_is_handed_the_same_material_with_context_and_without_and_never_the_earlier_text(self):
+        rows = [seen_row("e1", 1, "WRITERSENTINEL 前の依頼")]
+        off, on, judge = RecordingWriter(), RecordingWriter(), SpyKev()
+        with tempfile.TemporaryDirectory() as d:
+            with settings(judge_context="0"):
+                cli.process(teams_event(), GRAPHS, SpyKev(), fresh(d, "off", rows), PBS, writer=off, now=NOW)
+            with settings(judge_context="1"):
+                cli.process(teams_event(), GRAPHS, judge, fresh(d, "on", rows), PBS, writer=on, now=NOW)
+        self.assertIn("Sato: WRITERSENTINEL 前の依頼", judge.calls[0][0]["earlier"])   # the judge did get the earlier message
+        self.assertTrue(on.seen)
+        self.assertEqual(on.seen, off.seen)
+        for seen in on.seen:
+            self.assertNotIn("WRITERSENTINEL", seen)
+            self.assertNotIn("Today is", seen)
+            self.assertNotIn('"earlier"', seen)
+            self.assertNotIn('"today"', seen)
+
+
+class RecordingWriter:
+    """Records what the drafting model is handed (the result, the event, the instruction) and drafts the texts that are wanted."""
+    NAME = "fake"
+
+    def __init__(self):
+        self.seen = []
+
+    def draft(self, res, event, instruction=None):
+        self.seen.append(json.dumps({"res": res, "event": event, "instruction": instruction}, ensure_ascii=False, default=str))
+        return {key: "佐藤さん、承知しました。" if a["type"] == "teams.reply" else f"説明: {a.get('title')}"
+                for key, a in writer_mod.targets(res)}
 
 
 class TestTheSettingsAreDocumented(unittest.TestCase):

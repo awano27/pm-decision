@@ -34,6 +34,7 @@ A graph may set "severe": {"field", "pattern", "exempt": [node ids]}. When the e
 severity Sev0/Sev1), every outcome outside `exempt` reaches the PM: a decide is notified, an advise is queued,
 whichever path the model's answers took.
 """
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -53,6 +54,12 @@ def load(path):
     g = json.loads(Path(path).read_text(encoding="utf-8"))
     validate(g)
     return g
+
+
+def version(g):
+    """The version of a graph: 8 hex digits of a hash of its JSON. The key of a decision carries it (cli.process), so a record
+    can be matched with the graph it was judged by (explain.py)."""
+    return hashlib.sha1(json.dumps(g, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:8]
 
 
 def _targets(node):
@@ -224,11 +231,38 @@ def match_eval(node, event):
     the whole field once a hit stands: a recovery note in another sentence (本番で決済が通りません。復旧しました)
     routes "mixed" so a person looks, instead of paging for an outage that is already over. "when" ({field: pattern}) makes the
     node apply only to events whose fields match; any other event is "no"."""
+    edge, pattern, _ = _match(node, event)
+    return edge, pattern
+
+
+def match_explain(node, event):
+    """What match_eval decides (the same judgment: _match), with the words the rule read, for the explanation of a record
+    (explain.py): {"edge", "pattern", "field", "word", "veto", "mixed"}. "word" is the text the pattern matched in the
+    field, "veto" the text of the exclude pattern that rejected that hit, "mixed" the text of the recovery (mixed_field) or
+    mixed_if pattern that sent it to a person; a key the rule did not read is None."""
+    edge, pattern, why = _match(node, event)
+    return {"edge": edge, "pattern": pattern, "field": why.get("field"), "word": why.get("word"),
+            "veto": why.get("veto"), "mixed": why.get("mixed")}
+
+
+def _first(patterns, text):
+    """The text the first of `patterns` matches in `text` (case-insensitive), or None when none matches. An empty match is a match."""
+    for x in patterns:
+        m = re.search(x, text, re.IGNORECASE)
+        if m is not None:
+            return m.group(0)
+    return None
+
+
+def _match(node, event):
+    """The judgment of a match node: (edge, pattern, why). match_eval and match_explain both read it, so the two cannot disagree.
+    `why` names what the rule read (the keys of match_explain); it is {} when the node read nothing."""
     import unicodedata
     for f, pat in (node.get("when") or {}).items():   # eligibility: every listed field must match, else "no" (Epic/Task are not critical bugs)
         if not re.search(pat, unicodedata.normalize("NFKC", str(event.get(f) or "")), re.IGNORECASE):
-            return "no", None
-    mixed = None
+            return "no", None, {}
+    mixed, mixed_why = None, {}
+    rejected = {}   # the first hit a veto rejected: named when the node says no
     sent_ex = node.get("exclude_sentence", [])
     for f in node["fields"]:
         text = unicodedata.normalize("NFKC", str(event.get(f) or ""))
@@ -241,23 +275,33 @@ def match_eval(node, event):
             if sent_ex:
                 hits = [(p, m.start(), m.end()) for p in node["patterns"] for m in re.finditer(p, candidate, re.IGNORECASE)]
             else:
-                hits = [(p, 0, 0) for p in node["patterns"] if re.search(p, candidate, re.IGNORECASE)][:1]
+                hits = [(p, m.start(), m.end()) for p in node["patterns"]
+                        for m in [re.search(p, candidate, re.IGNORECASE)] if m is not None][:1]
             if not hits:
                 continue
-            vetoed = any(re.search(x, candidate, re.IGNORECASE) for x in node.get("exclude", []))
+            veto = _first(node.get("exclude", []), candidate)
             for hit, start, end in hits:
-                if sent_ex and not vetoed:
+                word = candidate[start:end]
+                if sent_ex and veto is None:
                     lo, hi = _sentence_bounds(candidate, start, end)
-                    if any(re.search(x, candidate[lo:hi], re.IGNORECASE) for x in sent_ex):
+                    sentence_veto = _first(sent_ex, candidate[lo:hi])
+                    if sentence_veto is not None:
+                        rejected = rejected or {"field": f, "word": word, "veto": sentence_veto}
                         continue
-                if not vetoed:
-                    if any(re.search(x, text, re.IGNORECASE) for x in node.get("mixed_field", [])):
-                        return "mixed", hit
-                    return "yes", hit
-                if any(re.search(x, candidate, re.IGNORECASE) for x in node.get("mixed_if", [])):
-                    mixed = mixed or hit
+                if veto is None:
+                    recovery = _first(node.get("mixed_field", []), text)
+                    if recovery is not None:
+                        return "mixed", hit, {"field": f, "word": word, "mixed": recovery}
+                    return "yes", hit, {"field": f, "word": word}
+                vetoed = {"field": f, "word": word, "veto": veto}
+                mixed_if = _first(node.get("mixed_if", []), candidate)
+                if mixed_if is not None and not mixed:
+                    mixed, mixed_why = hit, {**vetoed, "mixed": mixed_if}
+                rejected = rejected or vetoed
                 break
-    return ("mixed", mixed) if mixed else ("no", None)
+    if mixed:
+        return "mixed", mixed, mixed_why
+    return "no", None, rejected
 
 
 def guard_hit(node, event, ans, edge):

@@ -16,7 +16,6 @@
 """
 import argparse
 import copy
-import hashlib
 import json
 import os
 import sys
@@ -161,7 +160,7 @@ def _judge_info(backend):
 
 
 def _graph_version(g):
-    return hashlib.sha1(json.dumps(g, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:8]
+    return graph.version(g)
 
 
 def _processed(out):

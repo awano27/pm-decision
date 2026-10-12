@@ -320,6 +320,14 @@ def _why(rec):
     return explain.open_question(rec)
 
 
+def _rules(rec, full):
+    """R25: with the setting post_reason=1, the lines that name the words a rule read (explain.rule_evidence) at the top of 詳細 N;
+    [] otherwise, so at 0 (the default) the detail is unchanged. `full` is the whole text kept while the item waits (fulltext.load)."""
+    if config.value("post_reason") != "1":
+        return []
+    return explain.rule_evidence(rec, full)
+
+
 def _draft_mark(rec):
     """R12: with the setting post_kind_mark=1, a record that waits only for a writer's draft (held_reason "draft", cli._draft).
     False otherwise, so at 0 (the default) the texts are unchanged."""
@@ -435,8 +443,7 @@ def format_detail(n, rec, full=None, precedent=None, promise=None):
              "OK の効果: " + ("; ".join(dict.fromkeys(effects)) if effects else "記録のみ"),
              f"{ev} #{rec.get('event_id')}"] + ado_lines(rec)
     why = _why(rec)   # R11: under the header, when post_reason=1
-    if why:
-        lines.insert(1, why)
+    lines[1:1] = _rules(rec, full) + ([why] if why else [])   # R25: the words a rule read come first, then R11's question
     rf = rec.get("read_full") or {}
     if rf.get("state") == "preview_only":
         lines.append("⚠ プレビューだけで判断しました（" + str(rf.get("why", ""))[:100] + "）。元のメッセージを Teams で確認してください")

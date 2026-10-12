@@ -218,9 +218,10 @@ def process_inbox(inbox, out, graphs, backend, playbooks, process, deadline=None
 
 
 def _sittings(out, now):
-    """R17: the sittings of this cycle (attention.plan). A failure reads as no sitting: the items are announced at once, as before."""
+    """R17: the sittings of this cycle (attention.plan). R27: the end of a 休み (control.quiet_until) is passed too. A failure reads as
+    no sitting: the items are announced at once, as before."""
     try:
-        return attention.plan(out, now)
+        return attention.plan(out, now, until=control.quiet_until(out))
     except Exception as e:
         _log(out, {"step": "attention", "error": f"{type(e).__name__}: {str(e)[:120]}"})
         return {"sitting_at": None, "hold": set()}
@@ -411,7 +412,7 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
             _step(out, "toast_clear", lambda: notify.mark_toasted(out, [], [], unposted=0), r)   # (busy or a folder that cannot be written: the next cycle does it)
         # R17 (interrupt=sittings): a posted item that is not urgent waits for the next sitting, which is announced once. The sitting
         # is recorded only when it was announced (or there was nothing to announce), so a failed toast is tried again next cycle.
-        due, held = False, set()
+        due, held = False, sit["hold"]   # R27: a 休み holds what is not urgent though no sitting applies (empty otherwise)
         if at:
             try:
                 due = notify.sitting_toast_due(out, at)
@@ -419,7 +420,7 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
                 due = True
                 _log(out, {"step": "toast", "sitting": f"{type(e).__name__}: {str(e)[:120]}"})
             held = set() if due else sit["hold"]
-            nums = [n for n in nums if n not in held]
+        nums = [n for n in nums if n not in held]
         sitting = bool(at and due)
         if nums or keys or unposted:
             def do_toast():
@@ -441,6 +442,7 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
             due, hold = {}, None
             if at:   # R17: a route whose sitting is due announces what waits; the others keep it for their own next sitting
                 due = push.sitting_state(out, at)
+            if at or sit["hold"]:   # R27: a 休み holds the routes' not urgent items too (sit["hold"] is empty otherwise: hold stays None)
                 hold = {route: (set() if due.get(route) else sit["hold"]) for route in push.enabled_routes()}
             res = push.run(out, hold=hold)
             if at:   # recorded only for the routes that announced it (sent, or nothing was left to send)

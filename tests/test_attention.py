@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
-from kimeru import attention, cli, config, daily, notify, push
+from kimeru import attention, cli, config, control, daily, notify, push
 from kimeru.backends import StubBackend
 from kimeru.cli import process
 from tests.test_daily import GRAPHS, PBS, FakeTeams
@@ -482,6 +482,336 @@ class TestDocsAndSecurity(unittest.TestCase):
         unreleased = log.split("## 未リリース", 1)[1].split("\n## ", 1)[0]
         self.assertIn("interrupt=sittings", unreleased)
         self.assertIn("sit_hours", unreleased)
+
+
+# ---- R27: 休み <いつ> (quiet_words=1): the PC notification and the push wait until that time; the urgent ones do not ----
+
+QUIET_ACK = "[kimeru 休み] 09/28 15:00 まで、緊急でない件の PC の通知と push を止めます。取り込み・判断・投稿と、重大な件の知らせは続きます"
+
+
+def self_row(preview):
+    return {"id": "48:notes", "kind": "self", "title": "自分", "preview": preview, "time": "8:09", "unread": False, "mention": False}
+
+
+class CallLog(FakeTeams):
+    """FakeTeams that keeps the order of what a cycle asks of Teams (names and arguments)."""
+
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+
+    def chats(self):
+        self.calls.append(("chats",))
+        return super().chats()
+
+    def readchat(self, chat_id, count=5, preview=None):
+        self.calls.append(("readchat", chat_id, count))
+        return super().readchat(chat_id, count, preview)
+
+    def post(self, text, send):
+        self.calls.append(("post", text, send))
+        return super().post(text, send)
+
+    def read(self):
+        self.calls.append(("read",))
+        return super().read()
+
+
+class Bridge:
+    """The self chat of control.step: only what is posted to it is recorded."""
+
+    def __init__(self):
+        self.posts = []
+
+    def post(self, text, send):
+        self.posts.append(text)
+
+
+class TestQuiet(Cycles):
+    """R27 (quiet_words=1): my own self-chat line 休み <いつ> holds what is not urgent until that time (no PC notification, no push).
+    The urgent items are announced at once, and the held ones go out once, at the first cycle at or after the time."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ["KIMERU_QUIET_WORDS"] = "1"
+
+    def lines(self, mine, question=None, time="10:15"):
+        self.t.chat_list = [self_row(mine)] + ([chat(question, time)] if question else [])
+
+    def quiet_at_ten(self):
+        self.lines("メモ", "おはようございます", "9:00")   # the first sighting of the chat is its baseline
+        self.cycle(9, 5)
+        self.lines("あなた: 休み 15時", "これは何ですか")
+        return self.cycle(10, 20)
+
+    def test_a_quiet_line_posts_one_ack_and_holds_a_question_until_its_time(self):
+        r = self.quiet_at_ten()
+        self.assertEqual(r["notify"], [1])                          # posted to the self chat as before
+        self.assertEqual((self.shown, self.sent), ([], []))         # held: no PC notification and no phone push
+        self.assertEqual(r["push"], {"webhook": "waiting for the next sitting"})
+        self.cycle(14, 0)
+        self.assertEqual((self.shown, self.sent), ([], []))
+        self.assertEqual([t for t, _ in self.t.posts if t.startswith("[kimeru 休み]")], [QUIET_ACK])
+
+    def test_at_the_first_cycle_after_the_time_the_held_question_is_announced_once(self):
+        self.quiet_at_ten()
+        self.cycle(14, 0)
+        r = self.cycle(15, 5)
+        self.assertEqual(r["toast"], "shown")
+        self.assertEqual(self.shown, [("kimeru: 確認待ち 1 件", "#1")])
+        self.assertEqual(self.sent, [("webhook", "kimeru: 確認待ち 1 件（#1）。Teams の自分とのチャットを確認してください")])
+        self.cycle(15, 10)
+        self.cycle(16, 0)
+        self.assertEqual(len(self.shown), 1)                        # once
+        self.assertEqual(len(self.sent), 1)
+
+    def test_a_sev1_alert_during_a_quiet_is_announced_at_once_and_the_question_still_waits(self):
+        self.quiet_at_ten()
+        alert = {"kind": "monitor.alert", "id": "s1", "rule": "prod-db storage", "severity": "Sev1", "condition": "Fired",
+                 "description": "Storage 92% used on prod-db"}
+        self.inbox.mkdir(parents=True, exist_ok=True)
+        (self.inbox / "alert.json").write_text(json.dumps(alert, ensure_ascii=False), encoding="utf-8")
+        self.cycle(10, 25)
+        self.assertEqual(self.shown, [("kimeru: 確認待ち 1 件", "#2")])
+        self.assertEqual(self.sent, [("webhook", "kimeru: 確認待ち 1 件（#2）。Teams の自分とのチャットを確認してください")])
+        rec = json.loads((self.out / "decisions.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+        self.assertEqual(rec["attn"]["urgent"], True)                # the record names the rule, as with sittings
+        self.assertIn("severe", rec["attn"]["why"])
+        self.cycle(15, 5)
+        self.assertEqual(self.shown[1:], [("kimeru: 確認待ち 1 件", "#1")])
+
+    def test_a_priority_one_work_item_during_a_quiet_is_announced_at_once(self):
+        self.quiet_at_ten()
+        self.inbox.mkdir(parents=True, exist_ok=True)
+        item = {"kind": "ado.workitem.created", "id": "4812", "title": "決済が止まっている", "priority": "1",
+                "work_item_type": "Bug", "description": "本番で決済が通りません"}
+        (self.inbox / "ado.json").write_text(json.dumps(item, ensure_ascii=False), encoding="utf-8")
+        r = self.cycle(10, 25)
+        self.assertEqual(r["notices"], 1)
+        self.assertEqual(self.shown, [("kimeru: 自動決定の通知 1 件", "Teams の自分とのチャットを確認してください")])
+        self.assertEqual(self.sent, [("webhook", "kimeru: 自動決定の通知 1 件。Teams の自分とのチャットを確認してください")])
+
+    def test_under_sittings_the_held_question_goes_out_at_the_time_as_a_sitting_and_the_one_oclock_sitting_waits(self):
+        self.sittings()
+        self.lines("メモ", "おはようございます", "9:00")
+        self.cycle(9, 5)
+        self.lines("休み 15時", "これは何ですか")
+        self.cycle(10, 20)
+        self.cycle(13, 5)
+        self.assertEqual((self.shown, self.sent), ([], []))         # the 13:00 sitting does not announce during the quiet
+        self.cycle(15, 5)
+        self.assertEqual(self.shown, [("kimeru: 確認待ち 1 件（まとめ）", "#1")])
+        self.assertEqual(self.sent, [("webhook", "kimeru: 確認待ち 1 件（#1）。Teams の自分とのチャットを確認してください")])
+        self.cycle(15, 10)
+        self.cycle(17, 0)
+        self.assertEqual(len(self.shown), 1)
+        self.assertEqual(len(self.sent), 1)
+
+    def test_after_the_quiet_a_later_question_waits_for_the_next_sitting_as_before(self):
+        self.sittings()
+        other = "19:c_d@unq.gbl.spaces"   # a second chat: a message in the first chat would be a follow-up, announced at once (R17)
+        self.t.chat_list = [self_row("メモ"), chat("おはようございます", "9:00"), chat("おはよう", "9:00", cid=other)]
+        self.cycle(9, 5)
+        self.t.chat_list = [self_row("休み 15時"), chat("これは何ですか", "10:15"), chat("おはよう", "9:00", cid=other)]
+        self.cycle(10, 20)
+        self.cycle(15, 5)
+        self.t.chat_list = [self_row("休み 15時"), chat("これは何ですか", "10:15"), chat("別の質問です", "15:19", cid=other)]
+        self.cycle(15, 20)
+        self.assertEqual(self.shown, [("kimeru: 確認待ち 1 件（まとめ）", "#1")])   # the question of 15:20 waits for the sitting
+        self.cycle(17, 0)
+        self.assertEqual(self.shown[1:], [("kimeru: 確認待ち 1 件（まとめ）", "#2")])
+
+
+class TestQuietWordsZero(Cycles):
+    """With quiet_words=0 (the default) the line 休み <いつ> means nothing: the calls to Teams, the posts, the toast, the push and the
+    records are the same as for any other line, and no quiet is kept."""
+
+    def scenario(self, mine):
+        self.out, self.inbox = Path(tempfile.mkdtemp()) / "out", Path(tempfile.mkdtemp()) / "inbox"
+        self.t, self.shown, self.sent = CallLog(), [], []
+        self.lines_for(self.t, "メモ", "おはようございます", "9:00")   # the first sighting of the chat is its baseline
+        self.cycle(9, 5)
+        self.lines_for(self.t, mine, "これは何ですか")
+        r = self.cycle(10, 20)
+        self.cycle(15, 5)
+        state = json.loads((self.out / "control.json").read_text(encoding="utf-8"))
+        return {"calls": list(self.t.calls), "posts": [p[1] for p in self.t.calls if p[0] == "post"], "shown": self.shown,
+                "sent": self.sent, "notify": r["notify"], "toast": r["toast"], "push": r["push"], "mode": state["mode"],
+                "until": state["until"], "attn": "attn" in (self.out / "decisions.jsonl").read_text(encoding="utf-8")}
+
+    @staticmethod
+    def lines_for(t, mine, question=None, time="10:15"):
+        t.chat_list = [self_row(mine)] + ([chat(question, time)] if question else [])
+
+    def test_a_quiet_line_with_quiet_words_zero_does_exactly_what_any_other_line_does(self):
+        a = self.scenario("休み 15時")
+        b = self.scenario("ふつうの一行")
+        self.assertEqual(a, b)
+        self.assertEqual((a["mode"], a["until"], a["attn"]), ("run", None, False))
+        self.assertFalse(any(p.startswith("[kimeru 休み]") for p in a["posts"]))
+
+
+class TestQuietLine(unittest.TestCase):
+    """R27: the line 休み <いつ> sets the mode quiet with its time (control.observe); it is read only with quiet_words=1 and control_words=1."""
+
+    def setUp(self):
+        env = mock.patch.dict(os.environ, {"KIMERU_QUIET_WORDS": "1"})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def run_line(self, mine, now=datetime(2026, 9, 28, 10, 20), st=None):
+        base = st or {"mode": "run", "until": None, "set_at": None, "last_sig": "0" * 40, "ack_pending": False, "reminded_on": None}
+        return control.observe(base, control.line_of([self_row(mine)]), now)
+
+    @staticmethod
+    def quiet():
+        return {"mode": "quiet", "until": "2026-09-28T15:00", "set_at": "2026-09-28T10:20:00", "last_sig": "0" * 40,
+                "ack_pending": False, "reminded_on": None}
+
+    def test_a_kyuu_line_with_a_time_sets_a_quiet_until_that_time(self):
+        st, ev = self.run_line("休み 15時")
+        self.assertEqual((st["mode"], st["until"], ev), ("quiet", "2026-09-28T15:00", "quiet"))
+        self.assertTrue(st["ack_pending"])
+
+    def test_the_time_words_are_the_ones_the_hold_reads_and_a_day_word_gives_the_morning_hour(self):
+        st, _ = self.run_line("休み 明日")
+        self.assertEqual(st["until"], "2026-09-29T08:00")
+        st, _ = self.run_line("休み 16時", now=datetime(2026, 9, 28, 16, 30))
+        self.assertEqual(st["until"], "2026-09-29T16:00")
+
+    def test_a_bare_or_unreadable_or_embedded_kyuu_line_does_nothing(self):
+        for mine in ("休み", "休み 25時", "休みます 15時", "あの人 休み 15時", "休み 15時 ください"):
+            st, ev = self.run_line(mine)
+            self.assertEqual((st["mode"], st["until"], ev), ("run", None, None), mine)
+
+    def test_with_quiet_words_zero_the_kyuu_line_is_not_read(self):
+        with mock.patch.dict(os.environ, {"KIMERU_QUIET_WORDS": "0"}):
+            st, ev = self.run_line("休み 15時")
+        self.assertEqual((st["mode"], st["until"], ev), ("run", None, None))
+
+    def test_a_stop_during_a_quiet_stops_and_clears_its_time(self):
+        st, ev = self.run_line("停止", st=self.quiet())
+        self.assertEqual((st["mode"], st["until"], ev), ("stop", None, "stop"))
+
+    def test_a_resume_during_a_quiet_does_not_end_it_and_a_kyuu_line_during_a_stop_is_not_read(self):
+        st, ev = self.run_line("再開", st=self.quiet())
+        self.assertEqual((st["mode"], st["until"], ev), ("quiet", "2026-09-28T15:00", None))
+        st, ev = self.run_line("休み 15時", st=dict(self.quiet(), mode="stop", until=None))
+        self.assertEqual((st["mode"], ev), ("stop", None))
+
+    def test_a_newer_kyuu_line_moves_the_time_of_the_quiet(self):
+        st, ev = self.run_line("休み 16時", st=self.quiet())
+        self.assertEqual((st["until"], ev), ("2026-09-28T16:00", "quiet"))
+
+
+class TestQuietState(unittest.TestCase):
+    """R27: the quiet is kept in out/control.json (mode quiet and its time) with no text of the line, and the control step
+    of a quiet cycle says run (the cycle goes on); the ack is posted once."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.out = Path(self.dir.name) / "out"
+        self.bridge = Bridge()
+        env = mock.patch.dict(os.environ, {"KIMERU_QUIET_WORDS": "1", "KIMERU_STATE_DIR": self.dir.name})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def step(self, mine, now):
+        return control.step(self.out, self.bridge, [self_row(mine)], now, send=True)
+
+    def test_the_saved_quiet_keeps_its_time_and_no_text_of_the_line_and_the_ack_is_posted_once(self):
+        self.assertEqual(self.step("メモ", datetime(2026, 9, 28, 9, 5)), "run")
+        self.assertEqual(self.step("休み 15時", datetime(2026, 9, 28, 10, 20)), "run")
+        saved = (self.out / "control.json").read_text(encoding="utf-8")
+        self.assertIn('"quiet"', saved)
+        self.assertIn("2026-09-28T15:00", saved)
+        self.assertNotIn("休み", saved)
+        self.assertEqual(control.quiet_until(self.out), datetime(2026, 9, 28, 15, 0))
+        self.assertEqual(self.bridge.posts, [QUIET_ACK])
+        self.assertEqual(self.step("休み 15時", datetime(2026, 9, 28, 10, 25)), "run")   # the same line again changes nothing
+        self.assertEqual(self.bridge.posts, [QUIET_ACK])
+
+    def test_with_quiet_words_zero_no_quiet_is_kept_and_the_mode_stays_run(self):
+        with mock.patch.dict(os.environ, {"KIMERU_QUIET_WORDS": "0"}):
+            self.step("メモ", datetime(2026, 9, 28, 9, 5))
+            self.assertEqual(self.step("休み 15時", datetime(2026, 9, 28, 10, 20)), "run")
+            self.assertIsNone(control.quiet_until(self.out))
+        self.assertEqual(json.loads((self.out / "control.json").read_text(encoding="utf-8"))["mode"], "run")
+        self.assertEqual(self.bridge.posts, [])
+
+    def test_with_control_words_zero_a_saved_quiet_is_not_held_because_the_words_mean_nothing(self):
+        self.step("メモ", datetime(2026, 9, 28, 9, 5))
+        self.step("休み 15時", datetime(2026, 9, 28, 10, 20))
+        self.assertEqual(control.quiet_until(self.out), datetime(2026, 9, 28, 15, 0))
+        with mock.patch.dict(os.environ, {"KIMERU_CONTROL_WORDS": "0"}):
+            self.assertIsNone(control.quiet_until(self.out))
+
+
+class TestQuietPlan(unittest.TestCase):
+    """R27: attention.plan with the time of a quiet holds the items that are not urgent (the R17 judgment, already recorded), and
+    judges nothing again. When the time has come, interrupt=all holds nothing, and interrupt=sittings takes that time as a sitting."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.out = Path(self.dir.name) / "out"
+        self.out.mkdir()
+        env = mock.patch.dict(os.environ, {"KIMERU_QUIET_WORDS": "1", "KIMERU_INTERRUPT": "all"})
+        env.start()
+        self.addCleanup(env.stop)
+        ap = notify.Approvals(self.out)
+        self.held = self.posted(ap, {"urgent": False, "why": []})
+        self.urgent = self.posted(ap, {"urgent": True, "why": ["severe"]})
+        self.no_record = self.posted(ap, None)
+        ap.save()
+
+    @staticmethod
+    def posted(ap, attn):
+        rec = {"summary": "x"}
+        if attn is not None:
+            rec["attn"] = attn
+        n = ap.add("g:n", rec)
+        ap.data["items"][str(n)]["posted"] = True
+        return n
+
+    def test_during_a_quiet_the_hold_is_the_items_that_are_not_urgent_and_nothing_is_judged_again(self):
+        with mock.patch.object(attention, "judge", side_effect=AssertionError("no second urgency judgment")):
+            p = attention.plan(self.out, datetime(2026, 9, 28, 10, 20), until=datetime(2026, 9, 28, 15, 0))
+        self.assertEqual(p, {"sitting_at": None, "hold": {self.held}})
+
+    def test_once_the_time_has_come_under_interrupt_all_nothing_is_held(self):
+        self.assertEqual(attention.plan(self.out, datetime(2026, 9, 28, 15, 5), until=datetime(2026, 9, 28, 15, 0)),
+                         {"sitting_at": None, "hold": set()})
+
+    def test_without_a_quiet_nothing_changes_under_interrupt_all(self):
+        self.assertEqual(attention.plan(self.out, datetime(2026, 9, 28, 10, 20), until=None), {"sitting_at": None, "hold": set()})
+
+    def test_under_sittings_the_time_of_the_quiet_is_the_sitting_that_announces_the_held_items(self):
+        with mock.patch.dict(os.environ, {"KIMERU_INTERRUPT": "sittings", "KIMERU_SIT_HOURS": "9,13,17"}):
+            until = datetime(2026, 9, 28, 15, 0)
+            self.assertEqual(attention.plan(self.out, datetime(2026, 9, 28, 13, 5), until=until), {"sitting_at": None, "hold": {self.held}})
+            self.assertEqual(attention.plan(self.out, datetime(2026, 9, 28, 15, 5), until=until)["sitting_at"], "2026-09-28T15:00")
+            self.assertEqual(attention.plan(self.out, datetime(2026, 9, 28, 17, 5), until=until)["sitting_at"], "2026-09-28T17:00")
+
+
+class TestQuietDocs(unittest.TestCase):
+    def test_the_quiet_setting_has_one_row_in_the_reference_and_the_security_and_changelog_name_it(self):
+        ref = (ROOT / "docs" / "reference.md").read_text(encoding="utf-8")
+        self.assertEqual(sum(1 for l in ref.splitlines() if l.startswith("| `KIMERU_QUIET_WORDS`")), 1)
+        sec = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+        self.assertIn("quiet_words", sec)
+        self.assertIn("休み", sec)
+        log = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        unreleased = log.split("## 未リリース", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("quiet_words", unreleased)
+        self.assertIn("休み", unreleased)
+
+    def test_the_config_declares_quiet_words_as_a_zero_or_one_setting_that_defaults_to_zero(self):
+        self.assertEqual(config.SETTINGS["quiet_words"], ("KIMERU_QUIET_WORDS", "0"))
+        self.assertEqual(config.CHOICES["quiet_words"], ("0", "1"))
+        self.assertIn("quiet_words", config.LOGGABLE)
+        self.assertIn("quiet_words", config.SHARE_VALUES)
 
 
 if __name__ == "__main__":

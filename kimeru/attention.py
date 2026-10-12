@@ -11,9 +11,14 @@ With interrupt=sittings, a posted item that is not urgent is announced at the fi
   alert       the event is a monitor.alert
   words       a word of urgent_words (default 至急|本日中|今日中|大至急|緊急|ASAP) is in the whole text of the event
 
-The judgment is taken when the item is decided and kept in its record as `attn` (only in this mode, so the records of the default
-do not change). A record without `attn` counts as urgent: what is not known is never held. A follow-up that came after the item was
-judged, or an item that came back from a hold (R09), is announced at once too. The reasons say which rule applied, never the text.
+The judgment is taken when the item is decided and kept in its record as `attn` (only in this mode, or while 休み is read (R27,
+quiet_words=1), so the records of the default do not change). A record without `attn` counts as urgent: what is not known is never
+held. A follow-up that came after the item was judged, or an item that came back from a hold (R09), is announced at once too. The
+reasons say which rule applied, never the text.
+
+R27 (休み <いつ>, control.quiet_until): until the time of a quiet, what is not urgent is held exactly as with the sittings, whatever
+interrupt says, and no sitting announces. When the time has come, interrupt=sittings takes it as a sitting of its own (announced once,
+then the sittings go on as before); interrupt=all has nothing held, so the next cycle announces what waited.
 
 Notices, the count of posts that failed and the acknowledgements of replies are never held: only posted items are.
 The sittings are kept per route: approvals.json `sitting_toast` for the PC notification, push_state.json `sitting_at` for each
@@ -24,7 +29,7 @@ import re
 import unicodedata
 from datetime import datetime, time, timedelta
 
-from . import config, graph
+from . import config, control, graph
 
 DEFAULT_WORDS = "至急|本日中|今日中|大至急|緊急|ASAP"   # the default of urgent_words (config.SETTINGS)
 CRITICAL = ("critical_incident", "critical_bug", "critical_outage")
@@ -33,6 +38,12 @@ CRITICAL = ("critical_incident", "critical_bug", "critical_outage")
 def enabled():
     """True when the sittings are on (interrupt=sittings). Off, nothing is recorded and nothing is held."""
     return config.value("interrupt") == "sittings"
+
+
+def recording():
+    """True when each decision records its urgency (`attn`): with the sittings, or while 休み is read (R27), so that a quiet can
+    hold what is not urgent. Otherwise no field is written, as before."""
+    return enabled() or control.quiet_enabled()
 
 
 def hours():
@@ -130,10 +141,17 @@ def waiting(out):
     return {int(n) for n, it in items.items() if it.get("posted") and it.get("status") in ("pending", "held") and not announce_now(it)}
 
 
-def plan(out, now):
+def plan(out, now, until=None):
     """What this cycle holds: {"sitting_at": the last sitting at or before now (or None), "hold": the waiting numbers}.
-    Called after this cycle has posted what it posts, so the items of this cycle are in it."""
+    Called after this cycle has posted what it posts, so the items of this cycle are in it. `until` (R27, control.quiet_until): the end
+    of a 休み. Until it comes, no sitting is announced and the waiting numbers are held (the judgment recorded at decision time, not a
+    new one); when it has come, interrupt=sittings takes it as the sitting that announces what was held (the sitting it records)."""
+    now = _local(now)
+    if until is not None and now < until:
+        return {"sitting_at": None, "hold": waiting(out)}
     at = boundary(now)
+    if until is not None and hours() and until.isoformat(timespec="minutes") > at:
+        at = until.isoformat(timespec="minutes")
     return {"sitting_at": at, "hold": waiting(out) if at else set()}
 
 

@@ -533,7 +533,7 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
                 res["context_used"] = {"earlier": len(context["earlier"])}
             if linking.enabled():   # R19 (link_related=1): the record's link and dup_of; the judge and the writer never see it
                 linking.attach(res, ev_run, out, now=link_at)
-            if attention.enabled():   # R17: whether this item may reach the PC and the phone at once (off: no field, the records are unchanged)
+            if attention.recording():   # R17: whether this item may reach the PC and the phone at once (off: no field, the records are unchanged; R27: also while 休み is read)
                 res["attn"] = attention.judge(g, res, ev_run)
             source_key = f"{res.get('graph')}:{res.get('event_id')}:{res.get('node')}"
             source_request = None

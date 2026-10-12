@@ -724,3 +724,135 @@ class TestCodexModelIsPinned(unittest.TestCase):
         with mock.patch.dict(os.environ, {"KIMERU_CODEX_MODEL": "", "KIMERU_CODEX_EFFORT": ""}):
             settings = self.settings_of()
         self.assertEqual(settings, ("gpt-6-luna", "low"))
+
+
+PREV_TEXT = "延期の件、承知しました。可否は QA を確認してお返事します。"
+REDRAFT_EVENT = {"author": "Sato", "text": "来週火曜にリリースを延期できますか"}
+
+
+class PromptSpy(writer.CmdWriter):
+    """A CLI writer (the route copilot and claude take): it keeps every prompt it is given and answers from a script, the last
+    answer repeating. The prompts are what R23 changes, so the tests read them."""
+
+    def __init__(self, answers):
+        super().__init__(command="spy")
+        self.answers, self.prompts = list(answers), []
+
+    def ask_text(self, prompt):
+        self.prompts.append(prompt)
+        return json.dumps(self.answers[min(len(self.prompts), len(self.answers)) - 1], ensure_ascii=False)
+
+
+def reply_res(text="受領しました。"):
+    return {"node": "n", "path": [], "actions": [{"type": "teams.reply", "to": "Sato", "text": text}]}
+
+
+class TestRedraftPrev(unittest.TestCase):
+    """R23 (redraft_prev=1): 修正 N gives the writer the previous draft as data, in the request only (the check material never has
+    it), so a date that only the previous draft had is still flagged. A first draft with a date or number the material lacks is
+    asked once more in the same second call, and the new text replaces it only when it has fewer. A PM instruction, the Teams route
+    and the paste-in request are not changed by it. With the setting at 0 (the default) the request, the number of calls and the
+    texts are exactly as before."""
+
+    def setting(self, value):
+        return mock.patch.dict(os.environ, {"KIMERU_REDRAFT_PREV": value})
+
+    def test_the_redraft_request_carries_the_previous_draft_as_data_and_the_check_material_does_not(self):
+        spy = PromptSpy([{"a1": "延期の件、承知しました。順番に確認します。"}])
+        with self.setting("1"):
+            writer.apply(reply_res(), REDRAFT_EVENT, spy, "もっと短く", previous={"a1": PREV_TEXT})
+        prompt = spy.prompts[-1]
+        self.assertIn("前の下書き（PM の指示で直す。他は変えない）", prompt)
+        self.assertIn(PREV_TEXT, prompt)
+        self.assertLess(prompt.index(PREV_TEXT), prompt.index("出力形式:"))
+        self.assertNotIn(PREV_TEXT, writer._material(reply_res(), REDRAFT_EVENT, "もっと短く"))
+
+    def test_a_date_that_only_the_previous_draft_had_is_still_flagged(self):
+        spy = PromptSpy([{"a1": "10/15 までに可否をお返事します。"}])
+        res = reply_res()
+        with self.setting("1"):
+            writer.apply(res, REDRAFT_EVENT, spy, "もっと短く", previous={"a1": "10/15 までにお返事します。"})
+        self.assertEqual(res["actions"][0]["unverified"], ["10/15"])
+
+    def test_an_unverified_date_is_asked_once_more_and_the_new_text_replaces_it_only_when_it_has_fewer(self):
+        spy = PromptSpy([{"a1": "10/5 までに対応します。"}, {"a1": "可否を確認してお返事します。"}])
+        res = reply_res()
+        with self.setting("1"):
+            writer.apply(res, REDRAFT_EVENT, spy)
+        self.assertEqual(len(spy.prompts), 2)
+        self.assertIn("材料に無い日付・数値を使わずに", spy.prompts[1])
+        self.assertEqual(res["actions"][0]["text"], "可否を確認してお返事します。")
+        self.assertEqual(res["actions"][0]["unverified"], [])
+
+    def test_a_second_text_with_more_unverified_dates_does_not_replace_the_first(self):
+        spy = PromptSpy([{"a1": "10/5 までに対応します。"}, {"a1": "10/5 と 12/1 に対応します。"}])
+        res = reply_res()
+        with self.setting("1"):
+            writer.apply(res, REDRAFT_EVENT, spy)
+        self.assertEqual(len(spy.prompts), 2)
+        self.assertEqual(res["actions"][0]["text"], "10/5 までに対応します。")
+        self.assertEqual(res["actions"][0]["unverified"], ["10/5"])
+
+    def test_a_stiff_draft_with_an_unverified_date_takes_two_calls_at_most(self):
+        spy = PromptSpy([{"a1": "確認させていただきます。10/5 までにご連絡させていただきます。"},
+                         {"a1": "可否を確認してお返事します。"}])
+        res = reply_res()
+        with self.setting("1"):
+            writer.apply(res, REDRAFT_EVENT, spy)
+        self.assertEqual(len(spy.prompts), 2)
+        self.assertEqual(res["actions"][0]["text"], "可否を確認してお返事します。")
+        self.assertEqual(res["actions"][0]["unverified"], [])
+
+    def test_a_pm_instruction_is_never_asked_again_even_with_the_setting_on(self):
+        spy = PromptSpy([{"a1": "10/5 までに対応します。"}])
+        res = reply_res()
+        with self.setting("1"):
+            writer.apply(res, REDRAFT_EVENT, spy, "もっと短く")
+        self.assertEqual(len(spy.prompts), 1)
+        self.assertEqual(res["actions"][0]["unverified"], ["10/5"])
+
+    def test_the_teams_route_is_not_asked_again_for_a_date(self):
+        spy = PromptSpy([{"a1": "10/5 までに対応します。"}])
+        spy.NAME = "m365-auto"
+        with self.setting("1"):
+            writer.apply(reply_res(), REDRAFT_EVENT, spy)
+        self.assertEqual(len(spy.prompts), 1)
+
+    def test_with_the_setting_off_a_date_is_not_asked_again_and_the_request_is_the_old_one(self):
+        spy = PromptSpy([{"a1": "10/5 までに対応します。"}])
+        res = reply_res()
+        with self.setting("0"):
+            writer.apply(res, REDRAFT_EVENT, spy)
+        self.assertEqual(len(spy.prompts), 1)
+        self.assertEqual(res["actions"][0]["unverified"], ["10/5"])
+        self.assertEqual(spy.prompts[0], writer.SYSTEM + "\n\n" + writer._material(reply_res(), REDRAFT_EVENT))
+
+    def test_with_the_setting_off_the_redraft_request_is_byte_for_byte_the_old_one(self):
+        spy = PromptSpy([{"a1": "可否を確認してお返事します。"}])
+        with self.setting("0"):
+            writer.apply(reply_res(), REDRAFT_EVENT, spy, "もっと短く", previous={"a1": PREV_TEXT})
+        self.assertEqual(spy.prompts, [writer.SYSTEM + "\n\n" + writer._material(reply_res(), REDRAFT_EVENT, "もっと短く")])
+        self.assertNotIn(PREV_TEXT, spy.prompts[0])
+
+    def test_the_first_request_is_unchanged_with_the_setting_on(self):
+        spy = PromptSpy([{"a1": "可否を確認してお返事します。"}])
+        with self.setting("1"):
+            writer.apply(reply_res(), REDRAFT_EVENT, spy)
+        self.assertEqual(spy.prompts, [writer.SYSTEM + "\n\n" + writer._material(reply_res(), REDRAFT_EVENT)])
+
+    def test_the_paste_in_request_for_microsoft_365_never_carries_the_previous_draft(self):
+        res = reply_res()
+        with self.setting("1"):
+            writer.apply(res, REDRAFT_EVENT, writer.M365PromptWriter(), "もっと短く", previous={"a1": PREV_TEXT})
+        self.assertEqual(res["copilot_request"], writer.human_request(reply_res(), REDRAFT_EVENT, "もっと短く"))
+        self.assertNotIn(PREV_TEXT, res["copilot_request"])
+
+    def test_a_redraft_of_a_posted_draft_gives_the_writer_the_posted_text_as_data(self):
+        with self.setting("1"), tempfile.TemporaryDirectory() as d:
+            out, t = Path(d), FakeTeams()
+            spy = PromptSpy([{"a1": PREV_TEXT, "a2": "説明: 作業"}, {"a1": "延期の件、承知しました。", "a2": "説明: 作業"}])
+            process(MSG, GRAPHS, StubBackend(), out, PBS, writer=spy)
+            notify.notify(out, t, send=True)
+            t.timeline.append("R:修正 1 もっと短く")
+            self.assertEqual(notify.collect(out, t, writer=spy), [{"id": 1, "status": "redrafted", "instruction": "もっと短く"}])
+            self.assertIn(PREV_TEXT, spy.prompts[-1])

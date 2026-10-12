@@ -11,7 +11,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from kimeru import notify
+from kimeru import notify, writer
+from tests.test_writer import PromptSpy
 
 
 class FakeBridge:
@@ -404,3 +405,50 @@ class TestPasteBack(unittest.TestCase):
         req = writer.human_request({"actions": [{"type": "teams.reply", "text": "x", "held_for": "m365"}]},
                                    {"author": "Sato", "text": "確認をお願いします"})
         self.assertIn("改行を入れず", req)
+
+
+REDRAFT_REC = {**CHAT_REC, "material_event": CHAT_REC["event"],
+               "actions": [{"type": "teams.reply", "to": "山田", "text": "確認して今日中に返信します。",
+                            "template_text": "受領しました。", "drafted_by": "fake"}]}
+GOLDEN_FIRST = (
+    "[kimeru #1] 山田さん: 仕様変更の可否\n"
+    "→ 影響範囲を確認して返事する\n"
+    "案: 確認して今日中に返信します。\n"
+    "OK 1 / NG 1 / 修正 1 <点> / 詳細 1")   # the first post, taken before R23
+GOLDEN_AFTER = (
+    "[kimeru #1] 山田さん: 仕様変更してもよいですか。来週の予定に響きます\n"
+    "→ スケジュール変更の判断\n"
+    "案: 延期の件、承知しました。\n"
+    "OK 1 / NG 1 / 修正 1 <点> / 詳細 1")   # the post after 修正 1, taken before R23)   # the post after 修正 1, taken before R23
+
+
+class TestRedraftMaterial(unittest.TestCase):
+    """R23 (redraft_prev) on the 修正 N path of a posted draft: the writer's request carries the posted text as data only when the
+    setting is 1. With 0 (the default) the request and both posts are byte-identical to the posts before R23."""
+
+    def revise(self, env_value, answers):
+        spy = PromptSpy(answers)
+        with mock.patch.dict(os.environ, {"KIMERU_REDRAFT_PREV": env_value}), tempfile.TemporaryDirectory() as d:
+            write_queue(d, REDRAFT_REC)
+            b = FakeBridge()
+            notify.notify(d, b, send=True)
+            first = b.posts[-1][0]
+            b.replies = ["修正 1 もっと短く"]
+            changes = notify.collect(d, b, writer=spy)
+            notify.notify(d, b, send=True)
+            return spy, changes, first, b.posts[-1][0]
+
+    def test_with_the_setting_off_the_request_and_both_posts_are_as_before(self):
+        spy, changes, first, after = self.revise("0", [{"a1": "延期の件、承知しました。"}])
+        self.assertEqual(changes, [{"id": 1, "status": "redrafted", "instruction": "もっと短く"}])
+        self.assertEqual(spy.prompts, [writer.SYSTEM + "\n\n" + writer._material(copy.deepcopy(REDRAFT_REC), REDRAFT_REC["material_event"], "もっと短く")])
+        self.assertEqual(first, GOLDEN_FIRST)
+        self.assertEqual(after, GOLDEN_AFTER)
+
+    def test_with_the_setting_on_the_writer_is_given_the_posted_text_as_data_and_the_check_material_does_not_have_it(self):
+        spy, changes, _, _ = self.revise("1", [{"a1": "延期の件、承知しました。"}])
+        self.assertEqual(changes[0]["status"], "redrafted")
+        self.assertIn("前の下書き（PM の指示で直す。他は変えない）", spy.prompts[0])
+        self.assertIn("確認して今日中に返信します。", spy.prompts[0])
+        self.assertNotIn("確認して今日中に返信します。",
+                         writer._material(copy.deepcopy(REDRAFT_REC), REDRAFT_REC["material_event"], "もっと短く"))

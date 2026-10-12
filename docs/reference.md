@@ -168,6 +168,7 @@ python -m kimeru config path
 | `KIMERU_WRITER_MODEL` | writer のモデル名（`copilot` / `claude`。省略可） |
 | `KIMERU_CODEX_MODEL` / `KIMERU_CODEX_EFFORT` | `codex` のモデル名（既定 `gpt-6-luna`）と推論の強さ（既定 `low`）。空は未設定と同じで、既定値になります |
 | `KIMERU_GROK_MODEL` | `grok` のモデル名（省略可） |
+| `KIMERU_REDRAFT_PREV` | 既定 `0`。`1` で、`修正 N` の依頼に、前に投稿した下書きの本文をデータとして渡す（writer の依頼文だけ。材料の検査には入れないので、前の下書きにだけある日付は ⚠ のまま）。初回の下書きに材料に無い日付・数値（⚠）があれば、CLI writer だけ、同じ 2 回目の依頼に「材料に無い日付・数値を使わずに書き直す」を足し、減ったときだけ置き換える（1 件の呼び出しは最大 2 回のまま）。`修正 N` に指示があるときは書き直さない。`m365`（貼り付け用の依頼文）は変わらない。`0` では依頼文・呼び出し回数・投稿の文がこれまでと同じ（`docs/writers.md`） |
 | `KIMERU_TOAST` | `0`（または `off`）で PC の Windows 通知を止める。`detail` で、PC の通知だけに、確認待ちの件名などを含める（iPhone などの経路には、常に件数と番号だけ） |
 | `KIMERU_PUSH` / `KIMERU_PUSH_MIN_MINUTES` | 通知の経路（`teams_webhook,webhook,outlook` のコンマ区切り）と、同じ経路への最小の間隔（分、既定 5）。経路を有効にした最初のサイクルの始めに、それまでの確認待ちと通知は「通知済み」として記録するだけで送りません（そのサイクルで新しく投稿された分からは送ります。経路を外していた間の分は、有効にし直しても送りません）。一覧の名前は、環境変数と設定ファイルでは、大文字小文字と前後の空白を読み替えます（`config set push` は、正確な経路名だけを受け付けます）。経路名でないものは無視して警告し、残りの経路は使います |
 | `KIMERU_PUSH_TEAMS_URL` / `KIMERU_PUSH_WEBHOOK_URL` / `KIMERU_PUSH_WEBHOOK_KEY` | 経路の URL（https だけ）と鍵。秘密なので、環境変数だけ。表示にも記録にも出ません |

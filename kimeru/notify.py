@@ -1413,6 +1413,9 @@ def _redraft(it, instruction, writer, out=None):
         rec["redraft_note"] = "修正できませんでした（writer が設定されていません）。前の下書きのままです"
         return {"status": "redraft_failed", "instruction": instruction}
     before = copy.deepcopy(rec)
+    # the draft that was posted (its text, before the stale keys go): the writer gets it as data when redraft_prev=1 (R23)
+    previous = {k: a[writer_mod.FIELD[a["type"]]] for k, a in writer_mod.targets(rec)
+                if a.get("drafted_by") and isinstance(a.get(writer_mod.FIELD[a["type"]]), str)}
     for a in rec.get("actions", []):
         for k in STALE_ACTION_KEYS:
             a.pop(k, None)
@@ -1427,7 +1430,7 @@ def _redraft(it, instruction, writer, out=None):
             material["text"] = full["text"]
         if full.get("thread"):
             material["thread"] = full["thread"]
-    drafted = writer_mod.apply(rec, material, writer, instruction)
+    drafted = writer_mod.apply(rec, material, writer, instruction, previous=previous)
     used = [a for a in drafted if a.get("drafted_by")]
     if not used:
         invalidate_measurement_post(it)

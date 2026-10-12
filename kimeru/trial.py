@@ -32,14 +32,18 @@ def _minutes(value):
     return number
 
 
+def _cases(out):
+    """The approval items that are cases: a learn card (R21) is never a trial case."""
+    return learn.cases(notify.Approvals(out).data.get("items", {}))
+
+
 def _case_exists(out, case):
-    ap = notify.Approvals(out)
-    return str(case) in ap.data.get("items", {})
+    return str(case) in _cases(out)
 
 
 def _judge_group(out, case, item=None):
     if item is None:
-        item = notify.Approvals(out).data.get("items", {}).get(str(case), {})
+        item = _cases(out).get(str(case), {})
     name = review.judge_of(item.get("record") or {})
     if name == "Jev":
         return "jev"
@@ -64,7 +68,7 @@ def dispatch(argv, out, print_fn=print, now=None):
     except SystemExit as e:
         return int(e.code)
     if args.command == "record":
-        item = notify.Approvals(out).data.get("items", {}).get(str(args.case))
+        item = _cases(out).get(str(args.case))
         if args.case < 1 or not isinstance(item, dict):
             print_fn("失敗: 指定された case はありません")
             return 1

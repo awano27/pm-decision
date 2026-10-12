@@ -617,7 +617,7 @@ def _main(argv=None):
     p_cal.add_argument("--min-questions", type=int, default=100)
     p_cal.add_argument("--allow-wider", action="store_true", help="also propose changes that decide more automatically")
     p_cal.add_argument("--apply", action="store_true", help="write the proposal to the local thresholds file")
-    p_cal.add_argument("--revert", action="store_true", help="remove the local thresholds file")
+    p_cal.add_argument("--revert", action="store_true", help="remove the judge coefficients from the local thresholds file (question entries stay)")
     p_n = sub.add_parser("notify", help="post human-queue items to Teams self chat")
     p_n.add_argument("--send", action="store_true", help="actually press Enter (default: paste only)")
     p_ap = sub.add_parser("approvals", help="read OK/NG/保留/再実行/済 replies from Teams self chat; carries out approved kinds that are switched on")

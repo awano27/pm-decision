@@ -11,12 +11,13 @@ missing and changes nothing:
 
 By default only a more careful change is proposed (more items go to a person). Widening what is decided automatically needs
 --allow-wider. Applying writes a local file (thresholds.json); graphs and profiles.py are never edited (a graph edit would
-change the key that marks an event as decided, and the same events would be judged again). `--revert` removes it.
+change the key that marks an event as decided, and the same events would be judged again). `--revert` removes the judge
+coefficients from it; the per-question entries (`nodes`, learn.py) stay and are taken back one by one with `kimeru learn revert`.
 """
 import hashlib
 import json
 
-from . import graph as graph_mod, profiles, review
+from . import fsutil, graph as graph_mod, profiles, review
 
 CONF_GRID = (0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.5)
 NOUL_GRID = (0.85, 0.9, 0.95, 1.0)
@@ -130,8 +131,7 @@ def apply(profile_name, values):
         except ValueError:
             data = {}
     data[profile_name] = values
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    fsutil.write_atomic(p, json.dumps(data, ensure_ascii=False, indent=2) + "\n")   # the file also holds the PM's OKs (nodes)
     return p
 
 
@@ -153,7 +153,7 @@ def revert():
     if not kept:
         p.unlink()
     elif removed:
-        p.write_text(json.dumps(kept, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        fsutil.write_atomic(p, json.dumps(kept, ensure_ascii=False, indent=2) + "\n")
     return bool(removed) or not kept
 
 

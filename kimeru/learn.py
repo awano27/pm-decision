@@ -359,7 +359,9 @@ def adopt(out, it, now=None, real=False, send=False):
 
 
 def revert(out, lid, now=None):
-    """Take one adopted entry back: the question's bar returns to what it was before. "reverted", "none" or "busy"."""
+    """Take one adopted entry back: the question's bar returns to what it was before. "reverted", "none", "newer" or "busy".
+    Only while the bar is still the one this adoption set: a later adoption of the same question (or a hand edit) would be
+    lost otherwise, so that one is taken back first ("newer" changes nothing)."""
     from . import notify
     with fsutil.exclusive(notify.lock_path(Path(out))) as got:
         if not got:
@@ -370,6 +372,10 @@ def revert(out, lid, now=None):
         row = rows[-1]
         key = row.get("node")
         before = row.get("before") or {}
+        after = row.get("after") or {}
+        held = {"conf_scale": float(after.get("conf_scale", 1.0)), "noul_scale": float(after.get("noul_scale", 1.0))}
+        if current_bar(key) != held:
+            return "newer"
         restore = {"conf_scale": float(before.get("conf_scale", 1.0)), "noul_scale": float(before.get("noul_scale", 1.0))}
         _write_node(key, None if restore == DEFAULT_BAR else restore)
         _ledger_add({"id": lid, "kind": "revert", "node": key, "reverted_at": _iso(now or datetime.now())})
@@ -398,10 +404,16 @@ def listing(out):
             lines.append(line)
         elif r.get("kind") == "revert":
             lines.append(f"取り消し {r.get('id')}: {r.get('node')}（{r.get('reverted_at')}）")
-    readable = profiles.node_overrides()
-    for key in sorted(profiles.thresholds_raw().get(profiles.NODE_KEY) or {}):
-        if key not in readable:
-            lines.append(f"無視している設定: {key}（値を読めないため、何も変えません）")
+    data = profiles.thresholds_raw()
+    if profiles.NODE_KEY in data:
+        raw = data[profiles.NODE_KEY]
+        if isinstance(raw, dict):
+            readable = profiles.node_overrides()
+            for key in sorted(raw, key=str):
+                if key not in readable:
+                    lines.append(f"無視している設定: {key}（値を読めないため、何も変えません）")
+        else:   # the whole key is not an object (a number, a list, a string, null): nothing in it is read
+            lines.append(f"無視している設定: {profiles.NODE_KEY}（値を読めないため、何も変えません）")
     return lines or ["待っている札も、採用した学習もありません。"]
 
 
@@ -447,6 +459,7 @@ def dispatch(argv, out, print_fn=print):
         res = revert(out, argv[1])
         print_fn({"reverted": f"{argv[1]} を取り消しました。その質問の基準は元に戻りました",
                   "none": f"{argv[1]} という採用した学習はありません（取り消しは一度だけです）",
+                  "newer": f"{argv[1]} のあとに、同じ質問の基準が変わっています。新しいものから順に取り消してください（何も変えません）",
                   "busy": "approvals が別の処理で使われています。少し待って、もう一度実行してください"}[res])
         return 0 if res == "reverted" else 1
     print_fn("使い方: kimeru learn list ／ kimeru learn revert L<番号>")

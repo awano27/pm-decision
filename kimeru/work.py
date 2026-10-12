@@ -157,9 +157,10 @@ def list_work(out):
 
 
 def evidence(out):
-    """Aggregate approved work and confirmed/ambiguous copy-ready handoffs without text or identifiers."""
+    """Aggregate approved work and confirmed/ambiguous copy-ready handoffs without text or identifiers. A learn card (R21) is
+    no case: its OK is not an approval of work."""
     ap = notify.Approvals(out)
-    approved = [item for item in ap.data.get("items", {}).values() if item.get("status") == "approved"]
+    approved = [item for item in learn.cases(ap.data.get("items", {})).values() if item.get("status") == "approved"]
     counts = {state: 0 for state in STATES}
     tracked = verified = unknown = 0
     for item in approved:

@@ -154,11 +154,19 @@ class TestTheProposalForOneQuestion(unittest.TestCase):
                                                  profiles.PROFILES["kev"], {"conf_scale": 1.0, "noul_scale": 1.0}))
 
     def test_only_more_careful_changes_are_ever_proposed(self):
+        # the wrong answers are at 0.8: decided at the current bar (1.2 x 0.6 = 0.72), held back by a higher one
+        rows = []
+        for r in forty():
+            if r["ans"]["confidence"] == 0.65:
+                r["ans"] = {"choice": "status", "confidence": 0.8}
+            rows.append(r)
         cur = {"conf_scale": 1.2, "noul_scale": 1.05}
-        prop = learn.propose_node(forty(), INTENT, "teams-chat-triage:intent", "Kev", profiles.PROFILES["kev"], cur)
-        if prop is not None:
-            self.assertGreaterEqual(prop["conf_scale"], 1.2)
-            self.assertGreaterEqual(prop["noul_scale"], 1.05)
+        prop = learn.propose_node(rows, INTENT, "teams-chat-triage:intent", "Kev", profiles.PROFILES["kev"], cur)
+        self.assertIsNotNone(prop)                                    # the data does give a proposal from this bar
+        self.assertEqual(prop["before"], cur)
+        self.assertGreaterEqual(prop["after"]["conf_scale"], 1.2)
+        self.assertGreaterEqual(prop["after"]["noul_scale"], 1.05)
+        self.assertEqual(prop["after"], {"conf_scale": 1.5, "noul_scale": 1.05})
 
 
 
@@ -297,6 +305,28 @@ class TestTheCardIsNotACase(Base):
         self.post_card()
         self.assertIsNone(requirements._case(self.out, 1))
 
+    def test_after_ok_the_card_is_no_approved_work_and_no_trial_approval_beside_a_real_case(self):
+        from kimeru import trial
+        self.offer()
+        self.post_card()
+        self.answer("OK")
+        ap = notify.Approvals(self.out)                               # one real approved case, #2, beside the card #1
+        ap.data["items"]["2"] = {"key": "g:2:n", "status": "approved", "posted": True,
+                                 "record": {"graph": "g", "event_id": "2", "node": "n", "advice": "case 2", "actions": []}}
+        ap.data["next"] = 3
+        ap.save()
+        evidence = work.evidence(self.out)
+        self.assertEqual((evidence["approved_cases"], evidence["unknown_progress_cases"]), (1, 1))
+        data = trial.collect(self.out)
+        self.assertEqual(data["approval_count"], 1)
+        self.assertTrue(data["work_completion"].startswith("done 0 / tracked 0 / approved 1; progress Unknown for 1 untracked"),
+                        data["work_completion"])
+        lines = []
+        self.assertEqual(trial.dispatch(["record", "--case", "1", "--after-minutes", "5", "--draft", "unused", "--outcome", "unknown"],
+                                        self.out, print_fn=lines.append), 1)           # the card is not a trial case
+        self.assertEqual(trial.dispatch(["record", "--case", "2", "--after-minutes", "5", "--draft", "unused", "--outcome", "unknown"],
+                                        self.out, print_fn=lines.append), 0)           # a real case still is
+
 
 class TestLearnCommand(Base):
     def test_list_shows_the_pending_card_and_the_ledger_and_revert_restores_the_bar(self):
@@ -320,6 +350,42 @@ class TestLearnCommand(Base):
         lines = []
         self.assertEqual(learn.dispatch(["list"], self.out, print_fn=lines.append), 0)
         self.assertTrue(any("無視" in l for l in lines), lines)
+
+    def test_a_nodes_value_that_is_not_an_object_is_listed_as_ignored_and_the_list_never_crashes(self):
+        for broken in (5, True, [1, "a"], "abc", None, float("nan"), []):
+            with self.subTest(nodes=broken):
+                profiles.override_path().parent.mkdir(parents=True, exist_ok=True)
+                profiles.override_path().write_text(json.dumps({"nodes": broken}), encoding="utf-8")
+                lines = []
+                self.assertEqual(learn.dispatch(["list"], self.out, print_fn=lines.append), 0)
+                self.assertEqual(sum("無視している設定: nodes" in l for l in lines), 1, lines)
+
+    def test_an_empty_nodes_object_lists_nothing_as_ignored(self):
+        profiles.override_path().parent.mkdir(parents=True, exist_ok=True)
+        profiles.override_path().write_text(json.dumps({"nodes": {}}), encoding="utf-8")
+        lines = []
+        self.assertEqual(learn.dispatch(["list"], self.out, print_fn=lines.append), 0)
+        self.assertFalse(any("無視" in l for l in lines), lines)
+
+    def test_an_older_adoption_is_not_taken_back_while_a_newer_one_holds_the_same_question(self):
+        node = "teams-chat-triage:intent"
+        rows = [{"id": "L5", "kind": "adopt", "node": node, "before": {"conf_scale": 1.0, "noul_scale": 1.0},
+                 "after": {"conf_scale": 1.1, "noul_scale": 1.0}},
+                {"id": "L6", "kind": "adopt", "node": node, "before": {"conf_scale": 1.1, "noul_scale": 1.0},
+                 "after": {"conf_scale": 1.2, "noul_scale": 1.0}}]
+        learn.ledger_path().write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+        profiles.override_path().parent.mkdir(parents=True, exist_ok=True)
+        profiles.override_path().write_text(json.dumps({"nodes": {node: {"conf_scale": 1.2, "noul_scale": 1.0}}}), encoding="utf-8")
+        self.assertEqual(learn.revert(self.out, "L5"), "newer")       # refused: nothing changes, no ledger line
+        self.assertEqual(self.thresholds()["nodes"][node]["conf_scale"], 1.2)
+        self.assertEqual(self.ledger()[-1]["id"], "L6")
+        lines = []
+        self.assertEqual(learn.dispatch(["revert", "L5"], self.out, print_fn=lines.append), 1)
+        self.assertIn("新しいもの", lines[0])
+        self.assertEqual(learn.dispatch(["revert", "L6"], self.out, print_fn=lines.append), 0)
+        self.assertEqual(self.thresholds()["nodes"][node]["conf_scale"], 1.1)
+        self.assertEqual(learn.dispatch(["revert", "L5"], self.out, print_fn=lines.append), 0)
+        self.assertNotIn(node, self.thresholds().get("nodes", {}))
 
     def test_the_command_line_runs_list_and_revert(self):
         self.offer()
@@ -365,6 +431,20 @@ class TestSevereAlertsAreNotChangedByBars(Base):
         r = graph.run(ALERT, OUTAGE, ReplayBackend({}))
         self.assertEqual(r["node"], "page")
         self.assertTrue(r["notify"])
+
+    def test_a_sev0_the_impact_judge_is_unsure_of_at_a_held_bar_goes_to_the_pm(self):
+        judge_sev0 = {"kind": "monitor.alert", "id": "s2", "rule": "api latency", "severity": "Sev0", "condition": "Fired",
+                      "description": "p95 latency 4s on the search API for 10 minutes"}
+        answers = {"future_risk": {"noul": 0.1}, "impact": {"score": 3.0, "confidence": 0.95}}
+        without = graph.run(ALERT, judge_sev0, ReplayBackend(answers))
+        self.assertNotEqual([t["edge"] for t in without["path"] if t["node"] == "impact"], ["unsure"])
+        profiles.override_path().parent.mkdir(parents=True, exist_ok=True)
+        profiles.override_path().write_text(json.dumps({"nodes": {"alert-triage:impact": {"conf_scale": 3.0, "noul_scale": 3.0}}}),
+                                            encoding="utf-8")
+        r = graph.run(ALERT, judge_sev0, ReplayBackend(answers))
+        self.assertEqual([t["edge"] for t in r["path"] if t["node"] == "impact"], ["unsure"])
+        self.assertEqual(r["node"], "page_advice")
+        self.assertTrue(r["needs_human"] or r["notify"])
 
     def test_a_sev1_warning_still_reaches_the_pm_with_a_held_bar(self):
         profiles.override_path().parent.mkdir(parents=True, exist_ok=True)

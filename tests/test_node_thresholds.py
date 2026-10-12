@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from kimeru import calibrate, cli, config, graph, plan, profiles
+from kimeru import calibrate, cli, config, fsutil, graph, plan, profiles
 
 ROOT = Path(__file__).resolve().parent.parent
 PBS = plan.load_playbooks(ROOT / "playbooks")
@@ -166,6 +166,22 @@ class TestCalibrateKeepsNodeEntries(Base):
         self.assertTrue(calibrate.revert())
         self.assertFalse(profiles.override_path().exists())
         self.assertFalse(calibrate.revert())
+
+    def test_apply_and_revert_write_the_file_through_the_atomic_writer(self):
+        self.write_thresholds({"nodes": {"teams-chat-triage:intent": {"conf_scale": 1.2}}})
+        with mock.patch.object(fsutil, "write_atomic", wraps=fsutil.write_atomic) as writer:
+            calibrate.apply("kev", {"conf_scale": 1.1, "noul_scale": 0.95})
+            self.assertTrue(calibrate.revert())
+        self.assertEqual(writer.call_count, 2)
+
+    def test_a_failed_revert_write_keeps_the_file_as_it_was(self):
+        self.write_thresholds({"kev": {"conf_scale": 1.1, "noul_scale": 0.95},
+                               "nodes": {"teams-chat-triage:intent": {"conf_scale": 1.2}}})
+        before = profiles.override_path().read_text(encoding="utf-8")
+        with mock.patch.object(fsutil, "write_atomic", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                calibrate.revert()
+        self.assertEqual(profiles.override_path().read_text(encoding="utf-8"), before)
 
 
 if __name__ == "__main__":

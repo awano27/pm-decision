@@ -118,7 +118,7 @@ HTML の各判断には出所・generation と対応する時刻を示し、ロ�
 - 提案は、データを 2 つに分け、片方で探し、もう片方で確かめて、確信して間違える件数が増えないときだけ出ます。
 - 既定では、**人に回す件数が増える方向（慎重な方向）** の変更だけを提案します。自動で決める範囲を広げる変更は、`--allow-wider` を付けたときだけです。
 - 判断モデルが混ざった記録は、判断モデルごとに分けて探します。stub など、判断モデルの分からない記録からは、探さず、適用せず、理由を出します。
-- 適用は、あなたが決めます: `python -m kimeru calibrate --apply`。ローカルの上書きファイル（`thresholds.json`）に保存し、グラフと `profiles.py` は書き換えません。戻すには `python -m kimeru calibrate --revert`。
+- 適用は、あなたが決めます: `python -m kimeru calibrate --apply`。ローカルの上書きファイル（`thresholds.json`）に保存し、グラフと `profiles.py` は書き換えません。戻すには `python -m kimeru calibrate --revert`（判断モデルごとの係数だけを消します）。質問ごとの採用は、`python -m kimeru learn revert L<n>` で 1 件ずつ戻します（新しいものから順に）。
 
 ## 結果の報告（任意）
 

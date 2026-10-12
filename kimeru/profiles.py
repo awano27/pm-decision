@@ -56,9 +56,11 @@ def overrides():
         raw = {}
     data = {}
     for name, vals in (raw.items() if isinstance(raw, dict) else ()):
+        if name == NODE_KEY:   # R21: the per-question table is not a profile (a huge number in it must not raise here)
+            continue
         if isinstance(vals, dict):
             ok = {k: float(v) for k, v in vals.items() if k in ("conf_scale", "noul_scale") and isinstance(v, (int, float))
-                  and 0.1 <= float(v) <= 3}
+                  and 0.1 <= v <= 3}
             if ok:
                 data[name] = ok
     _cache.update(path=str(p), mtime=m, data=data)
@@ -121,8 +123,8 @@ def thresholds_raw():
 
 
 def _usable(v):
-    import math
-    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and NODE_RANGE[0] <= v <= NODE_RANGE[1]
+    # A range comparison alone: NaN and inf fail it, and so does a huge int (10**400), which math.isfinite would raise on
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and NODE_RANGE[0] <= v <= NODE_RANGE[1]
 
 
 def node_overrides():

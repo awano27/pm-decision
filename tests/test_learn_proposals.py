@@ -46,6 +46,17 @@ class FakeJev:
     profile = profiles.PROFILES["jev"]
 
 
+class RecordingKev(FakeKev):
+    """A judge that records the subjects it is asked to rank (brief.rank sends them as state["items"])."""
+
+    def __init__(self):
+        self.asked = []
+
+    def ask(self, state, qs):
+        self.asked.append(list(state.get("items", [])))
+        return {q: {"score": 0.0} for q in qs}
+
+
 class Chat(FakeBridge):
     """A self chat that shows these lines (the timeline tools/teams-self.ps1 reads)."""
 
@@ -108,6 +119,15 @@ class Base(unittest.TestCase):
         text = self.post_card()
         n = self.card_number(text) if text else "1"
         return notify.collect(self.out, Chat([f"P:{n}", f"R:{line} {n}"]), real=real, send=send, now=now)
+
+    def add_waiting_case(self, number):
+        """A real case, waiting for the PM, with the given number (the next card takes the number after it)."""
+        ap = notify.Approvals(self.out)
+        ap.data["items"][str(number)] = {"key": f"g:{number}:n", "status": "pending", "posted": True,
+                                         "record": {"graph": "g", "event_id": str(number), "node": "n",
+                                                    "advice": f"case {number}", "actions": []}}
+        ap.data["next"] = number + 1
+        ap.save()
 
     def thresholds(self):
         p = profiles.override_path()
@@ -277,15 +297,74 @@ class TestTheCardAndItsAnswer(Base):
 
 
 class TestTheCardIsNotACase(Base):
-    def test_the_card_is_not_counted_by_the_brief_the_work_list_or_the_stats(self):
+    def test_the_card_is_no_work_and_no_stats_approval_after_its_ok(self):
         self.offer()
         self.post_card()
         self.answer("OK")
         self.assertEqual(work.list_work(self.out), [])
         self.assertEqual(stats._approval_items(self.out), {})
-        self.assertFalse(any("kimeru.learn" in str(x) for x in brief.collect(self.out, now=NOW.astimezone())))
         with self.assertRaises(work.WorkError):
             work.set_state(self.out, 1, "in_progress")
+
+    def test_an_ok_on_the_card_is_no_approval_in_the_stats(self):
+        self.offer()
+        self.post_card()
+        self.answer("OK")
+        s = stats.collect(self.out, now=datetime.now(timezone.utc))   # the reply was logged at the real clock
+        self.assertEqual(s["approvals"], {})
+        self.assertEqual((s["week"]["replied_items"], s["week"]["replies"]), (0, 0))
+
+    def test_an_ok_on_the_card_leaves_the_report_as_it_was_without_the_card(self):
+        from kimeru import report
+        self.add_waiting_case(2)
+        before = report.build(self.out, GRAPHS)
+        self.offer()
+        self.post_card()                                              # the card is #3, beside the waiting case #2
+        self.answer("OK")
+        self.assertEqual(report.build(self.out, GRAPHS), before)
+
+    def test_an_ok_on_the_card_is_no_reply_in_the_result_sheet(self):
+        from kimeru import autorun
+        self.offer()
+        self.post_card()
+        self.answer("OK")
+        lines = autorun.build_report(self.out, now=datetime.now())
+        reply = next(line for line in lines if line.startswith("replies"))
+        self.assertTrue(reply.endswith("読み取った返信: なし"), reply)
+
+    def test_an_ok_on_a_card_that_names_a_chat_is_no_earlier_entry_of_the_memory_index(self):
+        from kimeru import memory
+        # A card carries no event today; this pins the guard for the day one does: its reply must not become a chat's history.
+        items = {"1": {"key": "kimeru.learn:L1:threshold", "status": "approved",
+                       "record": {"graph": "kimeru.learn", "event_kind": "kimeru.learn", "event_id": "L1", "node": "threshold",
+                                  "event": {"chat_id": "chat-1", "author": "someone"}}}}
+        row = {"id": 1, "key": "kimeru.learn:L1:threshold", "status": "approved",
+               "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+        (self.out / "approvals.log.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+        self.assertEqual(memory.index(self.out, items, now=datetime.now(timezone.utc)), {})
+
+
+class TestTheBriefNeverRanksACard(Base):
+    def test_a_posted_card_still_waiting_is_no_brief_item(self):
+        self.offer()
+        self.post_card()
+        self.assertEqual(brief.collect(self.out, now=NOW.astimezone()), [])
+
+    def test_a_card_queued_but_not_posted_is_no_brief_item(self):
+        self.offer()
+        self.assertEqual(brief.collect(self.out, now=NOW.astimezone()), [])
+
+    def test_the_brief_judge_is_asked_about_the_real_cases_and_never_about_a_card(self):
+        self.offer()
+        self.post_card()
+        self.add_waiting_case(2)
+        judge = RecordingKev()
+        text, ranked = brief.build(self.out, judge, now=NOW.astimezone())
+        asked = [s for subjects in judge.asked for s in subjects]
+        self.assertTrue(asked, "the judge must be asked about the real case, or the check below proves nothing")
+        self.assertFalse(any("学習の提案" in s for s in asked), asked)
+        self.assertFalse(any("学習の提案" in r["text"] for r in ranked))
+        self.assertNotIn("学習の提案", text)
 
     def test_the_approval_log_keeps_the_card_but_the_reply_counts_leave_it_out(self):
         from kimeru import autorun
@@ -399,6 +478,46 @@ class TestLearnCommand(Base):
         self.assertIn("L1", buf.getvalue())
         self.assertEqual(revert_code, 0)
         self.assertNotIn("teams-chat-triage:intent", self.thresholds().get("nodes", {}))
+
+
+class TestABrokenNodesValueNeverRaises(Base):
+    """A broken value under "nodes" changes no route, never raises, and `kimeru learn list` says it is ignored."""
+    NODE = "teams-chat-triage:intent"
+    BIG = "1" + "0" * 400   # an int JSON reads exactly; float() of it raises OverflowError
+    BROKEN_ENTRIES = ['"x"', "null", "true", "false", "3", "[1.2]", "NaN", "{}", '{"threshold": 1.2}', '{"conf_scale": true}',
+                      '{"conf_scale": "1.2"}', '{"conf_scale": null}', '{"conf_scale": NaN}', '{"conf_scale": 3.5}',
+                      '{"conf_scale": 0.05}', '{"noul_scale": -1}', '{"conf_scale": ' + BIG + "}"]
+    BROKEN_NODES = ["5", "true", '[1, "a"]', '"abc"', "null", "NaN", "[]", '{"conf_scale": ' + BIG + "}", '{"conf_scale": 1.5}']
+
+    def write(self, text):
+        p = profiles.override_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+        profiles._cache.update(path=None, mtime=None, data={})   # the global reader caches by mtime; a rewrite must be seen
+
+    def listed(self):
+        lines = []
+        self.assertEqual(learn.dispatch(["list"], self.out, print_fn=lines.append), 0)
+        return lines
+
+    def test_a_broken_entry_changes_no_route_and_is_listed_as_ignored(self):
+        kev = profiles.PROFILES["kev"]
+        for broken in self.BROKEN_ENTRIES:
+            with self.subTest(entry=broken[:24]):
+                self.write('{"nodes": {"%s": %s}}' % (self.NODE, broken))
+                self.assertEqual(profiles.node_overrides(), {})
+                self.assertEqual(self.route_held(kev), "fyi")
+                self.assertEqual(profiles.for_node(kev, BY_NAME["teams-chat-triage"], "intent")["name"], "kev")
+                self.assertIn(f"無視している設定: {self.NODE}（値を読めないため、何も変えません）", self.listed())
+
+    def test_a_broken_nodes_value_never_raises_in_the_routes_or_the_global_overrides(self):
+        kev = profiles.PROFILES["kev"]
+        for broken in self.BROKEN_NODES:
+            with self.subTest(nodes=broken[:24]):
+                self.write('{"nodes": %s}' % broken)
+                self.assertEqual(self.route_held(kev), "fyi")
+                self.assertEqual(profiles.overrides(), {})
+                self.assertTrue(any(l.startswith("無視している設定:") for l in self.listed()))
 
 
 class TestWhatTheDailyCycleDoesNotDo(Base):

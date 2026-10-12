@@ -267,7 +267,211 @@ def _week_extra(out, decision_rows, decisions, week_replies, review_rows, now, s
         # R12: the decisions that waited only for a writer's draft (post_kind_mark=1; None at 0, the digest is then unchanged)
         "drafts": (sum(1 for r in decisions if r.get("needs_human") and r.get("held_reason") == "draft")
                    if config.value("post_kind_mark") == "1" else None),
+        # R24: the six rows of the second stage (read only; Jev and unnamed judges left out of every one)
+        "report": _report(out, decision_rows, review_rows, now, since),
     }
+
+
+# --- R24: the second stage of the week digest, and the six lines of the Monday brief (weekly_report=1). Read only: nothing is
+# written, no model is called, and a figure leaves out Jev, the demo, the fictional item and an unnamed judge.
+
+WEEK = timedelta(days=7)
+
+
+def _local_day(value):
+    d = _parse(value)
+    return d.astimezone().date().isoformat() if d is not None else None
+
+
+def _counted_cases(out):
+    """(item, timing, reference) of the approval items that count in the R24 rows: a case (no learn card), not the demo, not the
+    fictional item, and a judge that is named and is not Jev."""
+    found = []
+    for item in _approval_items(out).values():
+        if not isinstance(item, dict):
+            continue
+        rec = item.get("record") if isinstance(item.get("record"), dict) else {}
+        timing = item.get("measurement") if isinstance(item.get("measurement"), dict) else {}
+        reference = rec.get("measurement") if isinstance(rec.get("measurement"), dict) else {}
+        if timing.get("source") == "demo" or reference.get("source") == "demo":
+            continue
+        if autorun._key_is_sample(item.get("key")) or autorun.is_sample(rec.get("event_kind"), rec.get("event_id")):
+            continue
+        if _performance_judge(_record_judge_name(rec)):
+            found.append((item, timing, reference))
+    return found
+
+
+def _arrival(cases, since, now):
+    """R01: from the time the PC saw the event. Judged: the first ready time falls in the week. Approved: the OK was seen in the week.
+    A missing arrival, or one after the moment counted, is Unknown and never estimated (the rule of trial's medians)."""
+    from . import trial
+    end = now.timestamp()
+    judged, approved = [], []
+    for item, timing, reference in cases:
+        valid = trial.measurement_valid(item, timing, reference)
+        ready = _parse(timing.get("first_ready_at"))
+        if ready is not None and since <= ready <= now:
+            judged.append(trial._interval(timing, "arrived_at", "first_ready_at", end) if valid else None)
+        seen = _parse(timing.get("approval_observed_at"))
+        if item.get("status") == "approved" and seen is not None and since <= seen <= now:
+            confirmed = valid and timing.get("posting_source") == "bridge_readback" and not item.get("delivery_unknown")
+            approved.append(trial._interval(timing, "arrived_at", "approval_observed_at", end) if confirmed else None)
+    return trial._coverage(judged), trial._coverage(approved)
+
+
+def _sends(cases, since, now):
+    """R14: the state the self-chat list showed after an OK, for the OKs whose send was seen this week (sent_watch=1). A reading of the
+    list, not a receipt."""
+    from . import sent
+    found = {state: 0 for state in sent.STATES}
+    for item, _timing, _reference in cases:
+        seen = item.get("sent_seen") if isinstance(item.get("sent_seen"), dict) else {}
+        state, at = seen.get("state"), _parse(seen.get("at"))
+        if item.get("status") == "approved" and isinstance(state, str) and state in found and at is not None and since <= at <= now:
+            found[state] += 1
+    return found
+
+
+def _labels(decision_rows, review_rows, since, now):
+    """R03: the labels the week added, by where they came from: a reply (`違う N`, source teams) or `kimeru review`."""
+    judge_of_key = {review.decision_key(r): _record_judge_name(r) for r in decision_rows}
+    found = {"teams": 0, "terminal": 0}
+    for r in _within(review_rows, "at", since, now):
+        if r.get("verdict") not in ("yes", "no", "wrong") or not _performance_judge(_judge_of_review(r, judge_of_key)):
+            continue
+        found["teams" if r.get("source") == "teams" else "terminal"] += 1
+    return found
+
+
+def _judged_between(rows, judge, start, end):
+    """(decisions, sent to the PM) of one judge with start <= time < end, the demo and the fictional item left out."""
+    total = human = 0
+    for r in rows:
+        at = _parse(r.get("at"))
+        if at is None or not start <= at < end or _record_judge_name(r) != judge:
+            continue
+        metadata = r.get("measurement") if isinstance(r.get("measurement"), dict) else {}
+        if metadata.get("source") == "demo" or autorun.is_sample(r.get("event_kind"), r.get("event_id")):
+            continue
+        total += 1
+        human += bool(r.get("needs_human"))
+    return total, human
+
+
+def _learning(decision_rows, since, now):
+    """R21: each adoption of the week that has not been taken back, against an equal window before and after its own time: the share of
+    the judge's decisions that went to the PM. The window is seven days, or less when the adoption is newer; under one day it is not
+    compared. Only a named judge other than Jev counts (the card's judge)."""
+    ledger = learn._ledger()
+    reverted = {str(r.get("id")) for r in ledger if r.get("kind") == "revert"}
+    found = {"adoptions": 0, "comparable": 0, "before": [0, 0], "after": [0, 0]}
+    for r in ledger:
+        if r.get("kind") != "adopt" or str(r.get("id")) in reverted:
+            continue
+        when = learn._parse(r.get("adopted_at"))
+        if when is None:
+            continue
+        when = when.astimezone() if when.tzinfo is None else when   # learn writes the local time without a zone
+        judge = _normalise_judge_name(r.get("judge"))
+        if not since <= when <= now or not _performance_judge(judge):
+            continue
+        found["adoptions"] += 1
+        window = min(WEEK, now - when)
+        if window < timedelta(days=1):
+            continue
+        found["comparable"] += 1
+        for slot, start, end in (("before", when - window, when), ("after", when, when + window)):
+            total, human = _judged_between(decision_rows, judge, start, end)
+            found[slot][0] += total
+            found[slot][1] += human
+    return found
+
+
+def _top_three(out, since, now):
+    """R04: of the morning brief's top three rows that carry an approval number (the denominator), how many had a reply or a `work set`
+    on the same local day as the brief (out/brief_history.jsonl x approvals.log.jsonl and work-state.jsonl). A weak signal: a look
+    without an answer, or a reply made elsewhere, is in no log. A brief whose judge is Jev or unnamed is left out."""
+    from . import brief
+    replied = set()
+    for r in _dicts(review.read_jsonl(Path(out) / "approvals.log.jsonl")):
+        if learn.is_card_key(r.get("key")) or autorun._key_is_sample(r.get("key")):
+            continue
+        day = _local_day(r.get("at"))
+        if day is not None:
+            replied.add((str(r.get("id")), day))
+    for r in _dicts(review.read_jsonl(Path(out) / "work-state.jsonl")):
+        day = _local_day(r.get("at"))
+        if day is not None:
+            replied.add((str(r.get("case")), day))
+    first, last = since.astimezone().date().isoformat(), now.astimezone().date().isoformat()
+    numbered = hit = 0
+    for day_row in _dicts(review.read_jsonl(brief.history_path(Path(out)))):
+        date = day_row.get("date")
+        if not isinstance(date, str) or not first <= date <= last:
+            continue
+        if not _performance_judge(_normalise_judge_name(day_row.get("backend"))):
+            continue
+        rows = day_row.get("rows") if isinstance(day_row.get("rows"), list) else []
+        for row in rows:
+            rank, key = (row.get("rank"), row.get("key")) if isinstance(row, dict) else (None, None)
+            if not isinstance(rank, int) or isinstance(rank, bool) or not 1 <= rank <= 3:
+                continue
+            if not isinstance(key, str) or not key.startswith(brief.APPROVAL_PREFIX):
+                continue
+            numbered += 1
+            hit += (key[len(brief.APPROVAL_PREFIX):], date) in replied
+    return {"numbered": numbered, "hit": hit}
+
+
+def _report(out, decision_rows, review_rows, now, since):
+    """The six rows' figures, computed once for the digest and for the Monday brief."""
+    cases = _counted_cases(out)
+    judged, approved = _arrival(cases, since, now)
+    return {"judged": judged, "approved": approved, "sends": _sends(cases, since, now),
+            "labels": _labels(decision_rows, review_rows, since, now),
+            "learning": _learning(decision_rows, since, now), "top": _top_three(out, since, now)}
+
+
+def _seconds_row(label, cov):
+    if not cov["eligible"]:
+        return f"{label}: 不明（記録なし）"
+    if not cov["measured"]:
+        return f"{label}: 不明（実測 0 件・不明 {cov['unknown']} 件）"
+    return (f"{label}: 中央値 {cov['median_seconds']:.1f} 秒（実測 {cov['measured']} 件・不明 {cov['unknown']} 件"
+            f"{_count_note(cov['measured'])}）")
+
+
+def _share_of(human, total):
+    return f"{human * 100 // total}%（{total} 件）" if total else "不明（0 件）"
+
+
+def _report_lines(rep):
+    """The six lines of the R24 rows, in this order. `digest --week` prints them, and the Monday brief gets the same six."""
+    sends, labels, learning, top = rep["sends"], rep["labels"], rep["learning"], rep["top"]
+    lines = [_seconds_row("到着から判断完了まで（PC が見た時刻から）", rep["judged"]),
+             _seconds_row("到着から承認まで（PC が見た時刻から）", rep["approved"])]
+    lines.append("OK の後の送信（自分のチャットの一覧で見た。届いたことの証明ではない）: " + (
+        "不明（記録なし）" if not sum(sends.values()) else
+        f"as_is {sends['as_is']} 件・edited {sends['edited']} 件・other {sends['other']} 件"))
+    lines.append("正誤のラベルの増分（今週）: " + (
+        "不明（記録なし）" if not labels["teams"] + labels["terminal"] else
+        f"返信 {labels['teams']} 件・kimeru review {labels['terminal']} 件"))
+    if not learning["adoptions"]:
+        lines.append("採用した学習の前後（今週）: 不明（記録なし）")
+    elif not learning["comparable"]:
+        lines.append(f"採用した学習の前後（今週）: 採用 {learning['adoptions']} 件（比べるには採用から 1 日以上たつ必要があります）")
+    else:
+        lines.append(f"採用した学習の前後（今週）: 採用 {learning['adoptions']} 件。同じ長さの窓で PM に回った割合は、"
+                     f"採用の前 {_share_of(learning['before'][1], learning['before'][0])}、"
+                     f"後 {_share_of(learning['after'][1], learning['after'][0])}"
+                     "（基準は採用の前の同じ長さの期間。kimeru はその間も動いていた）")
+    if not top["numbered"]:
+        lines.append("朝のまとめの上位 3 件で、同じ日に返信か作業の記録があった件: 不明（承認番号のある件 0 件）")
+    else:
+        lines.append(f"朝のまとめの上位 3 件（承認番号のある件 {top['numbered']} 件）で、同じ日に返信か作業の記録があった件: "
+                     f"{top['hit']} 件（弱い信号。見ただけの件と、ほかの経路の返信は分からない）")
+    return lines
 
 
 def collect(out, now=None):
@@ -486,6 +690,8 @@ def render(s, share=False):
             lines.append(f"calibrate の正誤（判断モデルごと。下限 {floor} 問）: " + "、".join(
                 f"{name} {n} 問（" + (f"あと {floor - n} 問" if n < floor else "下限に達しています") + "）"
                 for name, n in sorted(wk["calibration"].items())))
+        if wk.get("report"):   # R24: six rows (times and counts; Jev and unnamed judges left out, on the screen and in --share alike)
+            lines += _report_lines(wk["report"])
     total = s["reviewed_yes"] + s["reviewed_no"]
     left_out = s.get("reviewed_left_out", 0)
     if total:
@@ -514,3 +720,12 @@ def render(s, share=False):
 
 def week(out, share=False, now=None):
     return render(collect(out, now), share=share)
+
+
+def weekly_lines(out, now=None):
+    """R24 (weekly_report=1, the Monday brief): the six lines that `digest --week` prints for the same week. Read only. A caller that
+    gets an exception leaves the six lines out (daily.py)."""
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.astimezone(timezone.utc)   # a naive time is the local time of this PC
+    return _report_lines(collect(out, now)["week"]["report"])

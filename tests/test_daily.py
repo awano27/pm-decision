@@ -338,3 +338,66 @@ class TestTextMinutes(unittest.TestCase):
     def test_title_falls_back_to_file_name(self):
         p = events.minutes_text("- 決定: A とする", "2026-10-02 レビュー")
         self.assertEqual((p["title"], p["date"]), ("2026-10-02 レビュー", "2026-10-02"))
+
+
+SIX_LABELS = ("到着から判断完了まで（PC が見た時刻から）:", "到着から承認まで（PC が見た時刻から）:",
+              "OK の後の送信（自分のチャットの一覧で見た。届いたことの証明ではない）:", "正誤のラベルの増分（今週）:",
+              "採用した学習の前後（今週）:", "朝のまとめの上位 3 件で、同じ日に返信か作業の記録があった件:")
+MONDAY, TUESDAY = datetime(2026, 10, 12, 8, 10), datetime(2026, 10, 13, 8, 10)
+
+
+class TestWeeklyReport(unittest.TestCase):
+    """R24: weekly_report=1 adds six lines of the week's report to the Monday brief, after the writer's key points and before the
+    delivery, so the writer never gets them. 0 (the default), any other day, and a failure leave the brief as it was."""
+
+    def brief_posts(self, now, weekly=None, writer_seen=None):
+        env = {} if weekly is None else {"KIMERU_WEEKLY_REPORT": weekly}
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, env):
+            out, inbox, t = Path(d) / "out", Path(d) / "inbox", FakeTeams()
+            second = dict(one_on_one("別の質問です", "8:06"), id="19:c_d@unq.gbl.spaces", title="Suzuki")
+            t.chat_list = [one_on_one("おはようございます", "7:00")]   # the first cycle is the baseline: nothing in it is judged
+            daily.cycle(out, inbox, GRAPHS, StubBackend(), PBS, process, bridge=t, send=True, now=now.replace(hour=7, minute=0))
+            t.chat_list = [one_on_one("これは何ですか", "8:05"), second]
+            real = daily._with_key_points
+
+            def seen(text):
+                if writer_seen is not None:
+                    writer_seen.append(text)
+                return real(text)
+            with mock.patch.object(daily, "_with_key_points", side_effect=seen):
+                r = daily.cycle(out, inbox, GRAPHS, StubBackend(), PBS, process, bridge=t, send=True, now=now)
+            return [p for p, _ in t.posts if p.startswith("[kimeru brief")], r
+
+    def test_with_the_setting_off_the_monday_brief_is_the_same_text_as_before(self):
+        off, r = self.brief_posts(MONDAY)
+        zero, _ = self.brief_posts(MONDAY, weekly="0")
+        self.assertEqual(r["brief"], 2)
+        self.assertEqual(off, zero)
+        self.assertFalse(any(label in off[0] for label in SIX_LABELS))
+        # golden: the text the Monday brief had before R24 (the same two chats, measured on the commit before this change)
+        self.assertEqual(off[0], "[kimeru brief 2026-10-12] 今日の進め方\n1. 確認待ち #1: 意図が判定できないチャット: Sato「これは何ですか」\n"
+                                 "2. 確認待ち #2: 意図が判定できないチャット: Suzuki「別の質問です」\n確認待ち 2 件（OK 番号 / NG 番号 / 詳細 番号 で返信）")
+
+    def test_with_the_setting_on_six_lines_follow_the_brief_and_the_writer_never_sees_them(self):
+        off, _ = self.brief_posts(MONDAY)
+        seen = []
+        on, r = self.brief_posts(MONDAY, weekly="1", writer_seen=seen)
+        self.assertEqual(r["brief"], 2)
+        self.assertTrue(seen)                                           # the writer step ran (two items)
+        self.assertFalse(any(label in text for text in seen for label in SIX_LABELS))
+        tail = on[0].split("\n")[-6:]
+        for line, label in zip(tail, SIX_LABELS):
+            self.assertTrue(line.startswith(label), line)
+        self.assertEqual(on[0], off[0] + "\n" + "\n".join(tail))
+
+    def test_on_another_day_the_setting_adds_nothing(self):
+        off, _ = self.brief_posts(TUESDAY)
+        on, _ = self.brief_posts(TUESDAY, weekly="1")
+        self.assertEqual(on, off)
+
+    def test_a_failure_in_the_six_lines_leaves_them_out_and_the_brief_as_it_was(self):
+        off, _ = self.brief_posts(MONDAY)
+        with mock.patch("kimeru.stats.weekly_lines", side_effect=RuntimeError("broken")):
+            on, r = self.brief_posts(MONDAY, weekly="1")
+        self.assertEqual(on, off)
+        self.assertEqual(r["brief"], 2)

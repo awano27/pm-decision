@@ -319,7 +319,7 @@ python -m kimeru config unset backend   # install のときに保存した判断
 
 ### 待ち時間と下書き利用の計測
 
-`out/decisions.jsonl` に判断・writer の処理秒数、下書き準備時刻、計測用の世代と出所を残し、`out/report.html` で承認記録・明示した試行記録と照合します。本文を含む通常の HTML はローカル確認用です。共有する場合は `python -m kimeru trial report --share` を使います。
+`out/decisions.jsonl` に判断・writer の処理秒数、下書き準備時刻、計測用の世代と出所を残し、`out/report.html` で承認記録・明示した試行記録と照合します。本文を含む通常の HTML はローカル確認用です。共有する場合は `python -m kimeru trial report --share` を使います。週の数字は `kimeru digest --week` で見られ、到着から判断・承認までの中央値は実測の件数と不明の件数つきで出ます。設定 `weekly_report=1` のときは、月曜の朝のまとめの末尾にも同じ 6 行が入ります。
 
 | 指標 | 測るもの / 未測定のもの |
 |---|---|

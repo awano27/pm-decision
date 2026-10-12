@@ -118,6 +118,18 @@ def _with_key_points(text):
     return "\n".join([head, f"今日の要点（{label}）:"] + [f"・{p}" for p in points] + rest)
 
 
+def _with_weekly(out, text, now):
+    """R24 (weekly_report=1, on a Monday): the six lines of the week's report go to the end of the brief, after the writer's key points
+    and before the delivery, so the writer never gets them. A failure leaves the six lines out and the brief as it was."""
+    try:
+        from . import stats
+        lines = stats.weekly_lines(out, now)
+    except Exception as e:
+        _log(out, {"step": "weekly_report", "error": f"{type(e).__name__}: {str(e)[:120]}"})
+        return text
+    return "\n".join([text, *lines]) if lines else text
+
+
 def _record_brief(out, report, date, backend, ranked):
     """The day's row of out/brief_history.jsonl, after a delivered brief. Never changes the brief's result: a failure is logged."""
     try:
@@ -478,6 +490,8 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
                 shown = brief_mod.named(ranked)   # the post names the first three; the history keeps every item
                 if len(shown) >= 2 and not brief_mod.is_desk():   # a one-line day needs no summary, and an empty one must not invent one; desk: no writer
                     text = _with_key_points(text)
+                if config.value("weekly_report") == "1" and now.weekday() == 0:   # R24: after the writer, before the delivery
+                    text = _with_weekly(out, text, now)
                 result = notify.deliver_brief(out, bridge, text, send, today, built_at=built_at)
                 status = result["status"]
                 if status == "delivered":   # only a brief whose delivery was read back is recorded (not pasted, not unknown)

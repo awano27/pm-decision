@@ -43,7 +43,7 @@ kimeru は PM の Teams・ADO のメッセージを読み、判断の下書き�
 | 通知の経路 | Teams の Workflows の流れ／指定した webhook／デスクトップ Outlook から自分宛てのメール | 無効（`push` 未設定）。設定しても `daily --send` のときだけ送る | 無し | **件数と番号だけ**。本文・送信者・件名は含まない（`KIMERU_TOAST=detail` でも） | URL は環境変数だけで受け取り、記録・表示・エラー文に出さない。`interrupt=sittings` のときは、緊急でない件を次のまとめの時刻まで送らず、経路ごとに送れたときだけ記録する（本文は送らない） |
 | 通知の試験（`push test`・`onboarding notification-test --send`） | 設定した通知の経路 | 打ったときだけ（`notification-test` は `--send` が無いと送らない） | あり（打つこと自体） | `push test` は固定の試験の文だけ、`notification-test` は毎回作るランダムな識別子だけ | 識別子は SHA-256 のハッシュにして `onboarding.json` に残す |
 | 管理 PC の確認（`run-check.cmd`） | T13: pypi.org・github.com・huggingface.co への到達確認（HEAD）。Python 3.10 以上が無いとき: python.org から Python 3.12 の zip を取得 | 実行したときだけ | あり（どちらも、送る前・取得する前に `[y/N]` で尋ねる） | 到達確認は本文・名前・キーを送らない。取得した zip は署名（Python Software Foundation）を確かめ、違えば消す | Teams への試験の投稿・Jev への架空のサンプル・ADO へのコメントの試験も、送る前に `[y/N]` で尋ねる。配布物を作る `tools\make-bundle.ps1` は、確認なしで python.org から同じ zip を取得する |
-| 試行の共有用の出力（`trial report --share`・`digest --week --share`・`config show --share`） | 画面（標準出力）だけ。どこに貼るかは人が決める | 打ったときだけ | あり（貼るのは人） | 件数・集計値・環境だけ（本文・名前・ID・パスは含まない） | |
+| 試行の共有用の出力（`trial report --share`・`digest --week --share`・`config show --share`） | 画面（標準出力）だけ。どこに貼るかは人が決める | 打ったときだけ | あり（貼るのは人） | 件数・集計値・環境だけ（本文・名前・ID・パスは含まない。`digest --week` の週の 6 行も、件数・時間・割合だけ） | |
 
 ## 記録に残る範囲と期間
 
@@ -60,7 +60,7 @@ kimeru は PM の Teams・ADO のメッセージを読み、判断の下書き�
 | `inbox/*.json`・`inbox/*.txt`・`inbox/*.md`（取り込んで、まだ判断していない原本）、`inbox/done/`（判断済みの原本） | 取り込んだイベントの **全文**（ADO の説明・再現手順・受け入れ条件、議事録、アラートの内容、Teams のプレビュー）。PC が見た時刻（`_kimeru`: `observed_at`、Teams は前回見た時刻 `last_seen_at` も。時刻だけ）。`decisions.jsonl` の 120 文字の制限は、ここには効かない | `inbox/done/*.json` は既定 7 日で消す（設定 `inbox_done_keep_days`。0 で消さない）。消すのは `daily` の各サイクルで、ファイルの更新日時が日数を超えたもの（`run`・`watch` だけで使っているときは消えない）。`*.error`（判断に失敗した原本）は `retry` まで残る。`inbox/done/` の議事録（`.txt`・`.md`）は自動では消さない。判断済みかどうかは `processed.txt` で見るので、原本を消しても判断し直さない |
 | `out/demo/`（`demo` の出力。印 `.kimeru-demo` のあるフォルダ） | 架空のシナリオの判断・確認待ち・承認・レポート。業務のデータは入らない | 次の `demo` が自分の前回分だけを消す。印の無いフォルダ（`run`・`daily` などの記録）は消さずに止まり、`--fresh` のときも `before-demo-<日時>/` へ移すだけで消さない |
 | `read_pending.json` | 開く件数の上限で読めなかった件の、プレビューでの判断（次のサイクルで、読む所から続けるため。プレビューの範囲の内容だけ） | 件が済んだら消す。1 日を過ぎたものは使わず、次に書くときに捨てる |
-| `daily_state.json` | 朝のまとめの配信の状態。**配信を確かめられなかった（配信未確認の）間だけ、朝のまとめの本文**（件の題名・開いたチャットの名前・承認済みの作業の欄）を持つ | 配信を確かめるか、`delivery confirm`・`delivery retry` で決着したら本文を消す |
+| `daily_state.json` | 朝のまとめの配信の状態。**配信を確かめられなかった（配信未確認の）間だけ、朝のまとめの本文**（件の題名・開いたチャットの名前・承認済みの作業の欄）を持つ。設定 `weekly_report=1` の月曜は、末尾に週の 6 行（件数・時間・割合だけ。本文・名前は含まない）も入る | 配信を確かめるか、`delivery confirm`・`delivery retry` で決着したら本文を消す |
 | `report.html` | `kimeru report`・`demo` が `decisions.jsonl` と `approvals.json` から作るページ。要約・判断経路・計画・アクションの題名か文面（`decisions.jsonl` の範囲の抜粋） | 自動では消さない（`demo` は作り直す） |
 | `work-state.jsonl` | 承認済みの作業の状態の変化と、PM が入力した担当・期限・完了条件 | 自動では消さない |
 | 状態フォルダの `reviews.jsonl`・`fixtures_user.jsonl` | `kimeru review`（設定 `learn=1` のときは、Teams の `違う N` / `違う N k` の返信も同じ行）で付けた正誤と、その判断の元のイベント（`decisions.jsonl` にある抜粋のとおり）、判断モデルの名前 | 自動では消さない。消すときは、この 2 つのファイルを削除する |

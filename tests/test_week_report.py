@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from kimeru import brief, calibrate, notify, push, review, stats, trial
+from kimeru import brief, calibrate, learn, notify, push, review, stats, trial
 from tests.test_notify import REC
 from tests.test_review_stats import MARK_ID, MARK_NAME, MARK_PATH, MARK_TEXT, Base
 
@@ -299,6 +299,139 @@ class TestRepeatedInstructionLine(unittest.TestCase):
             (out / "approvals.log.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
             text = stats.week(out, now=NOW)
         self.assertIn("同じ修正指示の繰り返し（別の項目で）: 1 件", text)
+
+
+SIX = ("到着から判断完了まで（PC が見た時刻から）", "到着から承認まで（PC が見た時刻から）",
+       "OK の後の送信（自分のチャットの一覧で見た。届いたことの証明ではない）", "正誤のラベルの増分（今週）",
+       "採用した学習の前後（今週）", "朝のまとめの上位 3 件")
+
+
+def noon_of(days_back):
+    """(UTC ISO text of noon, local date text) of the local day `days_back` days before NOW. A brief of that day and a reply written
+    at noon are on the same local day, whatever the time zone of the machine."""
+    day = (NOW - timedelta(days=days_back)).astimezone().date()
+    return datetime(day.year, day.month, day.day, 12, 0).astimezone(timezone.utc).isoformat(timespec="seconds"), day.isoformat()
+
+
+def arrived(n, rec, days, arrival):
+    """An approved case that the PC saw arrive `arrival` seconds before its OK (None: no arrival recorded). The first ready time is 60
+    seconds before the OK, which was seen `days` days before NOW."""
+    n, item = approved(n, rec, status="approved", days=days, latency=30)
+    timing = item["measurement"]
+    if arrival is not None:
+        timing["arrived_at"] = at(days, arrival)
+    timing["first_ready_at"] = at(days, 60)
+    timing["approval_observed_at"] = at(days, 0)
+    return n, item
+
+
+class TestWeeklyRows(Base):
+    """R24: the second stage of the week digest, hand-counted. Six approved cases (one Jev, one nine days old, one with no arrival
+    and one whose arrival is after its ready time), their sends and labels, one adoption of the judge CLM with its decisions before
+    and after, and the morning brief rows of two days. The figures leave out Jev, the fictional item and an unnamed judge."""
+
+    def seed(self):
+        a = decision("teams-chat-triage", "501", "decision_today", "teams.chat", days=1)
+        b = decision("teams-chat-triage", "502", "decision_today", "teams.chat", days=2)
+        d = decision("teams-chat-triage", "503", "decision_today", "teams.chat", days=3)
+        e = decision("teams-chat-triage", "504", "decision_today", "teams.chat", days=1)
+        j = decision("teams-chat-triage", "505", "decision_today", "teams.chat", days=1, judge="Jev")
+        f = decision("teams-chat-triage", "506", "decision_today", "teams.chat", days=9)
+        clm = [decision("monitor-alert", str(900 + i), "alert", "monitor.alert", days=d_, seconds=s, judge="CLM", needs_human=h)
+               for i, (d_, s, h) in enumerate([(4, 0, True), (4, 100, False), (5, 0, False), (5, 100, True),
+                                                (1, 0, True), (1, 100, False), (2, 0, False), (2, 100, False)])]
+        (self.out / "decisions.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in [a, b, d, e, j, f, *clm]),
+                                                  encoding="utf-8")
+        items = dict([arrived(1, a, 1, 90), arrived(2, b, 2, None), arrived(3, d, 3, 180), arrived(4, e, 1, 10),
+                      arrived(5, j, 1, 1000), arrived(6, f, 9, 30)])
+        items["1"]["sent_seen"] = {"state": "as_is", "at": at(1)}
+        items["3"]["sent_seen"] = {"state": "edited", "at": at(3)}
+        items["4"]["sent_seen"] = {"state": "other", "at": at(1)}
+        items["5"]["sent_seen"] = {"state": "as_is", "at": at(1)}        # Jev: left out
+        items["6"]["sent_seen"] = {"state": "as_is", "at": at(9)}        # the week before: left out
+        (self.out / "approvals.json").write_text(json.dumps({"next": 7, "items": items}, ensure_ascii=False), encoding="utf-8")
+        card = {"at": noon_of(2)[0], "key": "kimeru.learn:x:5", "id": 5, "status": "approved"}
+        log = [{"at": noon_of(2)[0], "key": "teams-chat-triage:901:decision_today", "id": 1, "status": "approved"},
+               {"at": noon_of(2)[0], "key": "teams-chat-triage:902:decision_today", "id": 2, "status": "approved"}, card]
+        (self.out / "approvals.log.jsonl").write_text("".join(json.dumps(r) + "\n" for r in log), encoding="utf-8")
+        (self.out / "work-state.jsonl").write_text(json.dumps({"transition_id": "t1", "at": noon_of(3)[0], "case": "3", "from": "approved",
+                                                               "to": "in_progress"}) + "\n", encoding="utf-8")
+
+        def row(rank, key):
+            return {"key": key, "kind": "teams", "rank": rank, "harm": 0.5}
+        briefs = [{"date": noon_of(2)[1], "backend": "Kev", "rows": [row(1, "approval:1"), row(2, "approval:5"),
+                                                                     row(3, "ado:4812"), row(4, "approval:9")]},
+                  {"date": noon_of(3)[1], "backend": "Kev", "rows": [row(1, "approval:2"), row(2, "approval:3")]},
+                  {"date": noon_of(4)[1], "backend": "Jev", "rows": [row(1, "approval:7")]}]
+        (self.out / "brief_history.jsonl").write_text("".join(json.dumps(r) + "\n" for r in briefs), encoding="utf-8")
+        # the adoption of CLM's question, three days ago: the windows before and after are three days each
+        when = (NOW - timedelta(days=3)).astimezone().replace(tzinfo=None).isoformat(timespec="seconds")
+        old = (NOW - timedelta(days=5)).astimezone().replace(tzinfo=None).isoformat(timespec="seconds")
+        ledger = [{"id": "L1", "kind": "adopt", "node": "monitor:alert", "judge": "CLM", "adopted_at": when},
+                  {"id": "L2", "kind": "adopt", "node": "monitor:alert", "judge": "CLM", "adopted_at": old},
+                  {"id": "L2", "kind": "revert", "node": "monitor:alert", "reverted_at": when},
+                  {"id": "L3", "kind": "adopt", "node": "teams:intent", "judge": "Jev", "adopted_at": when}]
+        learn.ledger_path().write_text("".join(json.dumps(r) + "\n" for r in ledger), encoding="utf-8")
+        for rec, verdict, judge, source in ((a, "wrong", "Kev", "teams"), (d, "no", "Kev", "teams"), (a, "yes", "Kev", None),
+                                            (j, "wrong", "Jev", "teams"), (f, "wrong", "Kev", "teams")):
+            row_ = {"key": review.decision_key(rec), "verdict": verdict, "at": at(9 if rec is f else 1), "judge": judge}
+            if source:
+                row_["source"] = source
+            review._append(review.reviews_path(), row_)
+
+    EXPECTED = (
+        "到着から判断完了まで（PC が見た時刻から）: 中央値 75.0 秒（実測 2 件・不明 2 件・参考）",
+        "到着から承認まで（PC が見た時刻から）: 中央値 90.0 秒（実測 3 件・不明 1 件・参考）",
+        "OK の後の送信（自分のチャットの一覧で見た。届いたことの証明ではない）: as_is 1 件・edited 1 件・other 1 件",
+        "正誤のラベルの増分（今週）: 返信 2 件・kimeru review 1 件",
+        "採用した学習の前後（今週）: 採用 1 件。同じ長さの窓で PM に回った割合は、採用の前 50%（4 件）、後 25%（4 件）"
+        "（基準は採用の前の同じ長さの期間。kimeru はその間も動いていた）",
+        "朝のまとめの上位 3 件（承認番号のある件 4 件）で、同じ日に返信か作業の記録があった件: 2 件"
+        "（弱い信号。見ただけの件と、ほかの経路の返信は分からない）",
+    )
+
+    def test_the_six_rows_count_what_the_week_holds_with_the_arrival_measured_or_unknown(self):
+        self.seed()
+        text = stats.week(self.out, now=NOW)
+        for line in self.EXPECTED:
+            self.assertIn(line, text)
+
+    def test_jev_the_fictional_item_and_the_week_before_are_left_out_of_every_row(self):
+        self.seed()
+        text = stats.week(self.out, now=NOW)
+        six = [l for l in text.splitlines() if l.startswith(SIX)]
+        self.assertEqual(len(six), 6)
+        self.assertNotIn("Jev", "\n".join(six))
+        self.assertNotIn("1000", "\n".join(six))                # Jev's arrival of 1000 seconds would move the median
+        self.assertNotIn("採用 2 件", text)                      # the reverted adoption and Jev's are not counted
+
+    def test_a_row_with_no_record_says_unknown_and_nothing_raises(self):
+        text = stats.week(self.out, now=NOW)                     # an empty folder
+        for line in ("到着から判断完了まで（PC が見た時刻から）: 不明（記録なし）", "到着から承認まで（PC が見た時刻から）: 不明（記録なし）",
+                     "OK の後の送信（自分のチャットの一覧で見た。届いたことの証明ではない）: 不明（記録なし）",
+                     "正誤のラベルの増分（今週）: 不明（記録なし）", "採用した学習の前後（今週）: 不明（記録なし）",
+                     "朝のまとめの上位 3 件で、同じ日に返信か作業の記録があった件: 不明（承認番号のある件 0 件）"):
+            self.assertIn(line, text)
+
+    def test_the_six_rows_are_on_the_screen_and_in_the_share_and_the_share_shows_no_text_name_id_path_or_jev_figure(self):
+        self.seed()
+        screen = stats.week(self.out, now=NOW)
+        shared = stats.week(self.out, share=True, now=NOW)
+        for line in self.EXPECTED:
+            self.assertIn(line, screen)
+            self.assertIn(line, shared)
+        for mark in (MARK_TEXT, MARK_NAME, MARK_ID, MARK_PATH, str(self.dir.name), "Users"):
+            self.assertNotIn(mark, shared)
+
+    def test_the_rows_write_nothing_and_the_six_lines_for_the_brief_are_the_same_six(self):
+        self.seed()
+        before = snapshot(self.out, self.state)
+        lines = stats.weekly_lines(self.out, now=NOW)
+        self.assertEqual(snapshot(self.out, self.state), before)
+        self.assertEqual(len(lines), 6)
+        for line, label in zip(lines, SIX):
+            self.assertTrue(line.startswith(label), line)
+            self.assertIn(line, stats.week(self.out, now=NOW))
 
 
 if __name__ == "__main__":

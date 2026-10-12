@@ -4,7 +4,7 @@ Every judgment that names a case gets a `link` in its record (decisions.jsonl; t
 with the setting 0 and 1):
   {"fp": the case's fingerprint or null, "refs": ["ado:<id>", ...], "target": a name of at most 40 characters}
 - fp: an alert = a hash of its rule and the last part of its resource (the resource itself is not kept); an ADO item = "ado:<id>";
-  a minutes line = a hash of its normalized text; a chat has none.
+  a minutes line = a hash of its normalized text (it is linked for 35 days, the same risk line of a weekly meeting); a chat has none.
 - refs: the ADO numbers the text names (`#1234`, `ADO 1234`), only those that exist in the last 7 days' records.
 - target: an alert's rule, an ADO item's title or a minutes line; "" when it holds an ARM path or a GUID.
 
@@ -23,6 +23,7 @@ from pathlib import Path
 from . import config, fsutil
 
 DAYS = 7                  # how far back the ADO numbers and the earlier records count
+LONG_DAYS = 35            # how far back a minutes line of the same text counts (its fp only: the refs stay at DAYS)
 REFIRE_HOURS = 24         # an alert of the same case within this many hours is a refire
 TARGET_MAX = 40           # the name kept in a link
 REFS_MAX = 5              # ADO numbers kept in one link
@@ -75,23 +76,34 @@ def refs_of(ev, known):
     return found[:REFS_MAX]
 
 
+def _names_a_number(ev):
+    """True when a text field of the event holds a number that refs_of could read (the only other way to get a link)."""
+    return any(NUMBER.search(str(ev.get(field) or "")) for field in TEXT_FIELDS)
+
+
 def _rank(value):
     from .cli import _severity_rank   # the ranking the merge of follow-ups uses (Sev0 4 ... Sev3 1)
     return _severity_rank(value)
 
 
-def _hm(t):
-    return t.astimezone().strftime("%H:%M")
+def _stamp(t, idx):
+    """The time of a record in a text: HH:MM on the day the windows are counted from, else M/D HH:MM (a minutes line of an earlier week)."""
+    local = t.astimezone()
+    if local.date() == idx["now"].astimezone().date():
+        return local.strftime("%H:%M")
+    return f"{local.month}/{local.day} {local.strftime('%H:%M')}"
 
 
 def index(out, items, now=None):
-    """What the records already keep, read once for the decisions of a run (nothing is written): `rows` = the decisions of the last
-    7 days that carry a link (in the file's order, the oldest first), `known` = the ADO numbers of those records and of the waiting items, `now` = the time the
-    windows are counted from. `items` is approvals.json's items by number."""
+    """What the records already keep, read once for the decisions of a run (nothing is written): `rows` = the decisions that carry a link
+    of the last 35 days (in the file's order, the oldest first; after 7 days only the minutes lines, and their refs are dropped), `known` =
+    the ADO numbers of the last 7 days' records and of the waiting items, `now` = the time the windows are counted from. `items` is
+    approvals.json's items by number."""
     from . import memory
     out = Path(out)
     at_now = now or datetime.now(timezone.utc)
     since = at_now - timedelta(days=DAYS)
+    long_since = at_now - timedelta(days=LONG_DAYS)
     numbers, known = {}, set()
     for n, it in (items or {}).items():
         if not isinstance(it, dict):
@@ -105,19 +117,20 @@ def index(out, items, now=None):
     rows = []
     for r in memory._tail_rows(out / "decisions.jsonl"):
         t = memory._when(r.get("at"))
-        if t is None or t < since:
+        if t is None or t < long_since:
             continue
+        recent = t >= since
         kind = str(r.get("event_kind") or "")
-        if kind.startswith("ado.") and r.get("event_id") is not None:
+        if recent and kind.startswith("ado.") and r.get("event_id") is not None:
             known.add(str(r["event_id"]))
         link = r.get("link") if isinstance(r.get("link"), dict) else None
-        if link is None:
+        if link is None or not (recent or kind == "meeting.item"):   # after 7 days only a minutes line (its fp) counts
             continue
         ev = r.get("event") if isinstance(r.get("event"), dict) else {}
         key = f"{r.get('graph')}:{r.get('event_id')}:{r.get('node')}"
         rows.append({
             "fp": link.get("fp") if isinstance(link.get("fp"), str) else None,
-            "refs": [x for x in (link.get("refs") or []) if isinstance(x, str)],
+            "refs": [x for x in (link.get("refs") or []) if isinstance(x, str)] if recent else [],
             "target": str(link.get("target") or ""), "at": t, "kind": kind, "event_id": str(r.get("event_id")),
             "graph_key": r.get("graph_key"), "n": numbers.get(key), "severity": _rank(ev.get("severity")),
             "creates": any(isinstance(a, dict) and a.get("type") == "ado.create" for a in (r.get("actions") or [])),
@@ -208,7 +221,7 @@ def post_note(idx, rec, n=None):
     row, common = best
     number = f"（#{row['n']}）" if row["n"] else ""
     if any(not t.startswith("ado:") for t in common):   # the same case (its fingerprint): with the time it was seen
-        return f"↔ 同じ件の可能性: {_hm(row['at'])} {_label(row)}{number}"
+        return f"↔ 同じ件の可能性: {_stamp(row['at'], idx)} {_label(row)}{number}"
     return f"↔ {_label(row)}{number}"
 
 
@@ -221,17 +234,19 @@ def notice_note(idx, rec):
         earlier = _same_case_within_a_day(idx, rec, _fp_of(rec))
         if earlier:
             first = min(earlier, key=lambda r: r["at"])
-            return {"prefix": f"再発火 {len(earlier) + 1} 回目（初回 {_hm(first['at'])}）: ", "tail": ""}
+            return {"prefix": f"再発火 {len(earlier) + 1} 回目（初回 {_stamp(first['at'], idx)}）: ", "tail": ""}
     return {"prefix": "", "tail": post_note(idx, rec) or ""}
 
 
 def attach(res, ev, out, now=None):
     """Adds the `link` of the event to the judgment `res` (its event and graph_key are set already), and dup_of to an ado.create that
     repeats one of the same case within 24 hours (the time of the first). Reads the records and writes nothing. Returns res."""
+    fp = fingerprint(ev)
+    if fp is None and not _names_a_number(ev):   # nothing here can link: the records are not read
+        return res
     data = fsutil.read_json(Path(out) / "approvals.json", {"items": {}})
     items = data.get("items") if isinstance(data, dict) and isinstance(data.get("items"), dict) else {}
     idx = index(out, items, now)
-    fp = fingerprint(ev)
     refs = refs_of(ev, idx["known"])
     if fp is not None or refs:
         res["link"] = {"fp": fp, "refs": refs, "target": target_of(ev)}
@@ -241,5 +256,5 @@ def attach(res, ev, out, now=None):
             first = min(earlier, key=lambda r: r["at"])
             for a in res.get("actions") or []:
                 if isinstance(a, dict) and a.get("type") == "ado.create":
-                    a["dup_of"] = _hm(first["at"])
+                    a["dup_of"] = _stamp(first["at"], idx)
     return res

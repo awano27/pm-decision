@@ -1,6 +1,6 @@
 """Related items (R19, setting link_related=1): the same case under another name is shown beside it, an alert that comes back
-within 24 hours is a 再発火 notice, a duplicate ado.create is marked dup_of, and a Teams message that names a pending ADO item shows
-its number. Nothing is merged, dropped or silenced, the judge never sees the link, and with the setting 0 every text and record is
+within 24 hours is a 再発火 notice, a duplicate ado.create is marked dup_of, a Teams message that names a pending ADO item shows its
+number, and a minutes line of the same text is linked for 35 days. Nothing is merged, dropped or silenced, the judge never sees the link, and with the setting 0 every text and record is
 the one captured before the change (golden). No network, no Teams: the bridge is a fake."""
 try:   # isolation from the real state folder, whichever way the tests are started
     from . import isolate  # noqa: F401
@@ -10,7 +10,6 @@ except ImportError:
 import copy
 import json
 import os
-import re
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -70,6 +69,15 @@ def pend(out, res):
     """A decision that waits for the PM, as cli.process queues it and notify posts it: an approval item (number 1)."""
     (Path(out) / "queue.jsonl").write_text(json.dumps({**res, "needs_human": True}, ensure_ascii=False) + "\n", encoding="utf-8")
     notify.notify(out, FakeBridge(), send=True)
+
+
+def queue_posts(out, *results):
+    """The approval posts of `results`, as notify posts them: queued in this order (the first is #1, the next #2 ...); the texts only."""
+    (Path(out) / "queue.jsonl").write_text("".join(json.dumps({**r, "needs_human": True}, ensure_ascii=False) + "\n" for r in results),
+                                           encoding="utf-8")
+    bridge = FakeBridge()
+    notify.notify(out, bridge, send=True)
+    return [text for text, _ in bridge.posts]
 
 
 class SpyStub(StubBackend):
@@ -213,17 +221,93 @@ class TestAChatThatNamesAnAdoItem(unittest.TestCase):
         self.assertTrue(on.splitlines()[1].startswith(off.splitlines()[1]), (on, off))
         self.assertEqual(on.splitlines()[2:], off.splitlines()[2:])
 
-    def test_the_approval_post_gets_the_same_arrow_text(self):
+    def approval_posts(self, out, chat=CHAT_REF):
+        """The approval posts of the ADO item (#1) and of the chat that names it (#2), as notify posts them."""
+        ado = process(copy.deepcopy(ADO_ITEM), GRAPHS, StubBackend(), out, PBS, dedup=True)[0]
+        res = process(copy.deepcopy(chat), GRAPHS, StubBackend(), out, PBS, dedup=True)[0]
+        return queue_posts(out, ado, res)
+
+    def test_the_approval_post_of_a_chat_that_names_a_pending_ado_item_ends_its_arrow_line_with_the_item(self):
+        with mock.patch.dict(os.environ, {"KIMERU_LINK_RELATED": "1"}), tempfile.TemporaryDirectory() as d:
+            ado_post, chat_post = self.approval_posts(Path(d))
+            lines = chat_post.splitlines()
+            self.assertTrue(lines[0].startswith("[kimeru #2]"), chat_post)
+            self.assertTrue(lines[1].endswith(" ↔ ADO #4512（#1）"), chat_post)
+            self.assertLessEqual(len(lines), 5)
+            self.assertNotIn("↔", ado_post)
+
+    def test_with_the_setting_0_the_approval_posts_have_no_arrow_and_linking_changes_only_the_arrow_line(self):
+        def posts(setting):
+            with mock.patch.dict(os.environ, {"KIMERU_LINK_RELATED": setting}), tempfile.TemporaryDirectory() as d:
+                return self.approval_posts(Path(d))
+
+        off, on = posts("0"), posts("1")
+        self.assertFalse(any("↔" in text for text in off), off)
+        self.assertEqual(on[0], off[0])
+        off_lines, on_lines = off[1].splitlines(), on[1].splitlines()
+        self.assertEqual(len(on_lines), len(off_lines))
+        self.assertEqual(on_lines[0], off_lines[0])
+        self.assertEqual(on_lines[1], f"{off_lines[1]} ↔ ADO #4512（#1）")
+        self.assertEqual(on_lines[2:], off_lines[2:])
+
+    def test_the_approval_post_of_a_sev1_refire_says_the_same_case_and_keeps_its_other_lines(self):
+        def posts(setting):
+            with mock.patch.dict(os.environ, {"KIMERU_LINK_RELATED": setting}), tempfile.TemporaryDirectory() as d:
+                out = Path(d)
+                first = process(alert("/subscriptions/x/alerts/a1", "2026-09-23T09:30:00Z", "Sev1"), GRAPHS, StubBackend(), out, PBS,
+                                dedup=True)[0]
+                second = process(alert("/subscriptions/x/alerts/a2", "2026-09-23T10:00:00Z", "Sev1"), GRAPHS, StubBackend(), out, PBS,
+                                 dedup=True)[0]
+                return queue_posts(out, first, second)
+
+        off, on = posts("0"), posts("1")
+        self.assertFalse(any("↔" in text for text in off), off)
+        self.assertEqual(on[0], off[0])
+        off_lines, on_lines = off[1].splitlines(), on[1].splitlines()
+        self.assertLessEqual(len(on_lines), 5)
+        self.assertEqual(len(on_lines), len(off_lines))
+        self.assertEqual(on_lines[0], off_lines[0])
+        self.assertTrue(on_lines[1].startswith(off_lines[1] + " ↔ 同じ件の可能性: "), on_lines[1])
+        self.assertRegex(on_lines[1], r"アラート .+（#1）$")
+        self.assertEqual(on_lines[2:], off_lines[2:])
+
+
+class TestAMinutesLineComesBackWithin35Days(unittest.TestCase):
+    NOW = datetime(2026, 10, 12, 12, 0, tzinfo=timezone.utc)
+
+    def write_old_row(self, d, kind, days_ago, link_value):
+        at = (self.NOW - timedelta(days=days_ago)).isoformat(timespec="seconds")
+        row = {"graph": "weekly", "graph_key": "weekly:old", "event_kind": kind, "event_id": "m1", "node": "triage", "at": at,
+               "event": {"kind": kind}, "link": link_value}
+        (Path(d) / "decisions.jsonl").write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+        return row
+
+    def test_a_minutes_line_of_the_same_text_is_linked_with_its_date_within_35_days_and_nothing_else_is(self):
+        from kimeru import link
+        fp = "e" * 12
+
+        def post_note(kind, days_ago, refs, fp_value):
+            with tempfile.TemporaryDirectory() as d:
+                target = {"fp": fp_value, "refs": refs, "target": "決済の遅延リスク"}
+                self.write_old_row(d, kind, days_ago, target)
+                new = {"graph": "weekly", "graph_key": "weekly:new", "event_kind": kind, "event_id": "m2", "node": "triage",
+                       "event": {"kind": kind}, "link": target}
+                return link.post_note(link.index(d, {}, now=self.NOW), new)
+
+        old_at = (self.NOW - timedelta(days=20)).astimezone()
+        self.assertEqual(post_note("meeting.item", 20, [], fp),
+                         f"↔ 同じ件の可能性: {old_at.month}/{old_at.day} {old_at.strftime('%H:%M')} 議事録 決済の遅延リスク")
+        self.assertIsNone(post_note("meeting.item", 36, [], fp))         # older than 35 days
+        self.assertIsNone(post_note("monitor.alert", 20, [], fp))        # an alert counts for 7 days only
+        self.assertIsNone(post_note("meeting.item", 20, ["ado:4512"], None))   # the ADO numbers of an old record do not count
+        self.assertEqual(post_note("meeting.item", 2, ["ado:4512"], None), "↔ 議事録 決済の遅延リスク")
+
+    def test_an_ado_number_of_an_old_record_is_not_a_known_item(self):
         from kimeru import link
         with tempfile.TemporaryDirectory() as d:
-            out = Path(d)
-            with mock.patch.dict(os.environ, {"KIMERU_LINK_RELATED": "1"}):
-                self.process_pending_ado_then_chat(out, CHAT_REF)
-                items = json.loads((out / "approvals.json").read_text(encoding="utf-8"))["items"]
-                index = link.index(out, items)
-                record = rows(out, "decisions.jsonl")[-1]
-                self.assertEqual(link.post_note(index, record, 2), "↔ ADO #4512（#1）")
-                self.assertIsNone(link.post_note(None, record, 2))
+            self.write_old_row(d, "ado.workitem.created", 20, {"fp": "ado:4512", "refs": [], "target": "決済 API"})
+            self.assertNotIn("4512", link.index(d, {}, now=self.NOW)["known"])
+            self.assertEqual(len(link.index(d, {}, now=self.NOW)["rows"]), 0)
 
 
 class TestTheRecordKeepsNoIdentifiers(unittest.TestCase):

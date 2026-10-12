@@ -107,10 +107,12 @@ def candidates(out, now=None):
     The newest judgment of each decision counts."""
     now = _aware(now)
     since = now - WINDOW
-    labeled = {r.get("key") for r in review.read_jsonl(review.reviews_path())}
+    labeled = {r.get("key") for r in review.read_jsonl(review.reviews_path()) if isinstance(r, dict)}
     carded = {it.get("key") for it in load(out)["items"]}
     seen, found = set(), []
     for rec in reversed(review.read_jsonl(Path(out) / "decisions.jsonl")):
+        if not isinstance(rec, dict):   # a damaged line (null, a number, a list): not a decision, and no card for it
+            continue
         key = review.decision_key(rec)
         if key in seen:
             continue
@@ -125,9 +127,13 @@ def candidates(out, now=None):
             continue
         if not since <= at <= now:
             continue
-        if (rec.get("judge") or {}).get("name") == STUB or key in labeled or key in carded:
+        judge = rec.get("judge") or {}
+        if not isinstance(judge, dict) or judge.get("name") == STUB or key in labeled or key in carded:
             continue
-        if not any("matched" not in (step.get("answer") or {}) for step in rec["path"]):
+        path = rec["path"]   # a damaged path (not a list of objects, or an answer that is not one) is not a decision a card can show
+        if not isinstance(path, list) or not all(isinstance(s, dict) and isinstance(s.get("answer") or {}, dict) for s in path):
+            continue
+        if not any("matched" not in (step.get("answer") or {}) for step in path):
             continue
         found.append(rec)
     return found
@@ -168,7 +174,7 @@ def _post(bridge, text):
         return getattr(e, "data", None)
 
 
-def step(out, bridge, now=None, brief_done=False, real=True, send=True, rng=None):
+def step(out, bridge, now=None, brief_done=False, real=False, send=False, rng=None):
     """The day's cards, once a day, after the morning brief (the cycle calls it with real and send). Returns the steps done
     ("S1:posted", "S1:unknown", "S1:not_sent"), [] when there is nothing to do, None when it is off or the approvals lock is busy.
     A card that was not sent is tried again on the next cycle of the day; one that may have been sent is not posted again."""

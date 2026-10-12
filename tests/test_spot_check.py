@@ -239,6 +239,15 @@ class TestWhichDecisionsAreChosen(Base):
             self.assertEqual(self.step(now=NOW + timedelta(hours=1)), [])
             self.assertEqual(len(self.chat.cards()), 5)
 
+    def test_a_damaged_line_of_the_decisions_file_is_no_candidate_and_the_cards_go_on(self):
+        damaged = [{**decided(3), "path": "abc"}, {**decided(4), "path": [1]},
+                   {**decided(5), "path": [{"node": "intent", "edge": "decision", "answer": 5}]},
+                   {**decided(6), "path": {"node": "intent"}}, {**decided(7), "judge": "Kev"}]
+        write_rows(self.out, [None, 42, [1, 2], "text"] + damaged[:2] + [decided(1)] + damaged[2:] + [decided(2)])
+        self.assertEqual(sorted(self.candidates()), ["c-1", "c-2"])
+        self.assertEqual(self.step(), ["S1:posted", "S2:posted"])
+        self.assertEqual(len(self.chat.cards()), 2)
+
 
 class TestTheCardsAfterTheBrief(Base):
     def test_no_card_is_posted_before_the_morning_brief_of_the_day(self):
@@ -248,11 +257,66 @@ class TestTheCardsAfterTheBrief(Base):
         self.assertIsNone(self.state())
 
     def test_nothing_is_posted_unless_it_is_a_real_send(self):
+        from kimeru import spot
         write_rows(self.out, [decided(1)])
         self.assertIsNone(self.step(real=False))
         self.assertIsNone(self.step(send=False))
+        self.assertIsNone(spot.step(self.out, self.chat, now=NOW, brief_done=True))   # the defaults are no real send either
         self.assertEqual(self.chat.posts, [])
         self.assertIsNone(self.state())
+
+    def test_a_card_waits_while_the_approvals_lock_is_held_by_another_step(self):
+        from kimeru import fsutil
+        write_rows(self.out, [decided(1)])
+        with fsutil.exclusive(notify.lock_path(self.out)) as held:
+            self.assertTrue(held)
+            self.assertIsNone(self.step())
+        self.assertEqual(self.chat.posts, [])
+        self.assertIsNone(self.state())
+        self.assertEqual(self.step(), ["S1:posted"])
+
+    def test_the_counts_of_the_digest_push_week_brief_work_and_trial_are_the_same_with_the_cards(self):
+        import contextlib
+        import io
+        from kimeru import autorun, cli, stats, work
+        write_rows(self.out, [decided(1), decided(2), decided(21, needs_human=True), decided(22, needs_human=True),
+                              decided(23, needs_human=True)])
+        ap = notify.Approvals(self.out)
+        for n in (21, 22, 23):   # #1 waits on the screen, #2 is not posted yet (unposted), #3 is approved (work)
+            ap.add(f"{GRAPH}:c-{n}:log_fyi", decided(n, needs_human=True))
+        ap.data["items"]["1"].update({"posted": True})
+        ap.data["items"]["3"].update({"posted": True, "status": "approved"})
+        ap.save()
+
+        def counts():
+            with contextlib.redirect_stdout(io.StringIO()) as shown:
+                cli.digest(self.out)
+            items = notify.Approvals(self.out).data["items"]
+            waiting = sorted(int(n) for n, it in items.items() if it["posted"] and it["status"] == "pending")
+            return {"approvals": (self.out / "approvals.json").read_bytes(), "digest": shown.getvalue(),
+                    "push": push.message(waiting, 0, notify.unposted_count(self.out)),
+                    "week": stats.weekly_lines(self.out, now=NOW), "work": work.list_work(self.out),
+                    "trial": autorun.build_report(self.out, now=datetime(2026, 10, 12, 10, 0)),
+                    "brief": brief_mod.build(self.out, StubBackend(), now=NOW)[0]}
+
+        before = counts()
+        self.assertEqual([r["state"] for r in before["work"]], ["Unknown"])   # the approved item is in the work list
+        self.assertIn("確認待ち 1 件", before["push"])
+        self.step()
+        self.step(now=NOW + timedelta(minutes=5))
+        self.assertEqual(len(self.chat.cards()), 2)
+        self.assertEqual(counts(), before)
+        self.assertFalse((self.out / "executions.jsonl").exists())
+
+    def test_the_card_files_keep_no_message_body_and_the_reply_leaves_none_either(self):
+        body = "ZZ-BODY-7731 来週の件"
+        write_rows(self.out, [decided(1, path=ASKED, event={"author": "Sato", "text": body}, summary=body)])
+        self.step(rng=random.Random(3))
+        self.reply("正しい S1")
+        self.assertIn("ZZ-BODY-7731", self.chat.cards()[0])   # the control: the card itself carries the body
+        for name in ("spot.json", "labels.log.jsonl"):
+            self.assertNotIn("ZZ-BODY-7731", (self.out / name).read_text(encoding="utf-8"), name)
+        self.assertEqual([r["verdict"] for r in self.reviews()], ["yes"])
 
     def test_a_card_has_its_own_prefix_and_names_no_hash_number(self):
         write_rows(self.out, [decided(1)])
@@ -408,16 +472,25 @@ class TestTheRepliesLabelTheDecision(Base):
         self.assertFalse((self.out / "approvals.json").exists())
 
     def test_a_card_reply_never_labels_an_approval_number(self):
-        ap = notify.Approvals(self.out)
-        for n in (1, 2, 3):
-            ap.add(f"{GRAPH}:c-{n + 10}:log_fyi", decided(n + 10))
-            ap.data["items"][str(n)].update({"posted": True, "status": "pending"})
-        ap.save()
-        self.reply("違う S3")
-        self.reply("違う S1")
-        items = notify.Approvals(self.out).data["items"]
-        self.assertTrue(all("labeled" not in items[str(n)] for n in (1, 2, 3)))
-        self.assertEqual([r["key"] for r in self.reviews()], [f"{GRAPH}:c-1:log_fyi"])
+        with mock.patch.dict(os.environ, {"KIMERU_LEARN": "1"}):   # learn=1: `違う N` labels #N (R03), so `違う S<k>` must not
+            write_rows(self.out, [decided(1, path=ASKED)] + [decided(n + 10, needs_human=True) for n in (1, 2, 3)])
+            ap = notify.Approvals(self.out)
+            for n in (1, 2, 3):
+                ap.add(f"{GRAPH}:c-{n + 10}:log_fyi", decided(n + 10, needs_human=True))
+                ap.data["items"][str(n)].update({"posted": True, "status": "pending"})
+            ap.save()
+            self.chat.timeline = ["S:1", "P:1", "P:2", "P:3"]   # the approval posts stand on the screen above the replies
+            self.reply("違う S3")
+            self.reply("違う S1")
+            items = notify.Approvals(self.out).data["items"]
+            self.assertTrue(all("labeled" not in items[str(n)] for n in (1, 2, 3)))
+            self.assertEqual([r["key"] for r in self.reviews()], [f"{GRAPH}:c-1:log_fyi"])
+            # the control, in the same setup: `違う 3` does label #3, so the label path is live and only `S` is kept out of it
+            self.reply("違う 3")
+            items = notify.Approvals(self.out).data["items"]
+            self.assertEqual(items["3"].get("labeled"), {"revision": 1})
+            self.assertEqual([(r["key"], r["verdict"]) for r in self.reviews()],
+                             [(f"{GRAPH}:c-1:log_fyi", "wrong"), (f"{GRAPH}:c-13:log_fyi", "wrong")])
 
     def test_the_fresh_reading_treats_a_card_as_neither_an_approval_post_nor_a_reply_to_one(self):
         fe = notify.fresh_entries
@@ -435,6 +508,26 @@ class TestTheRepliesLabelTheDecision(Base):
         daily.cycle(self.out, inbox, GRAPHS, StubBackend(), PBS, process, bridge=t, send=True, now=datetime(2026, 10, 12, 2, 0), real=True)
         self.assertEqual([r["verdict"] for r in self.reviews()], ["wrong"])
         self.assertEqual(self.state()["items"][0]["answer"]["verdict"], "wrong")
+
+
+class TestTheSelfChatIsReadOnlyWhileACardWaits(Base):
+    PER_DAY = "1"
+
+    def test_the_self_chat_is_read_only_while_a_card_waits_for_its_answer(self):
+        write_rows(self.out, [decided(1, path=ASKED)])
+        reads = []
+        read = self.chat.read
+        self.chat.read = lambda: reads.append(1) or read()
+        notify.collect(self.out, self.chat, real=True, send=True, now=NOW)
+        self.assertEqual(len(reads), 0)                      # no card: Teams is not read
+        self.step(rng=random.Random(3))
+        notify.collect(self.out, self.chat, real=True, send=True, now=NOW + timedelta(minutes=5))
+        self.assertEqual(len(reads), 1)                      # a card waits for its answer
+        self.reply("正しい S1", now=NOW + timedelta(minutes=10))
+        self.assertEqual(len(reads), 2)
+        self.assertEqual([r["verdict"] for r in self.reviews()], ["yes"])
+        notify.collect(self.out, self.chat, real=True, send=True, now=NOW + timedelta(minutes=15))
+        self.assertEqual(len(reads), 2)                      # answered: not read again
 
 
 @unittest.skipUnless(os.name == "nt" and shutil.which("powershell"), "needs Windows PowerShell")

@@ -106,7 +106,7 @@ def attach(it, n, text):
 def _decisions(out):
     """The decisions that carry their event (kimeru review needs it) and their path, by decision key."""
     return {review.decision_key(r): r for r in review.read_jsonl(Path(out) / "decisions.jsonl")
-            if r.get("event") and r.get("path") is not None}
+            if isinstance(r, dict) and r.get("event") and r.get("path") is not None}
 
 
 def row_of(out, key):

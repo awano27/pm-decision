@@ -13,6 +13,8 @@ item of the same case (`↔ 同じ件の可能性: 10:02 アラート <rule>（#
 alert that comes back within 24 hours with the same or a lower severity is a 再発火 notice (`再発火 3 回目（初回 10:02）: ` in front
 of its first line); a repeated ado.create gets dup_of (the time of the first one) and stays a dry run. Nothing is merged, dropped,
 quieted or moved to another route, and a severe notice is sent as before. Reads only what the records already keep.
+R32 (setting merge_recurring=1): `same_recurring` says when a new alert is a recurrence of a waiting item, and notify.fold_recurring
+joins it (the same number, revision + 1, posted again). The link then keeps only the fingerprint (attach_case), never the names.
 """
 import hashlib
 import re
@@ -258,3 +260,44 @@ def attach(res, ev, out, now=None):
                 if isinstance(a, dict) and a.get("type") == "ado.create":
                     a["dup_of"] = _stamp(first["at"], idx)
     return res
+
+
+# ---- R32: a recurring alert joins the waiting item (merge_recurring=1; notify.fold_recurring does the merge) ----
+
+SEVERE_RANK = 3   # Sev1 (high) and Sev0 (critical) are never joined: a recurrence of them keeps its own number
+
+
+def recurring_enabled():
+    """merge_recurring=1 (R32): a recurring alert of the same case joins its waiting item. 0 (the default): nothing is merged."""
+    return config.value("merge_recurring") == "1"
+
+
+def attach_case(res, ev):
+    """R32 (merge_recurring=1, link_related=0): the case's fingerprint only, so that a later recurrence can be matched. The judge
+    never sees it, and nothing else is linked."""
+    fp = fingerprint(ev) if ev.get("kind") == "monitor.alert" else None   # only an alert comes back (an ADO item never joins)
+    if fp is not None:
+        res["link"] = {"fp": fp, "refs": [], "target": ""}
+
+
+def same_recurring(rec, res):
+    """True when `res`, a new alert result, is a recurrence of the item whose record is `rec`: the same graph and node, the same
+    fingerprint (rule and resource), no notice raised by `res`, neither severity Sev0/1, and `res` not more severe than `rec`.
+    A severity that cannot be read is no match. The item's status is the caller's to check."""
+    fp = _fp_of(res)
+    if fp is None or res.get("notify") or fp != _fp_of(rec):
+        return False
+    if res.get("event_kind") != "monitor.alert" or rec.get("event_kind") != "monitor.alert":   # the queue lines of this cycle too
+        return False
+    if rec.get("graph") != res.get("graph") or rec.get("node") != res.get("node"):
+        return False
+    old, new = _rank_of(rec), _rank_of(res)
+    return old is not None and new is not None and old < SEVERE_RANK and new < SEVERE_RANK and new <= old
+
+
+def hm_of(at):
+    """HH:MM (local time) of an ISO time, as a 再発 followup line shows it; the current time when `at` cannot be read."""
+    try:
+        return datetime.fromisoformat(str(at)).astimezone().strftime("%H:%M")
+    except (TypeError, ValueError):
+        return datetime.now().astimezone().strftime("%H:%M")

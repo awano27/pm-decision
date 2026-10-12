@@ -184,8 +184,14 @@ def _merge_into_pending(out, ev, res, source_event=None, source_request=None, so
     number, or, for a thanks or OK, only as a followup line) instead of becoming a second one, but only when all of these
     hold; otherwise it is a matter of its own: the same sender as the waiting item, a result that raises no notice, and a
     result that goes to the same place as the waiting item or needs nothing. `res` is the judgment of the new message.
-    Returns True when it was merged."""
-    if ev.get("kind") != "teams.chat" or not ev.get("chat_id") or not ev.get("author") or res.get("notify"):
+    Returns True when it was merged. R32: a recurring alert (monitor.alert) joins its waiting item the same way at
+    merge_recurring=1 (notify.fold_recurring: the same case, a severity that does not rise, never Sev0/1)."""
+    from . import link as linking
+    recurring = ev.get("kind") == "monitor.alert"
+    if recurring:
+        if not linking.recurring_enabled():
+            return False
+    elif ev.get("kind") != "teams.chat" or not ev.get("chat_id") or not ev.get("author") or res.get("notify"):
         return False
     from . import notify
     try:
@@ -194,6 +200,8 @@ def _merge_into_pending(out, ev, res, source_event=None, source_request=None, so
                 _append(out / "warnings.jsonl", {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                                                  "merge": "skipped: approvals.json is in use by another run", "event_id": ev.get("id")})
                 return False
+            if recurring:
+                return notify.fold_recurring(out, notify.Approvals(out), res, source_key=source_key) is not None
             return _merge_locked(out, ev, res, notify, source_event=source_event,
                                  source_request=source_request, source_key=source_key,
                                  source_material=source_material)
@@ -288,12 +296,7 @@ def _merge_locked(out, ev, res, notify, source_event=None, source_request=None, 
             if latest:
                 fulltext.save(out, key, latest, request=latest.get("request"), material=latest.get("material"))
             fulltext.drop_safe(out, source_key)
-        preserve = {name: it[name] for name in ("key", "work", "handoff_evidence", "handoff_unknown",
-                                                 "measurement", "measurement_history",
-                                                 "delivery_unknown", "delivery_unknown_part", "delivery_unknown_at",
-                                                 "delivery_unknown_revision", "delivery_unknown_generation", "delivery_attempt",
-                                                 "held_at", "hold_count", "hold_round")   # R09: when a hold began, its count and its round carry over; the day does not (the item is pending again)
-                    if name in it}
+        preserve = {name: it[name] for name in notify.FOLLOWUP_KEEP if name in it}   # R09: the hold marks carry over (notify.FOLLOWUP_KEEP)
         if it.get("delivery_unknown") and "delivery_unknown_revision" not in preserve:
             preserve["delivery_unknown_revision"] = revision
         it.clear()
@@ -536,6 +539,8 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
                 res["answers_case"] = answer
             if linking.enabled():   # R19 (link_related=1): the record's link and dup_of; the judge and the writer never see it
                 linking.attach(res, ev_run, out, now=link_at)
+            elif linking.recurring_enabled():   # R32 (merge_recurring=1): the case's fingerprint, which a recurrence is matched by
+                linking.attach_case(res, ev_run)
             if attention.recording():   # R17: whether this item may reach the PC and the phone at once (off: no field, the records are unchanged; R27: also while 休み is read)
                 res["attn"] = attention.judge(g, res, ev_run)
             source_key = f"{res.get('graph')}:{res.get('event_id')}:{res.get('node')}"

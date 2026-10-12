@@ -607,6 +607,15 @@ def format_detail(n, rec, full=None, precedent=None, promise=None):
     return "\n".join(lines)
 
 
+# what a follow-up keeps of the item it replaces: the case, its work and handoff marks, the measurement, the delivery
+# state and the hold state (cli._merge_locked, fold_recurring)
+FOLLOWUP_KEEP = ("key", "work", "handoff_evidence", "handoff_unknown",
+                 "measurement", "measurement_history",
+                 "delivery_unknown", "delivery_unknown_part", "delivery_unknown_at",
+                 "delivery_unknown_revision", "delivery_unknown_generation", "delivery_attempt",
+                 "held_at", "hold_count", "hold_round")   # R09: when a hold began, its count and its round carry over; the day does not (the item is pending again)
+
+
 class Approvals:
     def __init__(self, out):
         self.path = Path(out) / "approvals.json"
@@ -685,6 +694,50 @@ def next_measurement(item, ready_at=None, source=None):
     current.update({k: previous[k] for k in ARRIVAL_KEYS if k in previous})   # the first arrival stays through every generation
     item["measurement"] = current
     item["record"]["measurement"] = dict(current)
+
+
+def fold_recurring(out, ap, res, source_key=None):
+    """R32 (merge_recurring=1, link.same_recurring): a recurrence of a waiting alert joins that item under its own number instead of
+    becoming a new one. The item is posted again (revision + 1, `posted` False) with a `再発 HH:MM` followup line. Its status stays
+    pending (or held): the PM's OK is still needed, and nothing is approved, executed or sent. `res` is the new alert result, or a
+    queue line of this cycle; its full text, if any, is at `source_key` and moves to the item. The caller holds the approvals lock
+    and passes the Approvals of its run (items it added and did not save yet are seen). Returns the item's number (str) when joined,
+    else None."""
+    from . import link
+    from .cli import FOLLOWUPS_MAX, _append
+    from . import fulltext
+    for n, it in ap.data["items"].items():
+        rec = it.get("record") if isinstance(it.get("record"), dict) else {}
+        if it.get("status") not in ("pending", "held") or not link.same_recurring(rec, res):
+            continue
+        revision = int(it.get("revision") or rec.get("revision") or 1)
+        at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        updated = copy.deepcopy(res)
+        updated["revision"] = revision + 1
+        updated["followups"] = (list(rec.get("followups") or []) + [{"text": f"再発 {link.hm_of(res.get('at'))}", "at": at}])[-FOLLOWUPS_MAX:]
+        if it.get("status") == "held" or rec.get("held_before"):
+            updated["held_before"] = True
+        key = it["key"]
+        if source_key and source_key != key:
+            latest = fulltext.load(out, source_key)
+            fulltext.drop_safe(out, key)   # the superseded full text goes, as in a follow-up of a chat
+            if latest:
+                fulltext.save(out, key, latest, request=latest.get("request"), material=latest.get("material"))
+            fulltext.drop_safe(out, source_key)
+        preserve = {name: it[name] for name in FOLLOWUP_KEEP if name in it}
+        if it.get("delivery_unknown") and "delivery_unknown_revision" not in preserve:
+            preserve["delivery_unknown_revision"] = revision
+        it.clear()
+        it.update(preserve)
+        it.update({"revision": revision + 1, "status": "pending", "posted": False, "toasted": False,
+                   "request_posted": False, "record": updated})
+        next_measurement(it, ready_at=res.get("measurement", {}).get("ready_at"),
+                         source=res.get("measurement", {}).get("source"))
+        res["measurement"] = dict(it["measurement"])
+        ap.save(compact=True)   # the stale draft is replaced: no backup of it is kept
+        _append(Path(out) / "merged.jsonl", {"at": at, "into": key, "event_id": res.get("event_id"), "revision": revision + 1})
+        return str(n)
+    return None
 
 
 def _key(rec):
@@ -1239,9 +1292,16 @@ def _notify_locked(out, bridge, send, real):
     ap = Approvals(out)
     q = out / "queue.jsonl"
     rows = [json.loads(l) for l in q.read_text(encoding="utf-8").splitlines() if l.strip()] if q.exists() else []
+    from . import link as linking   # R32 (merge_recurring=1): a recurrence queued in this cycle joins the waiting item of its case
     for rec in rows:
-        if not ap.known(_key(rec)):
-            ap.add(_key(rec), rec)
+        key = _key(rec)
+        if ap.known(key) or key in ap.data.get("folded", {}):   # a folded line stays in queue.jsonl: it is not folded twice
+            continue
+        joined = fold_recurring(out, ap, rec, source_key=key) if linking.recurring_enabled() else None
+        if joined is not None:
+            ap.data.setdefault("folded", {})[key] = joined
+            continue
+        ap.add(key, rec)
     ap.save()   # an item that cannot be posted now must still exist (and be counted as waiting) after a failed post
     posted = []
     from . import fulltext, memory, promises

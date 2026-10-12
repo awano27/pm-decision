@@ -1123,6 +1123,20 @@ class TestChaseDigest(TestChaseBase):
         text = stats.render(stats.collect(self.out, NOW_UTC), share=False)
         self.assertIn("sit_hours の候補: 9,13,17（", text)
 
+    def test_the_default_interrupt_all_digest_has_no_candidate_line_even_with_six_approvals_at_sitting_hours(self):
+        """The default (interrupt=all) changes nothing in `digest --week`: six approvals at 9, 9, 13, 13, 13 and 17 o'clock give the
+        golden text WEEK_SIX, and no candidate is computed (reference.md:99: under the default nothing is written and nothing is shown)."""
+        self.write_log((9, 9, 13, 13, 13, 17))
+        with mock.patch.dict(os.environ, {"KIMERU_INTERRUPT": "all"}):
+            summary = stats.collect(self.out, NOW_UTC)
+            text = stats.render(summary, share=False)
+        self.assertIsNone(summary["sit_hours_candidate"])
+        self.assertNotIn("sit_hours の候補", text)
+        self.assertEqual(text, WEEK_SIX)
+        with mock.patch.dict(os.environ, {"KIMERU_INTERRUPT": "all"}):   # the render gate on its own: a candidate handed to it is not shown
+            forced = stats.render({**summary, "sit_hours_candidate": [9, 13, 17]}, share=False)
+        self.assertEqual(forced, WEEK_SIX)
+
 
 class TestChaseGoldenAndCycles(Cycles):
     """The texts the default keeps (written before the change), and what a real cycle keeps under each setting."""
@@ -1270,6 +1284,66 @@ class TestChaseGoldenAndCycles(Cycles):
         self.assertEqual(read_json_file(self.out / "approvals.json")["items"]["1"]["revision"], 3)   # both follow-ups merged into item 1
         self.assertFalse((self.out / "attention.json").exists())
         self.assertEqual(attention.senders(self.out), set())
+
+    # ---- AC2b: under sittings, a severe, notify or critical item is never held, not by the sittings and not by a listed sender ----
+
+    def chase_then_an_ordinary_question(self):
+        """After the chase (田中 listed; #1 and #2 announced at 11:00), 佐藤 asks an ordinary question at 11:10: it waits for 13:00 (#3).
+        The sittings and the listed sender are the state the next cycles read."""
+        self.two_held_questions_then_a_chase()
+        self.shown.clear()
+        self.sent.clear()
+        self.screen(("まだですか", "10:58", "田中", CHAT_A), ("これは何ですか", "10:59", "田中", CHAT_B),
+                    ("これは何ですか", "11:10", "佐藤", CHAT_C))
+        self.cycle(11, 10)
+        self.assertEqual((self.shown, self.sent), ([], []))
+        self.assertEqual(attention.waiting(self.out), {3})   # 佐藤's question waits; 田中 is listed, so her items are not waiting
+
+    def sato_chat_at_1130(self, preview):
+        """A chat from 佐藤 at 11:30 with `preview`, read in the cycle at 11:30 (the other chats stay on the screen)."""
+        self.screen(("まだですか", "10:58", "田中", CHAT_A), ("これは何ですか", "10:59", "田中", CHAT_B),
+                    ("これは何ですか", "11:10", "佐藤", CHAT_C), (preview, "11:30", "佐藤", CHAT_D))
+        return self.cycle(11, 30)
+
+    def last_decision(self):
+        return json.loads((self.out / "decisions.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+
+    def test_a_critical_item_held_for_a_recovery_note_is_toasted_and_pushed_in_the_cycle_it_arrives_while_a_sender_is_listed(self):
+        """A critical rule that said mixed (a recovery note) posts an item that waits for a sitting unless it is urgent: it is #4, a
+        pending item, not a notice, so the held path is the one that must let it through."""
+        self.chase_then_an_ordinary_question()
+        self.sato_chat_at_1130("本番が落ちていましたが復旧しました")
+        self.assertEqual(self.shown, [("kimeru: 確認待ち 1 件", "#4")])
+        self.assertEqual(self.sent, [("webhook", "kimeru: 確認待ち 1 件（#4）。Teams の自分とのチャットを確認してください")])
+        self.assertEqual(self.last_decision()["attn"]["urgent"], True)
+        self.assertIn("critical", self.last_decision()["attn"]["why"])
+        self.assertEqual(attention.waiting(self.out), {3})                # the ordinary question still waits for 13:00
+
+    def test_a_sev1_alert_is_toasted_and_pushed_in_the_cycle_it_arrives_while_a_sender_is_listed(self):
+        self.chase_then_an_ordinary_question()
+        alert = {"kind": "monitor.alert", "id": "s1", "rule": "prod-db storage", "severity": "Sev1", "condition": "Fired",
+                 "description": "Storage 92% used on prod-db"}
+        self.inbox.mkdir(parents=True, exist_ok=True)
+        (self.inbox / "alert.json").write_text(json.dumps(alert, ensure_ascii=False), encoding="utf-8")
+        self.cycle(11, 30)
+        self.assertEqual(self.shown, [("kimeru: 確認待ち 1 件", "#4")])
+        self.assertEqual(self.sent, [("webhook", "kimeru: 確認待ち 1 件（#4）。Teams の自分とのチャットを確認してください")])
+        self.assertEqual(self.last_decision()["attn"]["urgent"], True)
+        self.assertIn("severe", self.last_decision()["attn"]["why"])
+        self.assertEqual(attention.waiting(self.out), {3})
+
+    def test_a_decision_that_asks_for_notice_is_announced_as_a_notice_at_once_while_a_sender_is_listed(self):
+        """A decision with notice is decided at once and announced as a notice (a notice is never held); its record says it is urgent
+        because of the notice, and the ordinary question of 佐藤 still waits for 13:00."""
+        self.chase_then_an_ordinary_question()
+        r = self.sato_chat_at_1130("本日の判断をお願いします")
+        self.assertEqual(r["notices"], 1)
+        self.assertEqual(r["notify"], [])
+        self.assertEqual(self.shown, [("kimeru: 自動決定の通知 1 件", "Teams の自分とのチャットを確認してください")])
+        self.assertEqual(self.sent, [("webhook", "kimeru: 自動決定の通知 1 件。Teams の自分とのチャットを確認してください")])
+        self.assertEqual(self.last_decision()["attn"]["urgent"], True)
+        self.assertIn("notify", self.last_decision()["attn"]["why"])
+        self.assertEqual(attention.waiting(self.out), {3})
 
 
 class TestChaseDocs(unittest.TestCase):

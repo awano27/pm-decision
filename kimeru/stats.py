@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
 
-from . import __version__, autorun, calibrate, config, learn, profiles, review
+from . import __version__, attention, autorun, calibrate, config, learn, profiles, review
 from .backends import JevBackend
 
 HERE = Path(__file__).resolve().parent.parent
@@ -547,7 +547,8 @@ def collect(out, now=None):
         "auto": sum(g["auto"] for g in per_graph.values()), "human": sum(g["human"] for g in per_graph.values()),
         "rule": sum(g["rule"] for g in per_graph.values()),
         "critical": sum(1 for r in decisions if r.get("notify")),
-        "per_graph": per_graph, "approvals": statuses, "approvals_undated": undated, "sit_hours_candidate": _sit_hours(dated),
+        "per_graph": per_graph, "approvals": statuses, "approvals_undated": undated,
+        "sit_hours_candidate": _sit_hours(dated) if attention.enabled() else None,   # R37: only with interrupt=sittings (the default changes nothing)
         "instruction_repeats": _repeated_instructions(dated),
         "invalid_evidence": invalid_evidence, "future_evidence": future_evidence,
         "judges": judges, "models": models, "reviewed_yes": yes, "reviewed_no": no,
@@ -684,7 +685,7 @@ def render(s, share=False):
         lines.append("承認の結果: " + "、".join(f"{LABEL.get(k, k)} {v}" for k, v in sorted(s["approvals"].items(), key=lambda kv: str(kv[0]))))
     else:
         lines.append("承認の結果: 日時つきの記録なし")
-    if not share and s.get("sit_hours_candidate"):   # R37: a suggestion only; --share never has it, and nothing is changed by it
+    if not share and attention.enabled() and s.get("sit_hours_candidate"):   # R37: a suggestion only (interrupt=sittings); --share never has it, and nothing is changed by it
         lines.append("sit_hours の候補: " + ",".join(str(h) for h in s["sit_hours_candidate"]) + "（承認が多かった時刻。自動では変えません）")
     if wk:
         if wk["replied_items"]:

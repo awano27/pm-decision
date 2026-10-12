@@ -737,21 +737,24 @@ def demote(out, g, res, ev, now=None):
     check_line result reached through an unsure kind (item_type), with no request mark, no posting, paging or gated action, no severe
     hit, and a rule that is on for its first sentence. The result then reads outcome decide, one log.only action and `demoted_by` (the
     rule id); its path and via_unsure stay. A new line from a chat stops the rules that recorded a line of that chat within
-    RULE_FOLLOWUP_HOURS; that line goes to the PM with a note in its advice."""
+    RULE_FOLLOWUP_HOURS. Whatever the graph decided, that line then goes to the PM (outcome advise, needs_human, actions only
+    proposed); so does a line whose rules could not be locked. The chat is read only while a rule is on, and only a line that
+    carries a chat_id can stop a rule (the shipped minutes scope has none, so only a manual revert or RULE_UNUSED_DAYS stops one)."""
     if not enabled() or not isinstance(res, dict) or not isinstance(ev, dict):
         return res
     from . import execute
     from . import graph as graphs
     out, now = Path(out), _naive(now) or datetime.now()
     chat = ev.get("chat_id")
-    if chat:
+    if chat and any(r.get("active") is True for r in _rules_read(out)):
         ids = _recorded_only_ids(out, chat, now)
         if ids:
             stopped = _stop_rules(out, ids, now, "followup")
-            if stopped is None:
-                return res
+            if stopped is None:   # the rules could not be locked: the line is not left to the graph's own decision
+                return {**res, "outcome": "advise", "needs_human": True}
             if stopped:
-                return {**res, "advice": f"{res.get('advice') or ''}（規則を戻しました）"}
+                return {**res, "outcome": "advise", "needs_human": True,
+                        "advice": f"{res.get('advice') or ''}（規則を戻しました）"}
     if not _eligible(res) or not _unmarked(ev):
         return res
     if any(a.get("type") in RULE_NEVER_ACTIONS or execute.is_gated(a) for a in res.get("actions") or []):

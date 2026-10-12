@@ -7,15 +7,16 @@ except ImportError:
     import isolate  # noqa: F401
 
 import copy
+import hashlib
 import json
 import os
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from kimeru import brief, cli, graph, learn, notify, plan
+from kimeru import brief, cli, execute, fulltext, graph, learn, notify, plan, stats
 from kimeru.backends import ReplayBackend
 from tests.test_notify import FakeBridge, TimelineBridge
 
@@ -262,6 +263,36 @@ class TestRuleApplies(Learn1):
         ev = line_event(9, LINE)
         self.assertEqual(learn.demote(self.out, MINUTES, res, ev, now=DAY2), res)
 
+    def test_a_result_that_pages_comments_or_is_gated_is_never_recorded_only_and_no_rule_is_used(self):
+        """AC4: oncall.page, teams.post, ado.comment and a gated kind (execute.is_gated) keep the question. The result comes back as
+        it was, and learned_rules.json is not written (the rule's uses stay 0)."""
+        self.make_rule()
+        path = [{"node": "item_type", "answer": {}, "edge": "unsure"}]
+        cases = [("oncall.page", {}), ("teams.post", {"channel": "x", "text": "t"}), ("ado.comment", {"id": "1", "text": "t"})]
+        for kind, extra in cases:
+            with self.subTest(action=kind):
+                res = {"graph": "minutes-followup", "node": "check_line", "outcome": "advise", "needs_human": True, "notify": False,
+                       "path": path, "actions": [{"type": kind, **extra}], "event_id": "m9", "advice": ""}
+                self.assertIs(learn.demote(self.out, MINUTES, res, line_event(9, LINE), now=DAY2), res)
+                self.assertEqual(rules_file(self.out)["rules"][0]["uses"], 0)
+        before = (self.out / "learned_rules.json").read_bytes()
+        # a kind outside RULE_NEVER_ACTIONS that the PM switched on for real execution: gated by execute.is_gated
+        with self.subTest(action="gated"), mock.patch.object(execute, "enabled_types", return_value={"ado.create"}):
+            res = {"graph": "minutes-followup", "node": "check_line", "outcome": "advise", "needs_human": True, "notify": False,
+                   "path": path, "actions": [{"type": "ado.create", "title": "t"}], "event_id": "m9", "advice": ""}
+            self.assertIs(learn.demote(self.out, MINUTES, res, line_event(9, LINE), now=DAY2), res)
+        self.assertEqual((self.out / "learned_rules.json").read_bytes(), before)
+        self.assertEqual(rules_file(self.out)["rules"][0]["uses"], 0)
+
+    def test_a_rule_leaves_the_graph_files_and_their_versions_alone(self):
+        def digest():
+            files = {p.name: hashlib.sha1(p.read_bytes()).hexdigest() for p in sorted((ROOT / "graphs").glob("*.json"))}
+            return files, {g["name"]: cli._graph_version(g) for lst in GRAPHS.values() for g in lst}
+        before = digest()
+        self.make_rule()
+        self.assertEqual(run_line(self.out, 10, LINE, DAY2 + timedelta(hours=1)).get("demoted_by"), "A1")
+        self.assertEqual(digest(), before)
+
     def test_a_teams_question_never_gets_a_rule_even_when_one_is_written_by_hand(self):
         write_rules(self.out, rule(graph="teams-chat-triage", node="ask_pm"))
         res = {"graph": "teams-chat-triage", "node": "ask_pm", "outcome": "advise", "needs_human": True, "notify": False,
@@ -320,6 +351,84 @@ class TestRevert(Learn1):
         got = learn.demote(self.out, MINUTES, res, ev, now=NOW)
         self.assertEqual(got["demoted_by"], "A1")
         self.assertTrue(rules_file(self.out)["rules"][0]["active"])
+
+    def test_a_stopped_followup_goes_to_the_pm_even_when_the_graph_decided_it(self):
+        """The chat signal is synthetic here: a minutes line carries no chat_id, so only a chat line can stop a rule (see demote)."""
+        write_rules(self.out, rule())
+        row = {"at": (NOW - timedelta(hours=1)).isoformat(timespec="seconds"), "demoted_by": "A1",
+               "event": {"kind": "teams.chat", "chat_id": "c1"}}
+        (self.out / "decisions.jsonl").write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+        res = {"graph": "minutes-followup", "node": "post_decision", "outcome": "decide", "needs_human": False, "notify": False,
+               "path": [{"node": "item_type", "answer": {}, "edge": "decision"}], "actions": [{"type": "log.only"}],
+               "event_id": "x", "advice": "決定"}
+        ev = {"kind": "teams.chat", "id": "x", "chat_id": "c1", "author": "山田", "text": LINE}
+        got = learn.demote(self.out, MINUTES, res, ev, now=NOW)
+        self.assertEqual((got["outcome"], got["needs_human"], got["notify"]), ("advise", True, False))
+        self.assertEqual(got["actions"], [{"type": "log.only"}])
+        self.assertIn("規則を戻しました", got["advice"])
+        self.assertFalse(rules_file(self.out)["rules"][0]["active"])
+
+    def test_a_line_whose_rules_cannot_be_locked_goes_to_the_pm_too(self):
+        write_rules(self.out, rule())
+        row = {"at": (NOW - timedelta(hours=1)).isoformat(timespec="seconds"), "demoted_by": "A1",
+               "event": {"kind": "teams.chat", "chat_id": "c1"}}
+        (self.out / "decisions.jsonl").write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+        res = {"graph": "minutes-followup", "node": "post_decision", "outcome": "decide", "needs_human": False, "notify": False,
+               "path": [], "actions": [], "event_id": "x", "advice": "決定"}
+        ev = {"kind": "teams.chat", "id": "x", "chat_id": "c1", "author": "山田", "text": LINE}
+        with mock.patch.object(learn, "_stop_rules", return_value=None):
+            got = learn.demote(self.out, MINUTES, res, ev, now=NOW)
+        self.assertEqual((got["outcome"], got["needs_human"]), ("advise", True))
+        self.assertTrue(rules_file(self.out)["rules"][0]["active"])
+
+    def test_the_chat_is_read_only_while_a_rule_is_on(self):
+        res = {"graph": "minutes-followup", "node": "post_decision", "outcome": "decide", "needs_human": False, "notify": False,
+               "path": [], "actions": [], "event_id": "x", "advice": ""}
+        ev = {"kind": "teams.chat", "id": "x", "chat_id": "c1", "author": "山田", "text": LINE}
+        with mock.patch.object(learn, "_recorded_only_ids", return_value=set()) as scan:
+            self.assertIs(learn.demote(self.out, MINUTES, res, ev, now=NOW), res)   # no rules file at all
+            self.assertFalse(scan.called)
+            write_rules(self.out, rule(at=NOW - timedelta(days=1)))
+            learn.demote(self.out, MINUTES, res, ev, now=NOW)                       # a rule that is on
+            self.assertTrue(scan.called)
+
+
+class TestNotNeededDropsTheWholeText(Learn1):
+    def test_a_not_needed_answer_deletes_the_whole_text_kept_for_a_teams_item(self):
+        cli.process({"kind": "teams.chat", "id": "t1", "chat_id": "c1", "author": "山田", "text": "資料の件、確認をお願いします"},
+                    GRAPHS, ReplayBackend({"intent": {"choice": "decision", "confidence": 0.3, "probabilities": {}}}),
+                    self.out, PBS, writer=None, dedup=True, now=NOW)
+        num = post_new(self.out)
+        key = items(self.out)[str(num)]["key"]
+        fulltext.save(self.out, key, {"text": "全文だけの一文です。見積りの件は後で整理する", "thread": []})
+        self.assertIsNotNone(fulltext.load(self.out, key))
+        answer(self.out, [f"P:{num}", f"R:不要 {num}"], NOW)
+        self.assertEqual(items(self.out)[str(num)]["status"], "rejected")
+        self.assertIsNone(fulltext.load(self.out, key))
+        for name in ("full_text.json", "approvals.log.jsonl"):
+            p = self.out / name
+            self.assertNotIn("全文だけの一文", p.read_text(encoding="utf-8") if p.exists() else "")
+
+
+class TestDigestCountsTheRuleApart(Learn1):
+    def test_a_recorded_only_line_is_counted_apart_and_jev_is_left_out_as_before(self):
+        now = datetime(2026, 10, 12, 9, 0, tzinfo=timezone.utc)
+
+        def row(eid, judge, **extra):
+            r = {"graph": "minutes-followup", "event_id": eid, "node": "check_line", "event_kind": "meeting.item",
+                 "outcome": "decide", "needs_human": False, "notify": False, "at": (now - timedelta(days=1)).isoformat(timespec="seconds"),
+                 "path": [{"node": "item_type", "answer": {}, "edge": "unsure"}], "actions": [], "summary": "週次定例: 件",
+                 "judge": {"name": judge, "model": ""}, "measurement": {"schema": 1, "source": "local", "generation": 1}}
+            r.update(extra)
+            return r
+        rows = [row("a1", "Kev"), row("a2", "Kev", demoted_by="A1", actions=[{"type": "log.only"}]), row("a3", "Jev", demoted_by="A1")]
+        (self.out / "decisions.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+        label = "規則で記録だけにした件（自動の正誤には入れていません）: 1 件"
+        text = stats.week(self.out, now=now)
+        self.assertIn(label, text)
+        self.assertIn("自動で決めた判断で、正誤に「違う」が付いた件: 0 件（対象 1 件・参考）", text)
+        self.assertIn("（Jev の判断 1 件は数えていません）", text)
+        self.assertIn(label, stats.week(self.out, share=True, now=now))
 
 
 class TestBriefAndList(Learn1):

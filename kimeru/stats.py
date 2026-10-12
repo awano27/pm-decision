@@ -686,6 +686,8 @@ def render(s, share=False):
         n_auto = wk["auto_checked"]
         lines.append("自動で決めた判断で、正誤に「違う」が付いた件: " + (f"{wk['auto_wrong']} 件（対象 {n_auto} 件{_count_note(n_auto)}）"
                                                            if n_auto else "不明（対象 0 件）"))
+        if wk.get("rule_recorded"):   # R33: a rule's recorded-only lines are not in the automatic figure above (shown only when there are some)
+            lines.append(f"規則で記録だけにした件（自動の正誤には入れていません）: {wk['rule_recorded']} 件")
         n_ok = wk["oks_with_draft"]
         lines.append("提案が一度も変わらなかった OK: " + (f"{wk['oks_unchanged']} 件（下書きのある OK {n_ok} 件{_count_note(n_ok)}）"
                                                      if n_ok else "不明（下書きのある OK 0 件）"))

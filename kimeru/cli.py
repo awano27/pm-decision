@@ -20,6 +20,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -371,14 +372,14 @@ def _earlier_messages(out, ev, at):
     return found[-CONTEXT_MESSAGES:]
 
 
-def _judge(g, ev, meter, playbooks, context=None, out=None, now=None):
+def _judge(g, ev, meter, playbooks, context=None, out=None, now=None, batch=None):
     """The graph only: no writer is called. `context` is what _judge_context made (None: the event alone)."""
     if context is None:
         res = graph.run(g, ev, meter, playbooks=playbooks)
     else:
         res = graph.run(g, ev, meter, playbooks=playbooks, state=events.state_of(ev, context))
     # R33 (learn=1 only): a minutes line that a rule names is recorded only (learn.demote); `out` is the state folder
-    return res if out is None else learn.demote(out, g, res, ev, now=now)
+    return res if out is None else learn.demote(out, g, res, ev, now=now, batch=batch)
 
 
 def _draft(res, ev, meter, writer, out=None, now=None):
@@ -473,6 +474,7 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
                 continue
             _append(out / "warnings.jsonl", {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), key: msg})
     seen = _processed(out) if dedup else set()
+    batch = uuid.uuid4().hex[:12]   # R33 (learn=1): the bullets of this payload are one batch (learn.demote: no follow-up of its own)
     results = []
     # the pull's note on when the PC saw the event (R01) is read here and kept out of the event: a measurement, not a judgment input
     note = payload.get("_kimeru") if isinstance(payload, dict) else None
@@ -503,11 +505,11 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
                             pend.put(key)                              # counted: the next cycle tries again, up to read_max_defer times
                             raise
                         read_info = fulltext.gave_up(0)
-                res = _judge(g, ev_run, meter, playbooks, context, out=out, now=now)
+                res = _judge(g, ev_run, meter, playbooks, context, out=out, now=now, batch=batch)
             else:
                 res = pend.get(key) if pend else None                 # a preview judged in an earlier cycle: continue from the reading
                 if res is None:
-                    res = _judge(g, ev, meter, playbooks, context, out=out, now=now)
+                    res = _judge(g, ev, meter, playbooks, context, out=out, now=now, batch=batch)
                 if can_read and _ends_at_pm(res, writer):              # a decision that ends at the PM: look at the whole chat
                     if tired:
                         read_info = fulltext.gave_up(fulltext.max_defer())
@@ -520,7 +522,7 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
                                 raise
                             read_info = fulltext.gave_up(0)
                     if read_info["state"] == "full":
-                        res = _judge(g, ev_run, meter, playbooks, context, out=out, now=now)      # the whole text may change the judgment
+                        res = _judge(g, ev_run, meter, playbooks, context, out=out, now=now, batch=batch)      # the whole text may change the judgment
             if pend:
                 pend.drop(key)
             res = promises.status_guard(res, ev_run, out, now)        # R18 (promises=1): a status question from a chat with an overdue promise goes to the PM

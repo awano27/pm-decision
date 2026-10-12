@@ -157,7 +157,8 @@ class TestNotNeededAnswer(Learn1):
         self.assertNotIn("not_needed_at", it)
 
     def test_a_not_needed_reply_under_a_test_post_is_not_read_by_the_real_reader(self):
-        self.assertEqual(notify.fresh_replies({"timeline": ["T:1", "R:不要 1"]}), [])
+        self.assertEqual(notify.fresh_replies({"timeline": ["P:1", "T:1", "R:不要 1"]}), [])   # R33 review fix 2: a reply after a test post
+        self.assertEqual(notify.scoped_timeline({"timeline": ["P:1", "T:1", "R:不要 1"]}, test=True), ["P:1", "R:不要 1"])
         self.assertEqual(notify.fresh_replies({"timeline": ["P:1", "R:不要 1"]}), ["不要 1"])
 
     def test_parse_not_needed_reads_the_number_only(self):
@@ -468,6 +469,44 @@ class TestFollowUpOnTheMinutesPath(Learn1):
         answer(self.out, [f"P:{num}", f"R:NG {num}"], when)
         self.assertEqual(learn.offer_rule(self.out, UNSURE_KIND, now=DAY2 + timedelta(days=1))["state"], "nothing")
 
+    def test_bullets_of_one_payload_are_not_follow_ups_of_each_other(self):
+        """R33 review fix 2: one minutes file is one payload, so its bullets are judged in one run. The bullet that names the rule is
+        recorded only, a bullet that does not name it goes to the PM, and a later bullet that names it is recorded only too: the rule
+        stays on. Only a line of a later run stops it (the test above)."""
+        self.make_rule()
+        body = {"title": "週次定例", "date": DAY2.date().isoformat(),
+                "text": f"- {LINE}\n- 別の件です。来週までに確認する\n- {PHRASE}。金曜の定例で扱う"}
+        got = cli.process(body, GRAPHS, UNSURE_KIND, self.out, PBS, writer=None, dedup=True, now=DAY2 + timedelta(hours=1))
+        self.assertEqual([r.get("demoted_by") for r in got], ["A1", None, "A1"])
+        self.assertFalse(any("（規則を戻しました）" in (r.get("advice") or "") for r in got))
+        rule_row = rules_file(self.out)["rules"][0]
+        self.assertEqual((rule_row["active"], rule_row["uses"], rule_row.get("stopped_reason")), (True, 2, None))
+
+
+class TestTheDailyCycleQueuesTheRuleCard(Learn1):
+    """R33 AC1 on the daily path: the cycle's learn_rule step (daily.cycle, real=True) is what makes the card."""
+
+    def cycle(self, now):
+        from kimeru import daily
+        bridge = FakeBridge()
+        daily.cycle(self.out, self.out / "inbox", GRAPHS, UNSURE_KIND, PBS, lambda *a, **k: [], bridge=bridge, send=True,
+                    now=now, real=True, brief_hour=24)
+        return [text for text, _ in bridge.posts if "迷ったときは記録だけにしますか" in text]
+
+    def rule_cards(self):
+        return sum(1 for it in items(self.out).values() if ((it.get("record") or {}).get("learn") or {}).get("rule"))
+
+    def test_three_not_needed_on_two_days_post_one_rule_card_in_the_daily_cycle(self):
+        self.not_needed(1, NOW)
+        self.not_needed(2, NOW)
+        self.not_needed(3, DAY2)
+        posted = self.cycle(DAY2 + timedelta(hours=1))
+        self.assertEqual(len(posted), 1)
+        self.assertTrue(posted[0].startswith("[kimeru #"))
+        self.cycle(DAY2 + timedelta(hours=2))
+        self.cycle(DAY2 + timedelta(days=1))   # the card still waits: no second card on the next day
+        self.assertEqual(self.rule_cards(), 1)
+
 
 class TestNotNeededDropsTheWholeText(Learn1):
     def test_a_not_needed_answer_deletes_the_whole_text_kept_for_a_teams_item(self):
@@ -521,6 +560,18 @@ class TestBriefAndList(Learn1):
         self.assertTrue(all("規則 A1" in line for line in lines[1:6]))
         self.assertEqual(lines[-1], "ほか 1 件")
         self.assertEqual(brief.unsure_auto(self.out, now=NOW), [])
+
+    def test_the_built_morning_brief_names_the_recorded_only_lines_with_their_rule(self):
+        """R33 review fix 2: brief.build puts the rule section in the brief (rule_section alone is not the brief)."""
+        rows = [{"at": (NOW - timedelta(hours=1)).isoformat(timespec="seconds"), "graph": "minutes-followup",
+                 "event_kind": "meeting.item", "event_id": f"m{i}", "node": "check_line", "outcome": "decide",
+                 "needs_human": False, "notify": False, "via_unsure": ["item_type"], "demoted_by": "A1",
+                 "summary": f"週次定例: 件 {i}"} for i in range(6)]
+        (self.out / "decisions.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+        text, _ = brief.build(self.out, UNSURE_KIND, now=NOW)
+        self.assertIn("規則で記録だけにした件\n", text)
+        self.assertEqual(text.count("→ 規則 A1（記録のみ）"), 5)
+        self.assertIn("ほか 1 件", text)
 
     def test_the_listing_names_the_rule_and_its_state(self):
         write_rules(self.out, rule())

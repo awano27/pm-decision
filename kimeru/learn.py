@@ -522,7 +522,7 @@ RULE_MIN_TIMES = 3       # for one sentence ...
 RULE_MIN_DAYS = 2        # ... on at least this many days
 RULE_NG_DAYS = 30        # after an NG on its card the sentence is not offered again for this many days
 RULE_UNUSED_DAYS = 60    # a rule not used (or adopted) for this many days stops applying
-RULE_FOLLOWUP_HOURS = 24  # a new line from the same source (its meeting title, or a chat_id) as a recorded-only line within this many hours stops its rule
+RULE_FOLLOWUP_HOURS = 24  # a new line from the same source (its meeting title, or a chat_id), in a later run, as a recorded-only line within this many hours stops its rule
 RULE_BRIEF_MAX = 5
 
 
@@ -735,14 +735,17 @@ def source_of(ev):
     return None
 
 
-def _recorded_only_ids(out, src, now):
-    """The ids of the rules that recorded a line of this source (source_of) within RULE_FOLLOWUP_HOURS. Reads the bounded tail of
-    decisions.jsonl (memory._tail_rows: a damaged line is no line, a missing file gives nothing)."""
+def _recorded_only_ids(out, src, now, batch=None):
+    """The ids of the rules that recorded a line of this source (source_of) within RULE_FOLLOWUP_HOURS, in an earlier run. A line of
+    the same batch (`batch`: the payload cli.process is judging) is never a follow-up of the bullets of its own payload. Reads the
+    bounded tail of decisions.jsonl (memory._tail_rows: a damaged line is no line, a missing file gives nothing)."""
     from . import memory
     ids = set()
     for row in memory._tail_rows(Path(out) / "decisions.jsonl"):
         when = _parse(row.get("at"))
         if "demoted_by" not in row or when is None or source_of(row.get("event")) != src:
+            continue
+        if batch is not None and row.get("demoted_batch") == batch:
             continue
         if timedelta(0) <= now - _naive(when) < timedelta(hours=RULE_FOLLOWUP_HOURS):
             ids.add(str(row.get("demoted_by")))
@@ -770,12 +773,13 @@ def _stop_rules(out, ids, now, reason):
         return None
 
 
-def demote(out, g, res, ev, now=None):
+def demote(out, g, res, ev, now=None, batch=None):
     """R33 (learn=1 only): a minutes line that a rule names is recorded only. Returns `res` itself unless the line is eligible: the
     check_line result reached through an unsure kind (item_type), with no request mark, no posting, paging or gated action, no severe
-    hit, and a rule that is on for its first sentence. The result then reads outcome decide, one log.only action and `demoted_by` (the
-    rule id); its path and via_unsure stay. A new line from the same source (source_of: the meeting title of a minutes line) stops
-    the rules that recorded a line of that source within RULE_FOLLOWUP_HOURS. Whatever the graph decided, that line then goes to the
+    hit, and a rule that is on for its first sentence. The result then reads outcome decide, one log.only action, `demoted_by` (the
+    rule id) and `demoted_batch` (`batch`); its path and via_unsure stay. A new line from the same source (source_of: the meeting title
+    of a minutes line) that comes in a later run stops the rules that recorded a line of that source within RULE_FOLLOWUP_HOURS. The
+    bullets of one payload (the same `batch`) are not follow-ups of each other. Whatever the graph decided, that line then goes to the
     PM (outcome advise, needs_human, actions only proposed, advice + （規則を戻しました）); so does a line whose rules could not be
     locked. The decisions are read only while a rule is on. Only a minutes line can be decided today, so a rule ends by a manual
     revert, by a follow-up of its meeting, or by RULE_UNUSED_DAYS; the Teams chat_id variant (source_of) is ready but not reached."""
@@ -786,7 +790,7 @@ def demote(out, g, res, ev, now=None):
     out, now = Path(out), _naive(now) or datetime.now()
     src = source_of(ev)
     if src and any(r.get("active") is True for r in _rules_read(out)):
-        ids = _recorded_only_ids(out, src, now)
+        ids = _recorded_only_ids(out, src, now, batch)
         if ids:
             stopped = _stop_rules(out, ids, now, "followup")
             if stopped is None:   # the rules could not be locked: the line is not left to the graph's own decision
@@ -817,8 +821,11 @@ def demote(out, g, res, ev, now=None):
             _rules_write(out, rows)
     except fsutil.LockFolderError:
         return res
-    return {**res, "outcome": "decide", "needs_human": False, "notify": False,
-            "actions": [{"type": "log.only"}], "demoted_by": hit["id"]}
+    row = {**res, "outcome": "decide", "needs_human": False, "notify": False,
+           "actions": [{"type": "log.only"}], "demoted_by": hit["id"]}
+    if batch is not None:
+        row["demoted_batch"] = batch   # the payload that carried the line (_recorded_only_ids)
+    return row
 
 
 def _adopt_rule(out, it, rec, L, now):

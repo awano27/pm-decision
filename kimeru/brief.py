@@ -350,7 +350,8 @@ def unsure_auto(out, now=None, days=1, since=None):
     since, _ = window_start(now, days, since)
     seen, found = set(), []
     for rec in reversed(_rows(Path(out) / "decisions.jsonl")):
-        if not rec.get("via_unsure") or rec.get("outcome") != "decide" or rec.get("needs_human") or rec.get("notify"):
+        if (not rec.get("via_unsure") or rec.get("outcome") != "decide" or rec.get("needs_human") or rec.get("notify")
+                or rec.get("demoted_by")):   # a rule's recorded-only line is listed under 規則で記録だけにした件 (rule_section)
             continue
         if not rec.get("at") or datetime.fromisoformat(rec["at"]) < since:
             continue
@@ -364,6 +365,29 @@ def unsure_auto(out, now=None, days=1, since=None):
                       "line": f"・{UNSURE_KIND.get(kind, '')} {graph.one_line(str(rec.get('summary') or rec.get('event_id')), 70)}".replace("・ ", "・")
                               + (f" → {what}" if what else "")})
     return found
+
+
+def rule_section(out, now=None, days=1, since=None):
+    """"規則で記録だけにした件" (R33, learn=1): up to five lines with the rule's id, and "ほか N 件". "" when none."""
+    from . import graph, learn
+    since, _ = window_start(now, days, since)
+    seen, found = set(), []
+    for rec in reversed(_rows(Path(out) / "decisions.jsonl")):
+        if not rec.get("demoted_by") or not rec.get("at") or datetime.fromisoformat(rec["at"]) < since:
+            continue
+        key = (rec.get("graph"), rec.get("event_id"))
+        if key in seen:
+            continue
+        seen.add(key)
+        label = UNSURE_KIND.get(rec.get("event_kind"), "")
+        text = graph.one_line(str(rec.get("summary") or rec.get("event_id")), 70)
+        found.append((f"・{label} {text}" if label else f"・{text}") + f" → 規則 {rec.get('demoted_by')}（記録のみ）")
+    if not found:
+        return ""
+    lines = ["規則で記録だけにした件"] + found[:learn.RULE_BRIEF_MAX]
+    if len(found) > learn.RULE_BRIEF_MAX:
+        lines.append(f"ほか {len(found) - learn.RULE_BRIEF_MAX} 件")
+    return "\n".join(lines)
 
 
 def unsure_section(out, now=None, days=1, since=None):
@@ -537,6 +561,9 @@ def build(out, backend, top=TOP, now=None, date=None, since=None):
     unsure = unsure_section(out, now=now, since=since)
     if unsure:
         text += "\n" + unsure
+    rules = rule_section(out, now=now, since=since)   # R33 (learn=1 only: nothing is recorded only at 0)
+    if rules:
+        text += "\n" + rules
     from . import promises   # R18: the 約束 section (promises=1 only; nothing is read at 0)
     if promises.enabled():
         section = promises.brief_section(out, now=now)

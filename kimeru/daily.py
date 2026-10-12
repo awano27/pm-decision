@@ -371,6 +371,7 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
         r["perf"] = perf
     if real and learn.enabled():   # R21 (learn=1 only, once a week, the daily path only): a card for a question the labels show to be answered wrongly
         _step(out, "learn", lambda: learn.offer(out, graphs, backend, now=now), r)   # (queued here; posted by the notify step below)
+        _step(out, "learn_rule", lambda: learn.offer_rule(out, backend, now=now), r)   # R33: at most one card a day for a 不要 rule
 
     def do_notify():
         got = notify.notify(out, bridge, send=send, real=real)

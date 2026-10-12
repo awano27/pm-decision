@@ -1176,7 +1176,7 @@ if ($Action -eq 'read') {
         # replies to #N before it were answered (notify.fresh_entries). The count keeps two result posts from being folded into one line.
         $entry = 'X:{0}:{1}' -f $Matches[1], $(if ($Matches[2]) { [int]$Matches[2] } else { 0 })
       }
-      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留|聞き返し|詳細|再実行|済)\s*#?(\d+)\s*[.。!！]*$') {
+      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留|聞き返し|詳細|再実行|済|不要)\s*#?(\d+)\s*[.。!！]*$') {
         # phones often send full-width or re-cased text ("ＯＫ　６７５", "Ok 675"): canonicalize
         $c = '{0} {1}' -f $Matches[1].ToUpper(), $Matches[2]
         $entry = "R:" + $c

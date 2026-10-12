@@ -49,7 +49,7 @@ switch ($Action) {
       elseif ($first -match '^\[kimeru 実行 #(\d+)(?:\s+(\d+))?\]') { $c = 'X:{0}:{1}' -f $Matches[1], $(if ($Matches[2]) { [int]$Matches[2] } else { 0 }) }
       elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^再実行\s*#?(\d+)\s*[-ー−‐‑‒–—―─ｰ]\s*(\d+)\s*[.。!！]*$') { $c = 'R:再実行 {0}-{1}' -f $Matches[1], $Matches[2] }
       elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^再実行\s*#?(\d+)(\s*[^\d\s.。!！]{1,6}\s*|\s+)(\d*)\s*[.。!！]*$') { $c = 'R:再実行形式 {0} {1}' -f $Matches[1], (($Matches[2] + $Matches[3]).Trim()) }
-      elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留|聞き返し|詳細|再実行|済)\s*#?(\d+)$') { $c = 'R:{0} {1}' -f $Matches[1].ToUpper(), $Matches[2] }
+      elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留|聞き返し|詳細|再実行|済|不要)\s*#?(\d+)$') { $c = 'R:{0} {1}' -f $Matches[1].ToUpper(), $Matches[2] }
       elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)保留\s*#?(\d+)\s+(\S{1,10})$') { $c = 'R:保留 {0} {1}' -f $Matches[1], $Matches[2] }
       elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^(着手|完了)\s*#?(\d+)(?:\s+(\d+))?\s*[.。!！]*$') { $c = if ($Matches[3]) { 'R:{0} {1} {2}' -f $Matches[1], $Matches[2], $Matches[3] } else { 'R:{0} {1}' -f $Matches[1], $Matches[2] } }
       elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^延期\s*#?(\d+)\s+(\S{1,10})\s*[.。!！]*$') { $c = 'R:延期 {0} {1}' -f $Matches[1], $Matches[2].TrimEnd('.', '。', '!', '！') }

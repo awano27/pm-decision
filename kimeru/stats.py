@@ -236,7 +236,7 @@ def _week_extra(out, decision_rows, decisions, week_replies, review_rows, now, s
     prev_since = since - timedelta(days=7)
     previous = _span(decision_rows, "at", prev_since, since)
     counted = [r for r in decisions if _performance_judge(_record_judge_name(r))]
-    auto_keys = {review.decision_key(r) for r in counted if not r.get("needs_human")}
+    auto_keys = {review.decision_key(r) for r in counted if not r.get("needs_human") and not r.get("demoted_by")}   # R33: a rule's line is counted apart (rule_recorded)
     wrong_keys = {r.get("key") for r in review_rows if r.get("verdict") == "wrong"}
     replies = {}
     for r in week_replies:
@@ -259,6 +259,7 @@ def _week_extra(out, decision_rows, decisions, week_replies, review_rows, now, s
         "jev_decisions": sum(_record_judge_name(r) == JevBackend.NAME for r in decisions),
         "unnamed_decisions": sum(_record_judge_name(r) == "unknown" for r in decisions),
         "auto_checked": len(auto_keys), "auto_wrong": len(auto_keys & wrong_keys),
+        **({"rule_recorded": sum(1 for r in counted if r.get("demoted_by"))} if any(r.get("demoted_by") for r in counted) else {}),   # R33 (only when a rule recorded a line)
         "replied_items": len(replies), "replies": sum(replies.values()),
         "oks_with_draft": draft, "oks_unchanged": unchanged,
         "latency": {"now": [s for t, s in latencies if since_ts <= t <= now_ts],

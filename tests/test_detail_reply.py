@@ -186,7 +186,7 @@ class TestTheRealReaderScript(unittest.TestCase):
         real = REAL_READER.read_text(encoding="utf-8-sig")
         fake = FAKE_READER.read_text(encoding="utf-8-sig")
         for text in (real, fake):
-            self.assertIn("(OK|NG|保留|聞き返し|詳細|再実行|済)", text)
+            self.assertIn("(OK|NG|保留|聞き返し|詳細|再実行|済|不要)", text)
             self.assertRegex(text, r"-match '\^\\\[kimeru 詳細 #\(\\d\+\)\\\]'")
             self.assertIn('"D:" + $Matches[1]', text)
 

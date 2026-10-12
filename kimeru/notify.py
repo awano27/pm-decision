@@ -105,6 +105,21 @@ def parse_label(line):
     return (m.group(1), int(m.group(2)) if m.group(2) else None) if m else None
 
 
+NOT_NEEDED = re.compile(r"^不要\s*#?(\d+)\s*[.。!！]*$")   # R33 `不要 N`: NG, and the PM did not need to see the line (learn=1 only; learn.py counts it)
+
+
+def parse_not_needed(line):
+    """The N of a `不要 N` line ("不要 3", "不要＃３。"); None for any other line."""
+    m = NOT_NEEDED.match(unicodedata.normalize("NFKC", line).strip())
+    return m.group(1) if m else None
+
+
+def _not_needed_reply(line):
+    """("不要", "3") for `不要 3` at learn=1; None otherwise, and always None at learn=0 (the line means nothing then)."""
+    n = parse_not_needed(line)
+    return ("不要", n) if n is not None and learn.enabled() else None
+
+
 SENT_REPLY = re.compile(r"^送った\s*#?(\d+)\s*[.。!！]*$")   # R28 `送った N`: the PM says the approved reply of #N was sent (sent.py, sent_watch=1). Not a REPLY word: it decides no state
 
 
@@ -166,7 +181,7 @@ def _hold_reply(line):
     return hold.parse_hold_until(line)
 
 
-STATUS = {"OK": "approved", "NG": "rejected", "保留": "held", "聞き返し": "ask_back", "詳細": "detail", "再実行": "redo", "済": "closed"}   # 聞き返し / 詳細 / 再実行 / 済: not decisions
+STATUS = {"OK": "approved", "NG": "rejected", "保留": "held", "聞き返し": "ask_back", "詳細": "detail", "再実行": "redo", "済": "closed", "不要": "rejected"}   # 聞き返し / 詳細 / 再実行 / 済: not decisions; 不要 (R33, learn=1): NG, and not needed
 
 
 TEST_ENV = "KIMERU_TEST_MARK"   # tools/check.ps1 sets it for the kimeru commands it runs: they post and read test posts
@@ -197,6 +212,9 @@ def _reply_number(line):
         r = f(line)
         if r:
             return r[0]
+    not_needed = parse_not_needed(line)   # R33: `不要 N` belongs to #N for the test/real split too
+    if not_needed is not None:
+        return not_needed
     work_reply = parse_work(line)   # R30: `完了 N` and the others belong to #N for the test/real split too
     if work_reply is not None:
         return work_reply[1]
@@ -1443,7 +1461,7 @@ def fresh_entries(read, x_boundary=True):
         if x:                # (a state folder made new), the result posts of the earlier item above it are not this item's
             top[x[0]] = max(top.get(x[0], 0), x[1])
         if e.startswith("R:"):
-            r = parse_reply(e[2:]) or parse_redraft(e[2:]) or parse_paste(e[2:]) or parse_label(e[2:]) or hold.parse_hold_until(e[2:])
+            r = parse_reply(e[2:]) or parse_redraft(e[2:]) or parse_paste(e[2:]) or parse_label(e[2:]) or hold.parse_hold_until(e[2:]) or _not_needed_reply(e[2:])
             num = r and (r[1] if r[0] in STATUS else r[0])
             if num and i > last_post.get(num, len(tl)):
                 r0 = parse_reply(e[2:])
@@ -1852,7 +1870,7 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
         for num, it in ap.data["items"].items():
             if learn.is_card(it) and it.get("learn_state") == "pending":
                 got = learn.adopt(out, it, now=now or _naive_now(), real=real, send=send)
-                if got:
+                if got and got["state"] != "pending":
                     adopted.append({"id": int(num), "status": "learned" if got["state"] == "adopted" else "learn_stale", "learn": got})
         if adopted:
             ap.save()
@@ -1996,7 +2014,7 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
                 if entering or info is not None:
                     changes.append({"id": int(num), "status": "held", **(info or {})})
             continue
-        r = parse_reply(line)
+        r = parse_reply(line) or _not_needed_reply(line)
         if not r:
             continue
         word, num = r
@@ -2024,6 +2042,8 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
         if word == "済":   # the PM saw the comment in ADO: what was not known is closed
             if real and it and it["status"] == "approved" and execute.close_unknown(out, ap, int(num), it):
                 changes.append({"id": int(num), "status": "closed"})
+            continue
+        if word == "不要" and it is not None and learn.is_card(it):   # R33: a card is no case: nothing answers 不要 on it
             continue
         if not it or not it["posted"] or it["status"] not in ("pending", "held"):
             continue
@@ -2068,6 +2088,8 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
             it.pop("detail_question", None)   # the options of `詳細 N` are kept only while the item waits (labels.py)
             it["record"].pop("held_before", None)   # R08: the "（前回 保留）" mark ends with the decision
         ch = {"id": int(num), "status": new}
+        if word == "不要":   # R33: the mark the rule counts (learn.py); the words of the line are not kept
+            ch.update(learn.mark_not_needed(it, now))
         if new == "approved":
             ch["executed"] = [actions.execute(a, dry_run=True) for a in it["record"].get("actions", [])]
             ch["real"] = _after_approval(out, ap, int(num), it, bridge, real=real, send=send)

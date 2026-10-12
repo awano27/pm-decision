@@ -23,7 +23,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import actions, attention, config, events, execute, fsutil, graph, promises, pull
+from . import actions, attention, config, events, execute, fsutil, graph, learn, promises, pull
 from . import writer as writer_mod
 from . import plan as planner
 from .backends import BackendUnavailable, ClmBackend, JevBackend, KevBackend, StubBackend, is_local_judge, judge_name
@@ -371,11 +371,14 @@ def _earlier_messages(out, ev, at):
     return found[-CONTEXT_MESSAGES:]
 
 
-def _judge(g, ev, meter, playbooks, context=None):
+def _judge(g, ev, meter, playbooks, context=None, out=None, now=None):
     """The graph only: no writer is called. `context` is what _judge_context made (None: the event alone)."""
     if context is None:
-        return graph.run(g, ev, meter, playbooks=playbooks)
-    return graph.run(g, ev, meter, playbooks=playbooks, state=events.state_of(ev, context))
+        res = graph.run(g, ev, meter, playbooks=playbooks)
+    else:
+        res = graph.run(g, ev, meter, playbooks=playbooks, state=events.state_of(ev, context))
+    # R33 (learn=1 only): a minutes line that a rule names is recorded only (learn.demote); `out` is the state folder
+    return res if out is None else learn.demote(out, g, res, ev, now=now)
 
 
 def _draft(res, ev, meter, writer):
@@ -494,11 +497,11 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
                             pend.put(key)                              # counted: the next cycle tries again, up to read_max_defer times
                             raise
                         read_info = fulltext.gave_up(0)
-                res = _judge(g, ev_run, meter, playbooks, context)
+                res = _judge(g, ev_run, meter, playbooks, context, out=out, now=now)
             else:
                 res = pend.get(key) if pend else None                 # a preview judged in an earlier cycle: continue from the reading
                 if res is None:
-                    res = _judge(g, ev, meter, playbooks, context)
+                    res = _judge(g, ev, meter, playbooks, context, out=out, now=now)
                 if can_read and _ends_at_pm(res, writer):              # a decision that ends at the PM: look at the whole chat
                     if tired:
                         read_info = fulltext.gave_up(fulltext.max_defer())
@@ -511,7 +514,7 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
                                 raise
                             read_info = fulltext.gave_up(0)
                     if read_info["state"] == "full":
-                        res = _judge(g, ev_run, meter, playbooks, context)      # the whole text may change the judgment
+                        res = _judge(g, ev_run, meter, playbooks, context, out=out, now=now)      # the whole text may change the judgment
             if pend:
                 pend.drop(key)
             res = promises.status_guard(res, ev_run, out, now)        # R18 (promises=1): a status question from a chat with an overdue promise goes to the PM
@@ -775,7 +778,7 @@ def _main(argv=None):
              "trial": "record and report the one-week trial (before/after minutes; docs/trial-week.md)",
              "requirements": "build / approve / status of a local requirements draft (docs/requirements.md)"}
     helps["diagnose"] = "one sheet on unknown deliveries, judgment paths and cycle errors (numbers only; sends nothing)"
-    helps["learn"] = "list the threshold cards (learn=1) and their adoptions; revert L<n> takes one adoption back (learn.py)"
+    helps["learn"] = "list the threshold cards and the not-needed rules (learn=1) and their adoptions; revert L<n> or A<n> takes one back (learn.py)"
     for name in ("onboarding", "trial", "requirements", "diagnose", "learn"):
         passthrough = sub.add_parser(name, help=helps[name])
         passthrough.add_argument("args", nargs=argparse.REMAINDER)

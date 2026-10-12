@@ -17,6 +17,9 @@ The ledger is state/learned.jsonl (adoptions and reverts, never deleted; counts 
 R33 (learn=1): a `不要 N` answer (NG, and not needed) for the same first sentence of a minutes line three times on two days
 makes one card a day; an OK writes out/learned_rules.json (`kimeru learn revert A<n>` takes it back). A line of that sentence whose
 kind was unsure is then recorded only (log.only, demoted_by); see demote().
+R34 (learn=1): a revision instruction that is a short writing preference (notify.instruction_sig) and that another item used within
+STYLE_DAYS makes one card. An OK keeps the wording in state/style.json (STYLE_MAX lines); the CLI writers in STYLE_WRITERS get it in their
+request only (writer._prompt_material). An NG keeps nothing: purge_all takes the wording out of the card, the outbox and the attempt records.
 """
 import hashlib
 import json
@@ -347,6 +350,8 @@ def adopt(out, it, now=None, real=False, send=False):
         return {"state": "pending"}
     rec = it.get("record") or {}
     L = rec.get("learn") or {}
+    if L.get("kind") == "style":   # R34: a writing preference goes to state/style.json (_adopt_style)
+        return _adopt_style(out, it, rec, L, now)
     if L.get("rule"):   # R33: a rule's card writes out/learned_rules.json (_adopt_rule), not a threshold
         return _adopt_rule(out, it, rec, L, now)
     lid, key = rec.get("event_id"), L.get("node")
@@ -398,6 +403,9 @@ def listing(out):
         if _waiting(it):
             rec = it.get("record") or {}
             L = rec.get("learn") or {}
+            if L.get("kind") == "style":   # R34: the wording waits for the PM's answer
+                lines.append(f"待っている札 {rec.get('event_id')}（#{n}）: 「{L.get('text', '')}」を下書きの好みに入れる")
+                continue
             if L.get("rule"):
                 lines.append(f"待っている札 {rec.get('event_id')}（#{n}）: 「{L.get('phrase', '')}」を記録だけにする")
                 continue
@@ -415,6 +423,7 @@ def listing(out):
         elif r.get("kind") == "revert":
             lines.append(f"取り消し {r.get('id')}: {r.get('node')}（{r.get('reverted_at')}）")
     lines.extend(_rule_lines(out))   # R33: the rules (learned_rules.json)
+    lines.extend(_style_lines())     # R34: the writing preferences kept (state/style.json)
     data = profiles.thresholds_raw()
     if profiles.NODE_KEY in data:
         raw = data[profiles.NODE_KEY]
@@ -431,6 +440,8 @@ def listing(out):
 def format_post(n, rec):
     """The approval post of a card: what it changes, what OK does, and how to undo it. Never a count for Jev."""
     L = rec.get("learn") or {}
+    if L.get("kind") == "style":   # R34: the wording itself is shown here, and only here (_style_post)
+        return _style_post(n, rec)
     if L.get("rule"):   # R33: the card of a rule (_rule_post)
         return _rule_post(n, rec)
     lid = rec.get("event_id")
@@ -444,6 +455,8 @@ def format_post(n, rec):
 def format_detail(n, rec):
     """The answer to `詳細 N` for a card: the numbers behind it (non-Jev), and the same answers as the post."""
     L = rec.get("learn") or {}
+    if L.get("kind") == "style":   # R34 (_style_detail)
+        return _style_detail(n, rec)
     if L.get("rule"):   # R33: the numbers behind a rule (_rule_detail)
         return _rule_detail(n, rec)
     lid = rec.get("event_id")
@@ -470,6 +483,12 @@ def dispatch(argv, out, print_fn=print):
         for line in listing(out):
             print_fn(line)
         return 0
+    if len(argv) == 2 and argv[0] == "revert" and argv[1][:1] == "S":   # R34: a writing preference (S<sig>)
+        res = revert_style(argv[1])
+        print_fn({"reverted": f"{argv[1]} を取り消しました。その書き方の好みは、もう依頼文に入りません",
+                  "none": f"{argv[1]} という書き方の好みはありません（取り消しは一度だけです）",
+                  "busy": "approvals が別の処理で使われています。少し待って、もう一度実行してください"}[res])
+        return 0 if res == "reverted" else 1
     if len(argv) == 2 and argv[0] == "revert" and argv[1][:1] == "A":   # R33: a rule (A<n>)
         res = revert_rule(out, argv[1])
         print_fn({"reverted": f"{argv[1]} を取り消しました。その言い回しは、もう記録だけにしません",
@@ -483,7 +502,7 @@ def dispatch(argv, out, print_fn=print):
                   "newer": f"{argv[1]} のあとに、同じ質問の基準が変わっています。新しいものから順に取り消してください（何も変えません）",
                   "busy": "approvals が別の処理で使われています。少し待って、もう一度実行してください"}[res])
         return 0 if res == "reverted" else 1
-    print_fn("使い方: kimeru learn list ／ kimeru learn revert L<番号>（または A<番号>）")
+    print_fn("使い方: kimeru learn list ／ kimeru learn revert L<番号>（または A<番号>・S<sig>）")
     return 2
 
 
@@ -853,3 +872,223 @@ def _rule_lines(out):
         else:
             lines.append(f"{head}（止まっています: {r.get('stopped_reason') or '未使用'}）")
     return lines
+
+
+# --- R34 (learn=1): a writing preference from a revision instruction ------------------------------------------------------------
+# A `修正 N <指示>` whose wording is a short preference (notify.instruction_sig: a fingerprint, so no date, number, link, mention or
+# name) and that another item used within STYLE_DAYS makes one card. An OK adds the wording to state/style.json. The CLI writers in
+# STYLE_WRITERS then get it as data in their request (writer._prompt_material): never in the check material, never for m365,
+# m365-auto or codex. An NG keeps nothing (purge_all). `kimeru learn revert S<sig>` takes one line back.
+STYLE_FILE = "style.json"
+STYLE_LOCK = "style.lock"
+STYLE_MAX = 8                                          # lines kept: the newest
+STYLE_DAYS = 30                                        # a wording another item used this many days ago makes the card
+STYLE_WRITERS = ("copilot", "claude", "grok", "cmd")   # the writers that SECURITY.md's writer row says send the request out
+SCOPE_REPLY, SCOPE_DRAFT = "返信", "下書き"
+STYLE_PURGE_STATES = ("rejected", "adopted", "stale")  # a card in one of these states no longer keeps its wording
+
+
+def style_path():
+    return config.state_dir() / STYLE_FILE
+
+
+def _style_id(sig):
+    return f"S{sig}"
+
+
+def _style_key(sig):
+    return f"{KIND}:{_style_id(sig)}:style"
+
+
+def style_rows():
+    """The writing preferences kept (state/style.json). A missing or damaged file keeps none."""
+    data = fsutil.read_json(style_path(), {})
+    rows = data.get("styles") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        return []
+    return [r for r in rows if isinstance(r, dict) and isinstance(r.get("id"), str) and isinstance(r.get("text"), str)
+            and r["text"].strip()]
+
+
+def _style_write(rows):
+    p = style_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fsutil.write_atomic(p, json.dumps({"styles": rows}, ensure_ascii=False, indent=1) + "\n")
+    p.with_name(STYLE_FILE + ".bak").unlink(missing_ok=True)   # a backup would keep the line that was taken back
+
+
+def add_style(sid, text, scope, when):
+    """Keep one writing preference (the newest STYLE_MAX lines). False when the file cannot be written now."""
+    try:
+        with fsutil.exclusive(config.state_dir() / STYLE_LOCK) as got:
+            if not got:
+                return False
+            rows = [r for r in style_rows() if r.get("id") != sid]
+            rows.append({"id": sid, "text": text, "scope": scope, "adopted_at": _iso(_naive(when or datetime.now()))})
+            _style_write(rows[-STYLE_MAX:])
+    except OSError:
+        return False
+    return True
+
+
+def revert_style(sid, now=None):
+    """Take one writing preference back (`kimeru learn revert S<sig>`): "reverted", "none" (not kept) or "busy"."""
+    try:
+        with fsutil.exclusive(config.state_dir() / STYLE_LOCK) as got:
+            if not got:
+                return "busy"
+            rows = style_rows()
+            kept = [r for r in rows if r.get("id") != sid]
+            if len(kept) == len(rows):
+                return "none"
+            _style_write(kept)
+    except OSError:
+        return "busy"
+    _ledger_add({"id": sid, "kind": "style_revert", "reverted_at": _iso(_naive(now or datetime.now()))})
+    return "reverted"
+
+
+def style_for_request(writer_name, types):
+    """The writing preferences a writer's request gets: learn=1, a writer of STYLE_WRITERS, and a reply-scoped preference only when
+    the drafts include teams.reply (`types`: the action types being drafted). Nothing is read at learn=0."""
+    if not enabled() or writer_name not in STYLE_WRITERS:
+        return []
+    return [r for r in style_rows() if r.get("scope") != SCOPE_REPLY or "teams.reply" in types]
+
+
+def _seen_on_other_item(out, sig, key, now):
+    """True when another item's revision used this wording within STYLE_DAYS (approvals.log.jsonl keeps the fingerprint, not the words)."""
+    try:
+        lines = (Path(out) / "approvals.log.jsonl").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(row, dict) or row.get("instruction_sig") != sig or row.get("key") == key or is_card_key(row.get("key")):
+            continue
+        when = _parse(row.get("at"))
+        if when is not None and now - _naive(when) < timedelta(days=STYLE_DAYS):
+            return True
+    return False
+
+
+def offer_style(out, changes, now=None):
+    """R34 (learn=1 only; notify.collect calls it under the approvals lock): a revision whose wording is a short preference that another
+    item used within STYLE_DAYS, and that has no card and no kept line yet, adds one card to the approvals (notify posts it). Only the
+    card's record keeps the wording (learn.text), until its answer. Returns the card numbers made."""
+    if not enabled():
+        return []
+    from . import notify
+    out = Path(out)
+    now = _naive(now) or datetime.now()
+    ap = notify.Approvals(out)
+    made = []
+    for ch in changes or []:
+        if not isinstance(ch, dict) or "instruction" not in ch:
+            continue
+        it = ap.data["items"].get(str(ch.get("id")))
+        if not isinstance(it, dict) or is_card(it):
+            continue
+        rec = it.get("record") if isinstance(it.get("record"), dict) else {}
+        sig = notify.instruction_sig(ch["instruction"], rec.get("event"))
+        if not sig:
+            continue
+        key = _style_key(sig)
+        if any(x.get("key") == key for x in ap.data["items"].values()) or any(r.get("id") == _style_id(sig) for r in style_rows()):
+            continue
+        if not _seen_on_other_item(out, sig, it.get("key"), now):
+            continue
+        actions = rec.get("actions") if isinstance(rec.get("actions"), list) else []
+        scope = SCOPE_REPLY if any(isinstance(a, dict) and a.get("type") == "teams.reply" for a in actions) else SCOPE_DRAFT
+        text = " ".join(str(ch["instruction"]).split())
+        made.append(ap.add(key, {"graph": KIND, "event_kind": KIND, "event_id": _style_id(sig), "node": "style", "outcome": "advise",
+                                 "needs_human": True, "advice": f"学習の提案 {_style_id(sig)}", "actions": [],
+                                 "learn": {"kind": "style", "text": text, "scope": scope, "sig": sig}}))
+    if made:
+        ap.save()
+    return made
+
+
+def _adopt_style(out, it, rec, L, now):
+    """An OK on a preference card: the wording is kept in state/style.json, once. Called by adopt(), so only on a run with real and send;
+    when the file cannot be written now, the card stays pending."""
+    sid, text = rec.get("event_id"), L.get("text")
+    if not isinstance(sid, str) or not isinstance(text, str) or not text.strip():
+        it["learn_state"] = "stale"
+        return {"state": "stale", "id": sid}
+    now = _naive(now) or datetime.now()
+    if any(r.get("id") == sid for r in style_rows()):   # kept already (the same wording was answered before)
+        it["learn_state"] = "stale"
+        return {"state": "stale", "id": sid}
+    scope = L.get("scope") if L.get("scope") in (SCOPE_REPLY, SCOPE_DRAFT) else SCOPE_DRAFT
+    if not add_style(sid, text, scope, now):
+        return {"state": "pending", "id": sid}
+    _ledger_add({"id": sid, "kind": "style_adopt", "adopted_at": _iso(now)})
+    it["learn_state"] = "adopted"
+    return {"state": "adopted", "id": sid, "scope": scope}
+
+
+def _card_message(msg, n, text):
+    """True for a message this card wrote (its post or its 詳細 answer) that carries the wording."""
+    return bool(text) and text in msg and msg.startswith((f"[kimeru #{n}]", f"[kimeru 詳細 #{n}]"))
+
+
+def purge_all(data):
+    """R34: a card whose answer is in (NG, or OK once the wording is kept) gives up its wording: the record, its own messages in the
+    outbox, and its attempt body. True when something was taken out; the save after it must be compact (no .bak keeps the wording).
+    `data` is the approvals data; a card that still waits keeps its wording."""
+    items = data.get("items") if isinstance(data, dict) and isinstance(data.get("items"), dict) else {}
+    marks = []
+    for n, it in items.items():
+        rec = it.get("record") if isinstance(it.get("record"), dict) else {}
+        L = rec.get("learn") if isinstance(rec.get("learn"), dict) else {}
+        if not is_card(it) or L.get("kind") != "style" or "text" not in L or it.get("learn_state") not in STYLE_PURGE_STATES:
+            continue
+        text = str(L.pop("text") or "")
+        marks.append((str(n), text))
+        att = it.get("delivery_attempt")
+        if att and text and text in json.dumps(att, ensure_ascii=False):
+            it.pop("delivery_attempt", None)
+    if not marks:
+        return False
+    if isinstance(data.get("outbox"), list):
+        data["outbox"] = [m for m in data["outbox"] if not any(_card_message(str(m), n, t) for n, t in marks)]
+    att = data.get("outbox_delivery_attempt")
+    if isinstance(att, dict) and any(_card_message(str(att.get("body") or ""), n, t) for n, t in marks):
+        data.pop("outbox_delivery_attempt", None)
+    return True
+
+
+def _scope_words(scope):
+    return "返信の下書き" if scope == SCOPE_REPLY else "下書き（返信・投稿・コメント）"
+
+
+def _style_post(n, rec):
+    L = rec.get("learn") or {}
+    sid = rec.get("event_id")
+    return "\n".join([
+        f"[kimeru #{n}] 学習の提案: 書き方の好みを下書きに入れますか",
+        f"OK で今後の{_scope_words(L.get('scope'))}に『{L.get('text', '')}』を使います（書き方だけ。事実・日付・数値は足しません）。"
+        f"NG なら使いません。OK のあとも取り消せます（kimeru learn revert {sid}）",
+        f"OK {n} / NG {n} / 詳細 {n}"])
+
+
+def _style_detail(n, rec):
+    L = rec.get("learn") or {}
+    sid = rec.get("event_id")
+    return "\n".join([
+        f"[kimeru 詳細 #{n}] 学習の提案 {sid}（書き方の好み。判断モデルは使いません）",
+        f"変えること: 「{L.get('text', '')}」を、{_scope_words(L.get('scope'))}の依頼文に、書き方の好みとして入れる",
+        f"根拠: 同じ言い回しの修正指示が、{STYLE_DAYS} 日以内に別の件でも使われました（件数は出しません）",
+        "事実・日付・数値は変わりません。送るのは copilot・claude・grok・cmd の依頼文だけです（m365・m365-auto・codex には送りません）",
+        f"OK で入ります（取り消し: kimeru learn revert {sid}）。NG なら入りません",
+        f"返信: OK {n} / NG {n} / 保留 {n}"])
+
+
+def _style_lines():
+    """What `learn list` shows of the kept writing preferences."""
+    return [f"書き方の好み {r['id']}: 「{r['text']}」（{r.get('scope') or SCOPE_DRAFT}、採用 {r.get('adopted_at', '')}）"
+            for r in style_rows()]

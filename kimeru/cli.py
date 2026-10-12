@@ -778,7 +778,7 @@ def _main(argv=None):
              "trial": "record and report the one-week trial (before/after minutes; docs/trial-week.md)",
              "requirements": "build / approve / status of a local requirements draft (docs/requirements.md)"}
     helps["diagnose"] = "one sheet on unknown deliveries, judgment paths and cycle errors (numbers only; sends nothing)"
-    helps["learn"] = "list the threshold cards and the not-needed rules (learn=1) and their adoptions; revert L<n> or A<n> takes one back (learn.py)"
+    helps["learn"] = "list the threshold cards, the not-needed rules and the writing preferences (learn=1) and their adoptions; revert L<n>, A<n> or S<sig> takes one back (learn.py)"
     for name in ("onboarding", "trial", "requirements", "diagnose", "learn"):
         passthrough = sub.add_parser(name, help=helps[name])
         passthrough.add_argument("args", nargs=argparse.REMAINDER)

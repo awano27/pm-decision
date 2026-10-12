@@ -1578,7 +1578,7 @@ def instruction_sig(instruction, event=None):
 
 
 STALE_ACTION_KEYS = ("drafted_by", "held_for", "writer_warning", "variant", "ask_back", "ask_back_unverified", "unverified")
-STALE_RECORD_KEYS = ("writer_error", "copilot_request", "copilot_sources", "memo", "redraft_note")
+STALE_RECORD_KEYS = ("writer_error", "copilot_request", "copilot_sources", "memo", "redraft_note", "style_used")
 
 
 def _redraft(it, instruction, writer, out=None):
@@ -1835,7 +1835,9 @@ def collect(out, bridge, writer=None, real=False, send=False, now=None, brief_ho
             res = Changes()
             res.busy = True
             return res
-        return Changes(_collect(out, bridge, writer, real, send, now, brief_hour))
+        changes = _collect(out, bridge, writer, real, send, now, brief_hour)
+        learn.offer_style(out, changes, now or _naive_now())   # R34 (learn=1 only): a card for a wording another item used too; under this lock
+        return Changes(changes)
 
 
 def unwritten(it):
@@ -1873,7 +1875,7 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
                 if got and got["state"] != "pending":
                     adopted.append({"id": int(num), "status": "learned" if got["state"] == "adopted" else "learn_stale", "learn": got})
         if adopted:
-            ap.save()
+            ap.save(compact=learn.purge_all(ap.data))   # R34: an adopted wording leaves its card; compact, so no .bak keeps it
     if real and send and promises.close_waiting(out, ap.data["items"]):   # R31 (promises=1): an ask-back whose chat has answered ends its wait; read only in decisions.jsonl, before any early return
         ap.save()
     # nothing is waiting for an answer: do not touch Teams at all (reading switches it to the self chat). The one exception is a card
@@ -2097,7 +2099,7 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
                 ch["learn"] = learn.adopt(out, it, now=now, real=real, send=send)
         changes.append(ch)
     changes = adopted + changes
-    ap.save()
+    ap.save(compact=learn.purge_all(ap.data))   # R34: a card answered in this run gives up its wording (compact: no .bak keeps it)
     if send and flushed and ap.data.get("outbox"):
         flush_outbox(ap, bridge, True)   # the results of this step, all together (once per cycle)
     if changes:

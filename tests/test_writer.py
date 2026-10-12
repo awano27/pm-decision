@@ -856,3 +856,68 @@ class TestRedraftPrev(unittest.TestCase):
             t.timeline.append("R:修正 1 もっと短く")
             self.assertEqual(notify.collect(out, t, writer=spy), [{"id": 1, "status": "redrafted", "instruction": "もっと短く"}])
             self.assertIn(PREV_TEXT, spy.prompts[-1])
+
+
+class TestStyleBlock(unittest.TestCase):
+    """R34 (learn=1): the wording the PM OK'd as a writing preference goes into the request only, before the output format, for the
+    CLI writers that are listed (copilot, claude, grok, cmd) and for a reply only when the preference is scoped to replies. The check
+    material never has it, and with no preference the request is the material alone, as before."""
+
+    def setUp(self):
+        state = tempfile.TemporaryDirectory()
+        self.addCleanup(state.cleanup)
+        env = mock.patch.dict(os.environ, {"KIMERU_LEARN": "1", "KIMERU_STATE_DIR": state.name})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_without_a_preference_the_request_is_the_material_alone(self):
+        self.assertEqual(writer._prompt_material(reply_res(), REDRAFT_EVENT, "もっと短く"),
+                         writer._material(reply_res(), REDRAFT_EVENT, "もっと短く"))
+
+    def test_a_preference_goes_after_the_instruction_and_before_the_output_format_and_not_into_the_material(self):
+        ev = dict(REDRAFT_EVENT, style=["結論を先に"])
+        p = writer._prompt_material(reply_res(), ev, "もっと短く")
+        self.assertLess(p.index("PM からの修正指示"), p.index("PM の書き方の好み"))
+        self.assertLess(p.index("PM の書き方の好み"), p.index("出力形式:"))
+        self.assertIn("結論を先に", p)
+        self.assertNotIn("結論を先に", writer._material(reply_res(), ev, "もっと短く"))
+
+    def test_the_preference_comes_before_the_previous_draft_when_both_are_given(self):
+        ev = dict(REDRAFT_EVENT, style=["結論を先に"], prev_drafts={"a1": PREV_TEXT})
+        p = writer._prompt_material(reply_res(), ev, "もっと短く")
+        self.assertLess(p.index("PM の書き方の好み"), p.index("前の下書き"))
+        self.assertLess(p.index("前の下書き"), p.index("出力形式:"))
+
+    def test_a_wording_for_replies_is_not_given_to_a_draft_that_is_not_a_reply(self):
+        learn_style_file(self, "返信")
+        res = {"node": "n", "path": [], "actions": [{"type": "ado.comment", "text": "確認します。", "template_text": "確認します。"}]}
+        spy = PromptSpy([{"a1": "確認しました。"}])
+        writer.apply(res, REDRAFT_EVENT, spy)
+        self.assertNotIn("PM の書き方の好み", spy.prompts[-1])
+
+    def test_the_cli_writers_listed_get_the_preference_and_the_others_do_not_and_the_record_names_its_id(self):
+        learn_style_file(self, "返信")
+        for name, expected in (("claude", True), ("copilot", True), ("grok", True), ("cmd", True),
+                               ("m365", False), ("m365-auto", False), ("codex", False)):
+            spy = PromptSpy([{"a1": "延期の件、承知しました。"}])
+            spy.NAME = name
+            res = reply_res()
+            writer.apply(res, REDRAFT_EVENT, spy, "もっと短く")
+            self.assertEqual("PM の書き方の好み" in spy.prompts[-1], expected, name)
+            self.assertEqual(res.get("style_used"), ["S000000000abc"] if expected else None, name)
+
+    def test_a_preference_leaves_the_date_and_number_check_of_the_draft_as_it_was(self):
+        learn_style_file(self, "下書き")
+        res = reply_res()
+        spy = PromptSpy([{"a1": "延期の件、承知しました。"}])
+        writer.apply(res, REDRAFT_EVENT, spy, "もっと短く")
+        self.assertIn("結論を先に", spy.prompts[-1])
+        self.assertEqual(res["actions"][0]["unverified"], [])
+
+
+def learn_style_file(case, scope):
+    """One kept preference (its id and words are fixed here; learn.py writes the file)."""
+    from datetime import datetime
+
+    from kimeru import learn
+    learn.add_style("S000000000abc", "結論を先に", scope, datetime.now())

@@ -10,7 +10,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import actions, attention, brief as brief_mod, config, events, fsutil, fulltext, graph, hold, notify, pull, push, sent
+from . import actions, attention, brief as brief_mod, config, control, events, fsutil, fulltext, graph, hold, notify, pull, push, sent
 from .backends import BackendUnavailable, is_jev
 
 
@@ -297,13 +297,30 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
         brief_mod.purge_history(out, now=now)
     except Exception as e:
         _log(out, {"step": "brief_history", "error": f"{type(e).__name__}: {str(e)[:120]}"})
+    # R20: my own line 停止 / 再開 (control.py). It is read before anything takes from Teams, and the list read here is the one the
+    # pull uses. Stopped, this cycle takes nothing more (the purges above did run); a Teams that cannot be read is no error here
+    chats, mode = None, "run"
+    if control.enabled():
+        try:
+            chats = bridge.chats()
+        except Exception as e:
+            _log(out, {"step": "control", "error": f"{type(e).__name__}: {str(e)[:120]}"})
+        try:
+            mode = control.step(out, bridge, chats, now, send=send, toaster=toaster if toaster and notify.toast_enabled() else None)
+        except Exception as e:
+            _log(out, {"step": "control", "error": f"{type(e).__name__}: {str(e)[:120]}"})
+            mode = control.current(out)
+    if mode != "run":   # "stop", or "busy" (the state is in use by another run): nothing is decided, posted or run in this cycle
+        r["mode"], r["waiting"] = mode, 0
+        _log(out, {"step": "cycle", "report": r})
+        return r
     if send:   # a route turned on is baselined before this cycle posts anything; a route turned off forgets what came meanwhile
         try:
             push.begin_cycle(out)
         except Exception as e:   # the phone routes never fail a cycle
             _log(out, {"step": "push_begin", "error": type(e).__name__})
     own_seen = [] if (real and sent.enabled()) else None   # R14: my own new messages the list shows in this cycle (memory only)
-    _step(out, "pull_teams", lambda: pull.pull_teams(inbox, out, bridge=bridge, own_out=own_seen), r)
+    _step(out, "pull_teams", lambda: pull.pull_teams(inbox, out, bridge=bridge, own_out=own_seen, chats=chats), r)
     if own_seen:   # R14: a send after an OK is seen on the list; not in the report (a failure is only logged, the cycle goes on)
         try:
             if getattr(sent.observe(out, own_seen, now=now), "busy", False):

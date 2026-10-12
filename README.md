@@ -283,6 +283,8 @@ ADO のコメントの実行を有効にしたときだけ、次の 3 つが加�
 
 ### 止める・消す
 
+- **スマホから止める**: 自分とのチャットに、行全体で `停止` とだけ打つと、`daily` は取り込み・判断・投稿・通知・push・承認の実行を止めます（期限の掃除は続けます）。`再開` と打つと戻り、停止中に打った OK は再開後に効きます。**停止中は、重大な知らせ（Sev0/1）も届きません。** 止める語を使わないときは `python -m kimeru config set control_words 0`（既定は `1`）。
+
 ```powershell
 python -m kimeru schedule remove        # 自動運転のタスクを消す（残るものを表示します）
 python -m kimeru config unset backend   # install のときに保存した判断モデルの既定を戻す（ado_org・ado_project も同じ）

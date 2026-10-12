@@ -492,15 +492,16 @@ def teams_events(chats, sec, include_existing=False, now=None, own_out=None):
     return out
 
 
-def pull_teams(inbox, out, bridge=None, include_existing=False, now=None, own_out=None):
+def pull_teams(inbox, out, bridge=None, include_existing=False, now=None, own_out=None, chats=None):
     """Return number of new teams.chat events dropped into the inbox. `now` is the observation time (tests inject it).
-    `own_out` (R14): see teams_events; the daily cycle passes a list only when sent_watch=1."""
+    `own_out` (R14): see teams_events; the daily cycle passes a list only when sent_watch=1. `chats` (R20): the list this cycle has
+    already read (the daily cycle reads it first, for 停止 / 再開); None reads it here."""
     if bridge is None:
         from .notify import PowerShellBridge
         bridge = PowerShellBridge()
     st = State(out)
     sec = st.section("teams")
-    evs = teams_events(bridge.chats(), sec, include_existing, now=_local_now(now), own_out=own_out)
+    evs = teams_events(bridge.chats() if chats is None else chats, sec, include_existing, now=_local_now(now), own_out=own_out)
     for ev in evs:
         _drop(inbox, "teams-" + ev["id"].replace(":", "_").replace("@", "_").replace("#", "_")[-60:], ev)
     st.save()

@@ -114,6 +114,50 @@ def parse_sent(line):
     return m.group(1) if m else None
 
 
+WORK_REPLY = re.compile(r"^(着手|完了)\s*#?(\d+)(?:\s+(\d+))?\s*[.。!！]*$")   # R30 `着手 N` / `完了 N` / `完了 N k` (step k of the plan): work.py, promises=1 only
+WORK_DEFER = re.compile(r"^延期\s*#?(\d+)\s+(\S{1,10})\s*[.。!！]*$")         # R30 `延期 N <いつ>`: the case's day moves (hold.parse_when)
+
+
+def parse_work(line):
+    """(word, number, arg) for `着手 N` / `完了 N` / `完了 N k` / `延期 N <いつ>` (R30): arg is None, the step k (int), or the words of
+    the day. None for any other line and for `着手 N k` (a step is not started). Read by fresh_work and the reader's line."""
+    t = unicodedata.normalize("NFKC", str(line)).strip()
+    m = WORK_REPLY.match(t)
+    if m:
+        if m.group(1) == "着手" and m.group(3):
+            return None
+        return m.group(1), m.group(2), int(m.group(3)) if m.group(3) else None
+    m = WORK_DEFER.match(t)
+    if m:
+        word = m.group(2).rstrip(".。!！")
+        return ("延期", m.group(1), word) if word else None
+    return None
+
+
+def fresh_work(read):
+    """[(number, parsed, line)] for the R30 work replies on the screen, in order: a reply counts when it comes after the most recent
+    visible post of its number, the approval post "[kimeru #N]" or the deadline post "[kimeru 期限 #N ...]" (K:N in the timeline). Only
+    that boundary counts, so a reply above a newer deadline post is not read again; the same rule as fresh_sent. [] for an older reader."""
+    tl = scoped_timeline(read)
+    if tl is None:
+        return []
+    last = {}
+    for i, e in enumerate(tl):
+        if e.startswith("P:"):
+            last[e[2:]] = i
+        elif e.startswith("K:"):
+            for num in filter(None, e[2:].split(",")):
+                last[num] = i
+    out = []
+    for i, e in enumerate(tl):
+        if not e.startswith("R:"):
+            continue
+        parsed = parse_work(e[2:])
+        if parsed is not None and parsed[1] in last and i > last[parsed[1]]:
+            out.append((parsed[1], parsed, e[2:]))
+    return out
+
+
 def _hold_reply(line):
     """(number, None) for `保留 N`, (number, word) for `保留 N <いつ>` (R09, hold.py); None for any other line."""
     r = parse_reply(line)
@@ -153,6 +197,9 @@ def _reply_number(line):
         r = f(line)
         if r:
             return r[0]
+    work_reply = parse_work(line)   # R30: `完了 N` and the others belong to #N for the test/real split too
+    if work_reply is not None:
+        return work_reply[1]
     sent_number = parse_sent(line)   # R28: a `送った N` belongs to #N for the test/real split (scoped_timeline)
     return sent_number if sent_number is not None else parse_redo_bad(line)
 
@@ -181,6 +228,9 @@ def scoped_timeline(read, test=None):
                 out.append(e)
         elif head == "U":   # R28: the nudge "[kimeru 未送信 #N ...]" (numbers only): the real reader only; it sets no kind for `last`
             if not test:    # (so the reply boundaries and the test/real split of fresh_entries do not change), see fresh_sent
+                out.append(e)
+        elif head == "K":   # R30: the deadline post "[kimeru 期限 #N ...]" (numbers only): a boundary for the work replies, real reader only
+            if not test:
                 out.append(e)
         elif head == "R":
             num = _reply_number(rest)
@@ -1722,7 +1772,7 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
     send=True: what is posted while collecting (results, texts ready to copy) is sent; otherwise it is only pasted.
     real and send together (the first run with --send after an OK without it): the comments of such OKs are written now, once."""
     ap = Approvals(out)
-    from . import execute, memory, sent
+    from . import execute, memory, sent, work
     clock = now or _naive_now()   # R28: the clock of the nudge and of its watch window (sent.py)
 
     def waiting(it):   # waiting for an answer, or approved but with an execution that failed / was left unsure (`再実行` / `済`),
@@ -1746,7 +1796,8 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
             ap.save()
     # nothing is waiting for an answer: do not touch Teams at all (reading switches it to the self chat). The one exception is a card
     # of the day's spot check that waits for its answer (R26, spot.py): the reply is read for it, and nothing else is touched
-    if not any(waiting(it) for it in ap.data["items"].values()):
+    work_wait = real and send and work.awaiting(ap.data, clock)   # R30 (promises=1): the deadline post is due, or a post of it is recent
+    if not work_wait and not any(waiting(it) for it in ap.data["items"].values()):
         if real and send:
             from . import spot
             spot.answers(out, bridge, now or _naive_now())
@@ -1770,6 +1821,13 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
             if it and sent.confirm(it, clock):
                 changes.append({"id": int(num), "status": "sent_confirmed"})
         sent.nudge(ap.data, post, clock)   # the post is put in the outbox (make_post) and flushed at the end of this step
+    if real and send and work.enabled():   # R30: the work replies below a deadline post (before today's post: they are read against the screen as it was)
+        for num, parsed, line in fresh_work(read):
+            try:
+                work.apply_reply(out, ap, num, parsed, line, clock)
+            except work.WorkError:
+                continue   # a journal that cannot be read stops this reply only; the cycle goes on
+        work.due_notice(ap.data, post, clock)   # the deadline post of the day, once (put in the outbox like the other posts)
     fresh = fresh_entries(read)
     replies = [line for line, _ in fresh]
     seen_results = {}   # for `再実行`: the highest result count of the item that stands before the reply (the context of the reply)

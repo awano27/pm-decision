@@ -68,6 +68,18 @@ class TestBridgeE2E(unittest.TestCase):
         self.assertNotIn("P:278", read["timeline"])
         self.assertEqual(notify.fresh_sent(read), ["278"])
 
+    def test_the_reader_hands_back_the_deadline_post_and_the_work_replies(self):   # R30: K: is the boundary, 完了 / 延期 are handed back
+        bridge = notify.PowerShellBridge(script=FAKE)
+        notify.notify(self.out, bridge, send=True)
+        self.reply("[kimeru 期限 #278]\n期限の作業があります。")
+        self.reply("完了 278 2")
+        self.reply("延期　２７８　金")
+        read = bridge.read()
+        self.assertIn("K:278", read["timeline"])
+        self.assertIn("R:完了 278 2", read["timeline"])
+        self.assertIn("R:延期 278 金", read["timeline"])
+        self.assertEqual(notify.fresh_work(read), [("278", ("完了", "278", 2), "完了 278 2"), ("278", ("延期", "278", "金"), "延期 278 金")])
+
     def test_notify_reply_approvals(self):
         bridge = notify.PowerShellBridge(script=FAKE)
         ids = notify.notify(self.out, bridge, send=True)

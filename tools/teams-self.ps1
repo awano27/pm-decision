@@ -1154,6 +1154,12 @@ if ($Action -eq 'read') {
         $nums = @([regex]::Matches($Matches[1], '\d+') | ForEach-Object { $_.Value })
         $entry = 'U:' + ($nums -join ',')
       }
+      elseif ($l -match '^\[kimeru 期限((?:\s+#\d+)+)\]') {
+        # the deadline post of the day (R30, work.py): "K:3,5" for "[kimeru 期限 #3 #5]". Not an approval post: a work reply below it counts
+        # (notify.fresh_work); the numbers are the only thing kept
+        $nums = @([regex]::Matches($Matches[1], '\d+') | ForEach-Object { $_.Value })
+        $entry = 'K:' + ($nums -join ',')
+      }
       elseif ($l -match '^\[kimeru 試験 #(\d+)\]') {
         # a post of tools/check.ps1 (a test): it is not an approval post and not a boundary for the real reader (notify.scoped_timeline)
         $entry = "T:" + $Matches[1]
@@ -1181,6 +1187,15 @@ if ($Action -eq 'read') {
         $c = '保留 {0} {1}' -f $Matches[1], $Matches[2]
         $entry = "R:" + $c
         if (-not $seen.ContainsKey($c)) { $seen[$c] = 1; $replies.Add($c) }
+      }
+      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(着手|完了)\s*#?(\d+)(?:\s+(\d+))?\s*[.。!！]*$') {
+        # R30 (notify.parse_work, promises=1): `着手 N`, `完了 N` and `完了 N k` (step k of the plan) are handed back as they are
+        $c = if ($Matches[3]) { '{0} {1} {2}' -f $Matches[1], $Matches[2], $Matches[3] } else { '{0} {1}' -f $Matches[1], $Matches[2] }
+        $entry = 'R:' + $c
+      }
+      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^延期\s*#?(\d+)\s+(\S{1,10})\s*[.。!！]*$') {
+        # R30 `延期 N <いつ>`: the day word is handed back as it is (notify.parse_work reads it)
+        $entry = 'R:延期 {0} {1}' -f $Matches[1], $Matches[2].TrimEnd('.', '。', '!', '！')
       }
       elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^送った\s*#?(\d+)\s*[.。!！]*$') {
         # `送った N` (R28, notify.parse_sent): the PM says the approved reply of #N was sent; it counts only below the approval post of #N

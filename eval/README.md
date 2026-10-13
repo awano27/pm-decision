@@ -48,7 +48,7 @@ Same weights on CPU fp32 (2026-10-13, commit f102813, all new roadmap settings a
 on the 48 held-out events (wrong: ado-c06, minutes-c07, alert-c11). The bf16 numbers above are unchanged. A control run at
 e90e9dd, the commit before the new settings were merged, with the same fp32 Kev gave the same results 3 times out of 3, with
 byte-identical judge inputs and answers before and after the merge and no run-to-run variance; so the difference from
-37 / 10 / 0 / 1 / 0 is bf16 vs fp32, not a regression. On the held-out set: 10.7 s per event on average (max 39 s). Details:
+37 / 10 / 0 / 1 / 0 is bf16 vs fp32, not a regression. Over the 99 + 48 events: 10.7 s per event on average (11.3 s dev, 9.6 s held-out; max 39 s). Details:
 docs/evaluation.md.
 
 Context gate (`fixtures_context.jsonl`, 4 events that carry the chat's earlier messages; Kev-4B, CPU fp32, 2026-10-13):

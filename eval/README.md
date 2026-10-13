@@ -43,6 +43,21 @@ decisions on 60 held-out events (3 -> 7). Always check a tuned profile on events
 Current scoring (2026-10-06, commit cb13df1, Kev-4B, CPU bf16): 65 correct / 22 human / 10 fallback / 2 wrong / 0 severe on
 the 99 events; 37 / 10 / 0 / 1 / 0 on the 48 held-out events. Details: docs/evaluation.md.
 
+Same weights on CPU fp32 (2026-10-13, commit f102813, all new roadmap settings at their defaults): 66 correct /
+21 human / 10 fallback / 2 wrong / 0 severe on the 99 events (the same two wrong as bf16: teams-5, ado-6); 36 / 9 / 0 / 3 / 0
+on the 48 held-out events (wrong: ado-c06, minutes-c07, alert-c11). The bf16 numbers above are unchanged. A control run at
+e90e9dd, the commit before the new settings were merged, with the same fp32 Kev gave the same results 3 times out of 3, with
+byte-identical judge inputs and answers before and after the merge and no run-to-run variance; so the difference from
+37 / 10 / 0 / 1 / 0 is bf16 vs fp32, not a regression. On the held-out set: 10.7 s per event on average (max 39 s). Details:
+docs/evaluation.md.
+
+Context gate (`fixtures_context.jsonl`, 4 events that carry the chat's earlier messages; Kev-4B, CPU fp32, 2026-10-13):
+without the earlier messages 1 correct / 3 human / 0 wrong; with them (`judge_context`) 2 / 2 / 0. Only ctx-4 changed
+(`status` confidence 0.53 -> 0.72, `ask_pm` -> `reply_status`); ctx-1 and ctx-3 moved toward the right intent
+(0.12 -> 0.29, 0.16 -> 0.28) but stayed at `ask_pm`; about 2-5 s slower per event. The default stays `judge_context=0`.
+`e2e.py` passes the context from the fixture's `context` key and does not read the `judge_context` setting: to measure
+"without context", run a copy of the fixture file with that key removed.
+
 Values below were recorded before the C09 scoring change.
 After rule-first nodes and sharper criteria (e2e, final action): 62 correct / 25 human / 12 fallback / 0 wrong
 on the 99 events, 29 / 6 / 0 / 1 on `fixtures_holdout.jsonl` (36 events never tuned on;

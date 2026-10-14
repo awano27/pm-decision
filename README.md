@@ -80,7 +80,7 @@
 2026-10-15 に公開 main と v1.1.0 のソース ZIP を取得し、Python 3.11・追加パッケージなし・通信を禁止した環境で、9 件のデモ、1 件のサンプル、HTML 生成、作業一覧、要件案の Markdown / JSON 保存を確認しました。Teams・ADO・実モデルとの連携や、すべての Windows PC での動作を確認した結果ではありません。
 
 <details>
-<summary><b>インストールできない会社 PC に持ち込む場合</b></summary>
+<summary><b>インストールできない管理された PC に持ち込む場合</b></summary>
 
 Python・Kev・Azure CLI をまとめた持ち込み用パッケージは、別途準備した環境から `tools/make-bundle.ps1` で作れます。通常のソース ZIP にこれらが含まれているわけではありません。2026-10-15 時点の公開リリースには Source code の ZIP / tar.gz があり、これらを同梱した実行用パッケージは公開されていません。
 
@@ -192,7 +192,7 @@ Kev のモデルを持ち込む方法は [Kev の持ち込み用フォルダ](do
 | 向いている | 向かない |
 |---|---|
 | Windows の PC と Teams で働く PM・リーダー | Mac / Linux（Teams の読み取りが Windows の画面操作のため） |
-| 管理者権限なしの会社 PC で、持ち込み用フォルダから試したい | Slack や Google Chat が中心 |
+| 管理者権限なしの管理された PC で、持ち込み用フォルダから試したい | Slack や Google Chat が中心 |
 | 判断をローカル接続で行いたい（Kev の接続先をこの PC にする） | 返信や起票まで全自動でやってほしい（kimeru は承認制で、既定では記録だけ） |
 | 「決める前に、材料と選択肢を並べてほしい」 | 判断そのものを LLM に任せたい |
 
@@ -434,7 +434,7 @@ flowchart LR
 
 | 知りたいこと | ドキュメント |
 |---|---|
-| 会社 PC へ持ち込む・実機で確認する | [導入](docs/managed-environments.md) / [実機確認](docs/managed-pc-check.md) |
+| 管理された PC へ持ち込む・実機で確認する | [導入](docs/managed-environments.md) / [実機確認](docs/managed-pc-check.md) |
 | コマンド・設定・入力形式・グラフを書く | [リファレンス](docs/reference.md) |
 | 判断モデルを持ち込む | [Kev の持ち込み用フォルダ](docs/kev-bundle.md) |
 | 下書き用の LLM を選ぶ | [writer](docs/writers.md) |

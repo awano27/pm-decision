@@ -28,7 +28,7 @@ $KevRepo = [IO.Path]::GetFullPath($KevRepo)
 $steps = @(
   @(1, '上流の Kev を取得する（既にあれば git pull）', 'github.com', '数 MB'),
   @(2, 'Python 3.13 を uv で入れ、その単体版を python\ へコピーする', 'github.com（uv が取得する Python）', '約 0.05GB（取得）。展開後の python 全体で約 1.9GB'),
-  @(3, 'torch（CPU 版）を入れる', 'download.pytorch.org', '約 0.2GB'),
+  @(3, 'Python の pip の印を外して、torch（CPU 版）を入れる', 'download.pytorch.org', '約 0.2GB'),
   @(4, 'kev（<KevRepo>[serve]）を入れる', 'pypi.org（依存パッケージ）', '数百 MB'),
   @(5, 'モデル 2 つを取得する（再実行は再開）', 'huggingface.co', '約 9.5GB（kev-4b 約 0.2GB・土台のモデル約 9.3GB）'),
   @(6, '起動用のファイル（tools\kev-bundle\*）をコピーする', 'この PC の中', '数十 KB'),
@@ -105,17 +105,20 @@ Show-Step 2 'Python 3.13 を用意する'
 if (-not (Test-Path $py)) {
   uv python install 3.13
   if ($LASTEXITCODE -ne 0) { Fail '手順 2: uv python install 3.13 が失敗しました（ネットを確かめて再実行）' }
-  $found = [string](uv python find 3.13 | Select-Object -Last 1)
+  $found = [string](uv python find --managed-python 3.13 | Select-Object -Last 1)
   $found = $found.Trim()
-  if (-not $found -or -not (Test-Path $found)) { Fail '手順 2: uv が Python 3.13 の場所を返しませんでした' }
+  if (-not $found -or -not (Test-Path $found)) { Fail '手順 2: uv が、uv の管理する Python 3.13 の場所を返しませんでした（uv python install 3.13 が済んでいるかを確かめる）' }
   robocopy (Split-Path -Parent $found) (Join-Path $Out 'python') /E /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
   if ($LASTEXITCODE -ge 8) { Fail '手順 2: Python のフォルダのコピーに失敗しました' }
 }
 if (-not (Test-Path $py)) { Fail '手順 2: python\python.exe がありません' }
 
-Show-Step 3 'torch（CPU 版）を入れる'
-if (Test-Path (Join-Path $Out 'python\Lib\EXTERNALLY-MANAGED')) {
-  Fail '手順 3: この Python は pip を拒否する設定です（Lib\EXTERNALLY-MANAGED）。python フォルダを消して、手順 2 からやり直す'
+Show-Step 3 'Python の pip の印を外して、torch（CPU 版）を入れる'
+# uv's Python carries Lib\EXTERNALLY-MANAGED (PEP 668), which makes pip refuse. The copy under -Out is ours, so the marker goes here; uv's own folder is not touched.
+$marker = Join-Path $Out 'python\Lib\EXTERNALLY-MANAGED'
+Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
+if (Test-Path $marker) {
+  Fail '手順 3: Lib\EXTERNALLY-MANAGED を消せませんでした。そのファイルを手で消して、同じコマンドを再実行してください'
 }
 & $py -c 'import torch' 2>$null
 if ($LASTEXITCODE -ne 0) {

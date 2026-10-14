@@ -198,7 +198,14 @@ class TestTheKevBundleDocs(unittest.TestCase):
 
     def test_the_manual_steps_install_python_313_with_uv_before_they_find_it(self):
         self.assertIn("uv python install 3.13", self.BUNDLE)
-        self.assertLess(self.BUNDLE.index("uv python install 3.13"), self.BUNDLE.index("uv python find 3.13"))
+        self.assertLess(self.BUNDLE.index("uv python install 3.13"),
+                        self.BUNDLE.index("uv python find --managed-python 3.13"))
+
+    def test_the_manual_steps_take_the_pip_marker_off_the_copy_before_they_install_torch(self):
+        self.assertIn(r"Remove-Item C:\develop\kev-bundle\python\Lib\EXTERNALLY-MANAGED", self.BUNDLE)
+        self.assertLess(self.BUNDLE.index("uv python find --managed-python 3.13"), self.BUNDLE.index("EXTERNALLY-MANAGED"))
+        self.assertLess(self.BUNDLE.index("EXTERNALLY-MANAGED"), self.BUNDLE.index("python.exe -m pip install torch"))
+        self.assertNotIn("uv python find 3.13", self.BUNDLE)
 
     def test_managed_environments_says_the_double_click_is_for_the_managed_pc(self):
         self.assertIn("管理された PC 側の操作はダブルクリック 1 回", self.MANAGED)

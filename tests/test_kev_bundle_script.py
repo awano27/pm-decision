@@ -29,13 +29,15 @@ WINDOWS_ONLY = unittest.skipUnless(sys.platform == "win32" and POWERSHELL,
                                    "Windows PowerShell runs tools/build-kev-bundle.ps1")
 
 
-def run_script(args, path=None):
-    """Runs the script with Windows PowerShell. `path` replaces PATH, so that git and uv cannot be found."""
+def run_script(args, path=None, stdin_text=""):
+    """Runs the script with Windows PowerShell. `path` replaces PATH, so that git and uv cannot be found. `stdin_text`
+    holds the answers to the [y/N] questions; the empty default is no answer, so Read-Host never waits for a human."""
     env = dict(os.environ)
     if path is not None:
         env["PATH"] = path
     return subprocess.run([POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(PS1), *args],
-                          capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, env=env)
+                          input=stdin_text, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          timeout=120, env=env)
 
 
 @WINDOWS_ONLY
@@ -117,6 +119,24 @@ class TestTheScriptText(unittest.TestCase):
         for step in ("uv python install", "pip install", "snapshot_download", "git clone"):
             self.assertGreater(self.src.index(step), ask, step)
 
+    def test_the_script_takes_the_pip_marker_off_the_copy_before_the_first_pip_install(self):
+        lines = self.src.splitlines()
+        self.assertIn(r"$marker = Join-Path $Out 'python\Lib\EXTERNALLY-MANAGED'", self.src)
+        removals = [i for i, line in enumerate(lines) if "Remove-Item" in line and "$marker" in line]
+        robocopy = next(i for i, line in enumerate(lines) if "robocopy" in line)
+        first_pip = next(i for i, line in enumerate(lines) if "-m pip install" in line)
+        self.assertTrue(removals, "the marker is never removed")
+        self.assertLess(robocopy, removals[0], "the marker must go from the copy, after robocopy")
+        self.assertLess(removals[0], first_pip)
+
+    def test_a_marker_that_stays_names_the_one_file_to_delete_instead_of_looping_back(self):
+        self.assertNotIn("からやり直す", self.src)
+        self.assertIn("そのファイルを手で消して", self.src)
+
+    def test_the_script_finds_only_the_python_that_uv_manages(self):
+        self.assertIn("uv python find --managed-python 3.13", self.src)
+        self.assertNotIn("uv python find 3.13", self.src)
+
     def test_the_script_asks_before_it_sends_and_offers_yes_to_skip_the_questions(self):
         for needle in ("HEAD", "[y/N]", "-Yes", "-DryRun", "-NoStartCheck"):
             self.assertIn(needle, self.src)
@@ -135,6 +155,29 @@ class TestTheScriptText(unittest.TestCase):
 
     def test_no_workplace_word_is_in_the_script_or_the_launcher(self):
         self.assertEqual(hidden_words.found(self.src + CMD.read_text(encoding="ascii")), [])
+
+
+@WINDOWS_ONLY
+@unittest.skipUnless(shutil.disk_usage(tempfile.gettempdir()).free >= 15 * 1024 ** 3,
+                     "the script stops at its disk check first when the temp drive has less than 15GB free")
+class TestAnsweringNoStopsBeforeAnyFetch(unittest.TestCase):
+    def test_answering_no_to_the_first_question_exits_one_and_calls_no_git_or_uv(self):
+        base = Path(tempfile.mkdtemp())
+        try:
+            out = base / "kev-bundle"
+            stubs = base / "stubs"
+            stubs.mkdir()
+            called = base / "called.txt"
+            for tool in ("git", "uv"):
+                (stubs / f"{tool}.cmd").write_text(f'@echo off\r\necho {tool}>>"{called}"\r\nexit /b 0\r\n', encoding="ascii")
+            system32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
+            r = run_script(["-Out", str(out)], path=os.pathsep.join([str(stubs), str(system32)]), stdin_text="n\n")
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("中止しました", r.stdout)
+            self.assertFalse(out.exists(), "a folder was created before the answer")
+            self.assertFalse(called.exists(), "git or uv was called before the answer")
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
 
 
 class TestTheLauncher(unittest.TestCase):

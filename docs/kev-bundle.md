@@ -58,28 +58,34 @@ kimeru のフォルダで `build-kev-bundle.cmd` をダブルクリックしま�
    uv sync --extra serve
    ```
 
-2. 単体版の Python を持ち込み用フォルダへ写す。`uv python find 3.13` が示す Python 3.13 のフォルダを、まるごと `kev-bundle\python\` にコピーする。
+2. 単体版の Python を持ち込み用フォルダへ写す。`uv python find --managed-python 3.13` が示す（uv が管理する）Python 3.13 のフォルダを、まるごと `kev-bundle\python\` にコピーする。Microsoft Store の Python など uv の管理外のものは選ばない。
 
-3. その Python に torch（CPU 版）と kev を入れる。
+3. コピーした Python の pip の印を外す。uv の Python には `Lib\EXTERNALLY-MANAGED` が付いていて、このままでは pip が externally-managed-environment と言って拒否する。消すのは持ち込み用フォルダの中のコピーだけで、uv の元のフォルダには触れない。
+
+   ```powershell
+   Remove-Item C:\develop\kev-bundle\python\Lib\EXTERNALLY-MANAGED
+   ```
+
+4. その Python に torch（CPU 版）と kev を入れる。
 
    ```powershell
    C:\develop\kev-bundle\python\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cpu
    C:\develop\kev-bundle\python\python.exe -m pip install "C:\develop\kev-local[serve]"
    ```
 
-4. モデルを取得して `models\` に置く（Hugging Face から。約 9.5GB）。
+5. モデルを取得して `models\` に置く（Hugging Face から。約 9.5GB）。
 
    ```powershell
    C:\develop\kev-bundle\python\python.exe -c "from huggingface_hub import snapshot_download as s; s('jaredpalmer/kev-4b', local_dir=r'C:\develop\kev-bundle\models\kev-4b'); s('Qwen/Qwen3.5-4B-Base', local_dir=r'C:\develop\kev-bundle\models\Qwen3.5-4B-Base')"
    ```
 
-5. 起動用のファイルを置く。
+6. 起動用のファイルを置く。
 
    ```powershell
    Copy-Item <このリポジトリ>\tools\kev-bundle\* C:\develop\kev-bundle\
    ```
 
-6. 開発 PC で、ネットを切った状態でも起動するか確かめる。`C:\develop\kev-bundle\start-kev.cmd` を実行し、`Uvicorn running on http://127.0.0.1:8009` と出たら、kimeru のフォルダで次を実行する。
+7. 開発 PC で、ネットを切った状態でも起動するか確かめる。`C:\develop\kev-bundle\start-kev.cmd` を実行し、`Uvicorn running on http://127.0.0.1:8009` と出たら、kimeru のフォルダで次を実行する。
 
    ```powershell
    python -m kimeru --backend kev run examples\teams_chat.json

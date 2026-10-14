@@ -35,7 +35,7 @@
    powershell -ExecutionPolicy Bypass -File tools\make-bundle.ps1 -Zip -KevSrc <Kev の持ち込み用フォルダ> -AzSrc <az の ZIP 展開先>
    powershell -ExecutionPolicy Bypass -File tools\split-zip.ps1 -Zip C:\develop\kimeru-pc.zip
    ```
-   `C:\develop\parts` に分割ファイル（約 8 個）と `JOIN.cmd` ができる。Kev だけ・kimeru だけの更新なら、変わった部分の小さな ZIP を作って上書き展開してもよい。
+   `C:\develop\parts` に分割ファイル（約 8 個）と `JOIN.cmd` ができる。`-KevSrc` に渡す Kev のフォルダは [Kev の持ち込み用フォルダ](kev-bundle.md) の `build-kev-bundle.cmd` で作る。Kev だけ・kimeru だけの更新なら、変わった部分の小さな ZIP を作って上書き展開してもよい。
 2. **管理された PC**: 組織で認められた方法で `parts` フォルダを**フォルダごと**好きな場所にコピーする。途中で失敗したら、失敗したファイルだけ取り直す。
    前回の `C:\kimeru-pc` が残っていれば、先に削除する。
 3. **管理された PC**: `JOIN.cmd` をダブルクリック。結合 → 破損チェック（`NG` と出たら、そのファイルを取り直す）→ `C:\kimeru-pc` へ展開（約 2 分）→ `START.cmd` の順に自動で進む。

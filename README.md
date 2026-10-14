@@ -181,7 +181,7 @@ flowchart TD
 
 Kev のリモート接続は、`kev_url_remote_ok=1` で明示許可した場合だけ利用できます。セットアップは [導入手順](docs/managed-environments.md)、グラフ・設定・環境変数は [リファレンス](docs/reference.md) を参照してください。
 
-Kev のモデルを持ち込む方法は [Kev の持ち込み用フォルダ](docs/kev-bundle.md) にあります。管理された PC の PowerShell が ConstrainedLanguage の場合、Teams の画面読み取りは動きません。利用前に [実機確認](docs/managed-pc-check.md) で確かめてください。
+Kev のモデルを持ち込む方法は [Kev の持ち込み用フォルダ](docs/kev-bundle.md) にあります。開発 PC では `build-kev-bundle.cmd` をダブルクリックすると、その手順を 1 回で実行します（前提は git と uv。Kev のメモリは bf16 で約 10GB、fp32 で約 14GB、ディスクは約 11GB。約 10GB の取得の前に `[y/N]` で尋ねます）。管理された PC の PowerShell が ConstrainedLanguage の場合、Teams の画面読み取りは動きません。利用前に [実機確認](docs/managed-pc-check.md) で確かめてください。
 
 設定 `learn=1` のときは、種類が決まらない議事録の行に限り、「不要」のフィードバックから作った規則を本人が承認すると、その言い回しを確認待ちにせず記録だけにすることがあります。取り消しは `python -m kimeru learn revert A<番号>` です。
 

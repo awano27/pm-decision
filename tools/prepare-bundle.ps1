@@ -41,7 +41,7 @@ $os = Get-CimInstance Win32_OperatingSystem
 $freeRam = [math]::Round($os.FreePhysicalMemory / 1MB, 1)
 $freeDisk = [math]::Round((Get-PSDrive C).Free / 1GB)
 if (KevUp) { Line $true '空きメモリ' "${freeRam}GB（Kev は起動済みで使用中）" }
-else { Line ($freeRam -ge 11) '空きメモリ' "${freeRam}GB（Kev に約 10GB 必要）$(if ($freeRam -lt 11) { ' → ブラウザのタブ等を閉じる' })" }
+else { Line ($freeRam -ge 11) '空きメモリ' "${freeRam}GB（Kev に約 10GB 必要。bf16 に対応しない CPU では fp32 で約 14GB）$(if ($freeRam -lt 11) { ' → ブラウザのタブ等を閉じる' })" }
 Line ($freeDisk -ge 2) '空きディスク' "${freeDisk}GB"
 
 # 3) Kev

@@ -2,7 +2,7 @@
 
 ネットにつながる開発 PC で一度だけ作り、管理された PC へコピーして使うフォルダです。できあがりは、インストール・管理者権限・ネット接続なしで Kev（この PC の中で動く判断モデル）を起動できます。`tools\make-bundle.ps1 -KevSrc <このフォルダ>` が前提にしている形です。
 
-> この手順は、作者の開発 PC にある持ち込み用フォルダ（2026-09 作成）の中身から書き起こしたものです。新しい PC でこの文書だけを見て最初から作り直す確認は、まだしていません。うまくいかなかった点は Issue で知らせてください。上流の手順は [jaredpalmer/kev](https://github.com/jaredpalmer/kev) の README（2026-10 時点で Python 3.12 か 3.13 と uv が前提）に従います。
+> この手順は、作者の開発 PC にある持ち込み用フォルダ（2026-09 作成）の中身から書き起こしたものです。うまくいかなかった点は Issue で知らせてください。上流の手順は [jaredpalmer/kev](https://github.com/jaredpalmer/kev) の README（2026-10 時点で Python 3.12 か 3.13 と uv が前提）に従います。
 
 ## できあがりの形
 
@@ -28,15 +28,37 @@ kev-bundle\
 
 ## 作り方（開発 PC、ネットあり）
 
-1. 上流のリポジトリを取得し、上流の手順で一度動かす（Python 3.13 と uv が入る）。
+前提は git と uv です。uv が無ければ、PowerShell で次の 1 行を実行し（[uv の公式の案内](https://docs.astral.sh/uv/getting-started/installation/)）、PowerShell を開き直します。
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+kimeru のフォルダで `build-kev-bundle.cmd` をダブルクリックします（PowerShell から行うなら `powershell -ExecutionPolicy Bypass -File tools\build-kev-bundle.ps1`）。次の順に進みます。
+
+1. 取得先（github.com・pypi.org・download.pytorch.org・huggingface.co）に届くかを確かめる。HEAD の要求だけを送り、本文は送らない。送る前に `[y/N]` で尋ねる。
+2. 「約 10GB を取得して `C:\develop\kev-bundle` に作ります。続けますか」と `[y/N]` で尋ねる。
+3. 上流の取得、Python 3.13 の用意、torch（CPU 版）と kev の導入、モデル 2 つの取得、起動用のファイルの配置を、順に行う。取得済みのものは飛ばす。止まったときは、足りないものを 1 行で示す。作りかけのまま同じコマンドを再実行できる。
+4. 完成の検査をし、この CPU の精度を示し、参照先を設定する。最後に、任意で起動の確認をする（`[y/N]`）。
+5. 最後に、`tools\make-bundle.ps1` に渡す次のコマンドを表示する。
+
+オプション: `-Out <場所>`（既定 `C:\develop\kev-bundle`）、`-KevRepo <場所>`（既定 `C:\develop\kev-local`）、`-Yes`（すべての問いに「はい」で答える）、`-DryRun`（何も取得せず、何も作らず、手順と取得先・容量の表だけを出す）、`-NoStartCheck`（起動の確認を省く）。
+
+> `build-kev-bundle.cmd` の通し実行（約 10GB の取得）は、まだ新しい PC で確かめていません。確かめたのは `-DryRun` の出力と、前提が無いときに 1 行で止まることだけです。
+
+<details>
+<summary>手作業の手順（build-kev-bundle.cmd が使えないときだけ）</summary>
+
+1. uv を入れる（前の節の 1 行）。上流のリポジトリを取得し、Python 3.13 を用意してから、上流の手順で一度動かす。
 
    ```powershell
+   uv python install 3.13
    git clone https://github.com/jaredpalmer/kev C:\develop\kev-local
    cd C:\develop\kev-local
    uv sync --extra serve
    ```
 
-2. 単体版の Python を持ち込み用フォルダへ写す。uv が入れた Python 3.13（`uv python find 3.13` が場所を示す）のフォルダを、まるごと `kev-bundle\python\` にコピーする。
+2. 単体版の Python を持ち込み用フォルダへ写す。`uv python find 3.13` が示す Python 3.13 のフォルダを、まるごと `kev-bundle\python\` にコピーする。
 
 3. その Python に torch（CPU 版）と kev を入れる。
 
@@ -62,6 +84,8 @@ kev-bundle\
    ```powershell
    python -m kimeru --backend kev run examples\teams_chat.json
    ```
+
+</details>
 
 ## 管理された PC で使う
 

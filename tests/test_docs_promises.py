@@ -174,5 +174,65 @@ class TestTheQuickstartPromisesNoMore(unittest.TestCase):
                 self.assertNotRegex(line, r"\d\s*(件|秒|点|回|割|%)", line)
 
 
+class TestTheKevBundleDocs(unittest.TestCase):
+    """N3: the Kev folder is built by one command, and the seven documented mismatches are fixed (one line each)."""
+    BUNDLE = (ROOT / "docs" / "kev-bundle.md").read_text(encoding="utf-8")
+    MANAGED = (ROOT / "docs" / "managed-environments.md").read_text(encoding="utf-8")
+    CHECK = (ROOT / "docs" / "managed-pc-check.md").read_text(encoding="utf-8")
+    REF = (ROOT / "docs" / "reference.md").read_text(encoding="utf-8")
+    PREPARE = (ROOT / "tools" / "prepare-bundle.ps1").read_text(encoding="utf-8-sig")
+    SECURITY = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+
+    def test_the_builder_and_its_launcher_exist_and_the_bundle_doc_names_the_launcher(self):
+        self.assertTrue((ROOT / "tools" / "build-kev-bundle.ps1").is_file())
+        self.assertTrue((ROOT / "build-kev-bundle.cmd").is_file())
+        self.assertIn("build-kev-bundle.cmd", self.BUNDLE)
+
+    def test_the_bundle_doc_makes_the_one_command_the_main_path_and_folds_the_manual_steps(self):
+        self.assertIn("<details>", self.BUNDLE)
+        self.assertIn("手作業", self.BUNDLE)
+        self.assertLess(self.BUNDLE.index("build-kev-bundle.cmd"), self.BUNDLE.index("<details>"))
+
+    def test_the_bundle_doc_says_how_to_install_uv_in_one_line(self):
+        self.assertIn("powershell -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\"", self.BUNDLE)
+
+    def test_the_manual_steps_install_python_313_with_uv_before_they_find_it(self):
+        self.assertIn("uv python install 3.13", self.BUNDLE)
+        self.assertLess(self.BUNDLE.index("uv python install 3.13"), self.BUNDLE.index("uv python find 3.13"))
+
+    def test_managed_environments_says_the_double_click_is_for_the_managed_pc(self):
+        self.assertIn("管理された PC 側の操作はダブルクリック 1 回", self.MANAGED)
+
+    def test_managed_environments_points_the_kev_folder_at_the_bundle_doc_not_the_upstream(self):
+        self.assertNotIn("[Kev の手順](https://github.com/jaredpalmer/kev)", self.MANAGED)
+        self.assertIn("(kev-bundle.md)", self.MANAGED)
+
+    def test_managed_pc_check_links_the_kev_folder_to_the_bundle_doc(self):
+        self.assertRegex(self.CHECK, r"\(kev-bundle\.md\)")
+        self.assertIn("build-kev-bundle.cmd", self.CHECK)
+
+    def test_prepare_bundle_says_fp32_needs_about_fourteen_gigabytes_and_keeps_the_threshold(self):
+        self.assertIn("fp32 で約 14GB", self.PREPARE)
+        self.assertIn("($freeRam -ge 11)", self.PREPARE)
+
+    def test_reference_says_the_bundle_launcher_chooses_kev_dtype_when_it_is_unset(self):
+        row = next(l for l in self.REF.splitlines() if l.startswith("| `KEV_DTYPE`"))
+        self.assertIn("start-kev.cmd", row)
+        self.assertNotIn("未設定なら CPU に合わせて自動", row)
+
+    def test_readme_gives_the_kev_prerequisites_and_names_the_builder(self):
+        self.assertIn("build-kev-bundle.cmd", README)
+        self.assertIn("bf16 で約 10GB", README)
+        self.assertIn("fp32 で約 14GB", README)
+        self.assertIn("uv", README)
+
+    def test_security_md_lists_the_four_destinations_of_the_builder_in_one_row(self):
+        row = next(l for l in self.SECURITY.splitlines() if l.startswith("|") and "build-kev-bundle" in l)
+        for host in ("github.com", "pypi.org", "download.pytorch.org", "huggingface.co"):
+            self.assertIn(host, row)
+        self.assertIn("約 10GB", row)
+        self.assertIn("[y/N]", row)
+
+
 if __name__ == "__main__":
     unittest.main()

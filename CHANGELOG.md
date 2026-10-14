@@ -2,6 +2,8 @@
 
 ## 未リリース
 
+- **Kev の持ち込み用フォルダを、`build-kev-bundle.cmd` の 1 回で作れるようにした。**何が起きていたか: 作り方の 8 手順がすべて手作業で、まとめて実行するものが無かった。手順書の不一致も 7 件あった（uv の入れ方と `uv python install 3.13` の抜け、上流の手順へのリンク、メモリの目安 11GB が fp32 の約 14GB に足りない、`KEV_DTYPE` の自動選択が Kev 本体の機能に見える、CHANGELOG が README の「しくみ」にあると書いたメモリ・ディスク・uv の前提が README に無い）。どう直したか: `tools/build-kev-bundle.ps1` と `build-kev-bundle.cmd` を追加した。送る前と取得の前に `[y/N]` で尋ね、`-DryRun` は何も取得も作成もしない。git か uv が無いときは 1 行で止まる。手順書の「作り方」は 1 コマンドにし、手作業の手順は折りたたみで残した。テストで固定した: `tests/test_kev_bundle_script.py`（`-DryRun` の 8 手順と 4 つの取得先、何も作らないこと、git・uv が無いときの 1 行の停止、取得の確認が取得より前にあること）、`tests/test_docs_promises.py`（7 件の不一致が直っていること、SECURITY.md の取得先の行）。
+
 - **デモから自分の Teams で 1 回動かすまでの順番を、`docs/quickstart.md`（最初の 30 分）の 1 本にして、README から 1 行でつないだ。**何が起きていたか: デモの次の一手（Teams の読み取り確認、自分とのチャットへの試験の 1 通、1 サイクル、判断モデル）が README と管理された PC 向けの 2 つの文書に分かれていて、何をどの順に読めばよいか分からなかった。どう直したか: 5 段のそれぞれに所要時間・コマンド・できたと分かる印・失敗したときの見る場所を書いた。新しい機能は足していない。テストで固定した: `tests/test_docs_promises.py`（手順のコマンドが README か reference にあること、`.cmd` と `T5` の実在、5 段の書式、「自動で返信」などの表現と語、Jev の数字が無いこと、README からのリンク）。
 
 - **Teams が動いているのにウィンドウが無いとき、「起動していない」と言っていたのを直した。**何が起きていたか: Teams のプロセスは動いていて（トレイに常駐）、ウィンドウだけが表示されていない状態を、`check.ps1` は「Teams が起動していない」と SKIP し、`pull teams` と `daily --once` の報告も同じ言葉で止まった。どう直したか: `teams-self.ps1 status` に `teams_process`（プロセスがある）と `teams_window`（ウィンドウが読める）を足し（`teams` の意味は変えない）、チャット一覧が読めなかったときだけ status を 1 回読んで「Teams のウィンドウが表示されていません（起動はしています）」か「Teams が起動していません」を出す。`kimeru diagnose` の既知の文にも 2 通りを足した。Teams は起動も前面化もしない。テストで固定した: `tests/test_teams_window.py`（トレイ常駐と起動していないときの文、一覧が読めたときは status を読まないこと、status が読めないときと欄が無いときは元の文のままなこと、`daily` の報告と `pull teams` の 1 行、偽の読み手の 3 状態）、`tests/test_auto_check.py`（`check.ps1` の 2 通りの文と、古い文だけの判定が残らないこと、status の欄）。

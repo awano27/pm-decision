@@ -205,7 +205,7 @@ python -m kimeru config path
 | `KIMERU_WRITER_CMD` | `KIMERU_WRITER=cmd` のコマンド（プロンプトを標準入力で受け、答えを標準出力へ） |
 | `KIMERU_WRITER_NO_REST` / `KIMERU_M365_NO_REST` | `1` で、writer の休止（月間上限・失敗のあと）を無視する（試験用） |
 | `KIMERU_DEBUG_WRITER` | `1` で、writer が JSON を返さなかったときの答えの先頭を表示する（架空のサンプルだけで使う） |
-| `KEV_DTYPE` | Kev の計算方式（`bf16` / `fp32`。未設定なら CPU に合わせて自動） |
+| `KEV_DTYPE` | Kev の計算方式（`bf16` / `fp32`）。未設定なら、持ち込み用フォルダの `start-kev.cmd` が CPU を見て選ぶ（`pick-dtype.py`。Kev 本体の機能ではない） |
 
 自動運転（`schedule install`）が引き継ぐもの: そのとき効いている設定（引数・環境変数）は設定ファイルへ保存され（既定値と同じ値を指定したときも、ファイルの古い値を置き換えます）、`KIMERU_STATE_DIR` は起動行に付きます。**引き継がない**もの: `KIMERU_WRITER_CMD` と `KIMERU_*_EXE`（この PC の場所やコマンドなので、ユーザー環境変数に置いてください）、秘密の環境変数（同じくユーザー環境変数）。
 

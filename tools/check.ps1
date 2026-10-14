@@ -131,6 +131,24 @@ function WaitReply($id, $word) {
   return $false
 }
 
+# N4 (T25 to T27): Python judges with kimeru's own functions and prints only a count, a state or a fixed word as JSON; a row's text is never printed or kept
+function Control-Word($rows) {
+  # control.line_of: my own line of the self chat as 停止, 再開 or none (the daily cycle's judgment)
+  $tf = Join-Path $tmp ('ctl-' + (Get-Random) + '.json')
+  [IO.File]::WriteAllText($tf, (ConvertTo-Json -InputObject @($rows) -Compress), (New-Object Text.UTF8Encoding $false))
+  $j = Py @('-c', 'import json, sys; from kimeru import control; d = json.load(open(sys.argv[1], encoding=''utf-8'')); r = control.line_of(d); print(json.dumps({''row'': r is not None, ''word'': r[1] if r else None}))', $tf)
+  Remove-Item $tf -ErrorAction SilentlyContinue
+  try { return (($j -split "`n") | Where-Object { $_.Trim().StartsWith('{') } | Select-Object -Last 1 | ConvertFrom-Json) } catch { return $null }
+}
+function Sent-Classes($sendText, $shown) {
+  # sent.classify: each of my rows in other chats against the text I was asked to send, as as_is / edited / other (counts only)
+  $tf = Join-Path $tmp ('sent-' + (Get-Random) + '.json')
+  [IO.File]::WriteAllText($tf, (ConvertTo-Json -InputObject ([ordered]@{ sent = [string]$sendText; shown = @($shown) }) -Compress), (New-Object Text.UTF8Encoding $false))
+  $j = Py @('-c', 'import json, sys; from kimeru import sent; d = json.load(open(sys.argv[1], encoding=''utf-8'')); r = [sent.classify(d[''sent''], s)[0] for s in d[''shown'']]; print(json.dumps({''n'': len(r), ''as_is'': r.count(''as_is''), ''edited'': r.count(''edited''), ''other'': r.count(''other'')}))', $tf)
+  Remove-Item $tf -ErrorAction SilentlyContinue
+  try { return (($j -split "`n") | Where-Object { $_.Trim().StartsWith('{') } | Select-Object -Last 1 | ConvertFrom-Json) } catch { return $null }
+}
+
 Write-Host "kimeru 管理PCチェック（外部送信の前には必ず確認します。Ctrl+C でいつでも中止できます）" -ForegroundColor Green
 
 # ---- Level 0: PowerShell only ----
@@ -507,6 +525,109 @@ if ($selfOk -and (Want 'T20')) {
         } catch {}
       }
       Rec 'T20' ("{0} 聞き返し={1} 下書き={2}" -f $(if ($okA -and $okB) { 'OK' } else { 'NG' }), $(if ($okA) { '読めた' } else { '読めない' }), $(if ($okB) { '読めた' } else { '読めない' }))
+    }
+  }
+}
+
+# ---- T25 停止・再開の語（自分とのチャットの自分の行を読むだけ。打つのは人）----
+# N4: my own line of the list is judged by control.line_of (the daily cycle's own judgment). No chat is opened and nothing is sent by the script.
+if (Want 'T25') {
+  Say "T25 停止・再開の語（自分とのチャットの一覧の、自分の行だけを読みます）"
+  if ($Auto) { Rec 'T25' 'SKIP（自動: 自分とのチャットに人が打つ必要がある。run-check.cmd T25 で行う）' }
+  elseif (-not $uia) { Rec 'T25' 'SKIP（組織ポリシーで画面操作不可）' }
+  elseif (-not $py) { Rec 'T25' 'SKIP（Python なし）' }
+  elseif (-not (YesNo "   自分とのチャットに「停止」と「再開」を、あなたが 1 行ずつ打ちます（宛先は自分だけ。スクリプトは送りません）。よろしいですか")) { Rec 'T25' 'SKIP' }
+  else {
+    $ctlWait = 30; $found = @{}; $waited = @{}; $row = 'なし'; $readErr = $null
+    foreach ($word in @('停止', '再開')) {
+      Write-Host ("   自分とのチャットに「{0}」とだけ打って Teams で送信し、この画面で Enter を押してください（最大 {1} 秒、一覧を読みます）" -f $word, $ctlWait) -ForegroundColor Green
+      [void](Read-Host '   ')
+      $began = Get-Date; $hit = $false
+      while (-not $hit -and -not $readErr -and ((Get-Date) - $began).TotalSeconds -lt $ctlWait) {
+        $c = Self 'chats'
+        if (-not $c.ok) { $readErr = [string]$c.error; break }
+        $selfRows = @($c.chats | Where-Object { $_.kind -eq 'self' } | ForEach-Object { [ordered]@{ kind = 'self'; preview = [string]$_.preview } })
+        $row = if ($selfRows.Count) { 'あり' } else { 'なし' }
+        $hit = (Control-Word $selfRows).word -eq $word
+        if (-not $hit) { Start-Sleep -Seconds 5 }
+      }
+      $found[$word] = $hit
+      $waited[$word] = [int]((Get-Date) - $began).TotalSeconds
+    }
+    if ($readErr) { Rec 'T25' ('NG ' + $readErr) }
+    else { $ok = [bool]($found['停止'] -and $found['再開']); Rec 'T25' ("{0} 停止={1}（待った{2}秒） 再開={3}（待った{4}秒） 自分の行={5}" -f $(if ($ok) { 'OK' } else { 'NG' }), $(if ($found['停止']) { '認識' } else { '未認識' }), $waited['停止'], $(if ($found['再開']) { '認識' } else { '未認識' }), $waited['再開'], $row) }
+  }
+}
+
+# ---- T26 送った文が一覧の自分の行に出るか（相手のチャットは開きません。一覧の「あなた:」の行だけを読みます）----
+# N4: my rows in other chats are classified by sent.classify (as_is, edited, other). A row's text is never printed or kept.
+if (Want 'T26') {
+  Say "T26 送った文が一覧の自分の行に出るか（相手のチャットは開きません。一覧の「あなた:」の行だけを読みます）"
+  if ($Auto) { Rec 'T26' 'SKIP（自動: 1 対 1 チャットへの送信は人が行う。run-check.cmd T26 で行う）' }
+  elseif (-not $uia) { Rec 'T26' 'SKIP（組織ポリシーで画面操作不可）' }
+  elseif (-not $py) { Rec 'T26' 'SKIP（Python なし）' }
+  else {
+    $n = Get-Random -Minimum 100 -Maximum 999
+    $sendText = "kimeru 試験 $n の送信です"
+    Write-Host "   どれかの 1 対 1 チャットに、次の文を 1 通だけ、そのまま送ってください（相手に届く文です。送るのはあなたです）:" -ForegroundColor Green
+    Write-Host ("     {0}" -f $sendText) -ForegroundColor Green
+    if (-not (YesNo "   送り終えましたか？（N なら SKIP。このあとは一覧を読むだけです）")) { Rec 'T26' 'SKIP' }
+    else {
+      $began = Get-Date; $readErr = $null; $cls = $null; $ok = $false
+      Start-Sleep -Seconds 5
+      while (-not $ok -and -not $readErr -and ((Get-Date) - $began).TotalSeconds -lt 60) {
+        $c = Self 'chats'
+        if (-not $c.ok) { $readErr = [string]$c.error; break }
+        $shown = @($c.chats | Where-Object { $_.kind -ne 'self' -and [string]$_.preview -match '^\s*(あなた|You)\s*:' } | ForEach-Object { [string]$_.preview -replace '^\s*(あなた|You)\s*:\s*', '' })
+        $cls = Sent-Classes $sendText $shown
+        $ok = [bool]($cls -and [int]$cls.as_is -ge 1)
+        if (-not $ok) { Start-Sleep -Seconds 10 }
+      }
+      $waited = [int]((Get-Date) - $began).TotalSeconds
+      if ($readErr) { Rec 'T26' ('NG ' + $readErr) }
+      elseif (-not $cls) { Rec 'T26' 'NG 分類できず（Python の出力を読めない）' }
+      else { $tot = [int]$cls.n; $asIs = [int]$cls.as_is; $edited = [int]$cls.edited; $other = [int]$cls.other; Rec 'T26' ("{0} 件数={1} as_is={2} edited={3} other={4} 待った={5}秒" -f $(if ($ok) { 'OK' } else { 'NG' }), $tot, $asIs, $edited, $other, $waited) }
+    }
+  }
+}
+
+# ---- T27 返信の語を読み手が読めるか（自分とのチャットに試験の投稿 1 通。承認の状態は変えません）----
+# N4: the post starts with the test mark, so the real reader never takes a reply below it for an approval. Only the reader (read) is used.
+if (Want 'T27') {
+  Say "T27 返信の語を読み手が読めるか（試験の投稿の下に打つ語。承認の状態は変えません）"
+  if ($Auto) { Rec 'T27' 'SKIP（自動: 自分とのチャットに投稿し、人が打つ必要がある。run-check.cmd T27 で行う）' }
+  elseif (-not $uia -or -not $selfOk) { Rec 'T27' 'SKIP（自分とのチャットが開けていないため。先に T3 を通してください）' }
+  elseif (-not (YesNo "   自分とのチャットに試験の投稿を 1 通送信します（宛先は自分だけ。承認の投稿ではありません）。よろしいですか")) { Rec 'T27' 'SKIP' }
+  else {
+    $n = Get-Random -Minimum 100 -Maximum 999
+    $p27 = Self 'post' @('-Text', "[kimeru 試験 #$n] 返信の試験です。次の 7 行を、自分とのチャットに 1 行ずつ打ってください")
+    $s27 = if ($p27.ok -and $p27.typed) { Self 'send' } else { $p27 }
+    if (-not $s27.ok) { $readErr = [string]$s27.error; Rec 'T27' ('NG ' + $readErr) }
+    else {
+      $want = @("R:違う $n", "R:保留 $n 明日", "R:不要 $n", "R:着手 $n", "R:完了 $n 1", "R:延期 $n 明日", "R:送った $n")
+      $words = @('違う', '保留', '不要', '着手', '完了', '延期', '送った')
+      Write-Host "   上の投稿の下に、次の 7 行を、自分とのチャットに 1 行ずつ打って送ってください（最大 $WaitSec 秒。読めたものから数えます）:" -ForegroundColor Green
+      foreach ($line in @($want | ForEach-Object { $_.Substring(2) })) { Write-Host ("     {0}" -f $line) -ForegroundColor Green }
+      $began = Get-Date; $tl = @(); $at = -1; $readErr = $null
+      while ((Get-Date) -lt $began.AddSeconds($WaitSec)) {
+        $r = Self 'read'
+        if (-not $r.ok) { $readErr = [string]$r.error; break }
+        if ($r.timeline) {
+          $tl = @($r.timeline)
+          $at = [array]::IndexOf($tl, "T:$n")
+          if ($at -ge 0 -and @($want | Where-Object { [array]::IndexOf($tl, $_) -gt $at }).Count -eq $want.Count) { break }
+        }
+        Start-Sleep -Seconds 10
+      }
+      $hits = 0; $missing = @()
+      for ($i = 0; $i -lt $want.Count; $i++) {
+        if ($at -ge 0 -and [array]::IndexOf($tl, $want[$i]) -gt $at) { $hits++ } else { $missing += $words[$i] }
+      }
+      $waited = [int]((Get-Date) - $began).TotalSeconds
+      $posted = if ($at -ge 0) { 'あり' } else { 'なし' }
+      $missTxt = if ($missing.Count) { $missing -join '・' } else { 'なし' }
+      if ($readErr) { Rec 'T27' ('NG ' + $readErr) }
+      else { Rec 'T27' ("{0} 投稿={1} 分類={2}/{3} 分類されなかった語={4} 待った={5}秒" -f $(if ($hits -eq $want.Count) { 'OK' } else { 'NG' }), $posted, $hits, $want.Count, $missTxt, $waited) }
     }
   }
 }

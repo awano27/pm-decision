@@ -52,8 +52,15 @@ class TestAutoMode(unittest.TestCase):
         line = next(l for l in CHECK.splitlines() if "$Only -contains 'auto'" in l)
         items = set(re.findall(r"'(T\d+)'", line))
         self.assertEqual(items, {"T1", "T7", "T8", "T12", "T13", "T14", "T16", "T23"})
-        sending = {"T5", "T9", "T10", "T11", "T15", "T17", "T18", "T19", "T20", "T21", "T22", "T24"}
+        sending = {"T5", "T9", "T10", "T11", "T15", "T17", "T18", "T19", "T20", "T21", "T22", "T24", "T25", "T26", "T27"}
         self.assertFalse(items & sending)
+
+    def test_the_reading_items_of_n4_are_not_in_the_auto_set_and_are_listed_for_a_person(self):   # N4: T25 to T27 need a person
+        line = next(l for l in CHECK.splitlines() if "$Only -contains 'auto'" in l)
+        for item in ("T25", "T26", "T27"):
+            self.assertNotIn(f"'{item}'", line)
+        for item in ("T25", "T26", "T27"):
+            self.assertIn(f"run-check.cmd {item}", AUTO.decode("utf-8-sig"))
 
     def test_the_launcher_and_the_script(self):
         cmd = (ROOT / "run-auto-check.cmd").read_bytes()

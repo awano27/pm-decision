@@ -39,9 +39,9 @@ class TestCheckPs1ProgramsHaveNoDoubleQuote(unittest.TestCase):
     def setUp(self):
         self.text = CHECK.read_text(encoding="utf-8-sig")
 
-    def test_the_three_programs_have_no_double_quote_and_are_valid_python(self):
+    def test_the_five_programs_have_no_double_quote_and_are_valid_python(self):
         progs = ps_literals(self.text)
-        self.assertEqual(len(progs), 3)               # T22 target, T22 read-back, T15
+        self.assertEqual(len(progs), 5)               # T22 target, T22 read-back, T15, T25 (control.line_of), T26 (sent.classify) (N4)
         for p in progs:
             self.assertNotIn('"', p)                  # Windows PowerShell 5.1 drops it from an element of an argument array
             compile(p, "check.ps1", "exec")
@@ -49,7 +49,7 @@ class TestCheckPs1ProgramsHaveNoDoubleQuote(unittest.TestCase):
                         and any("find_exe" in p for p in progs))
 
     def test_no_py_call_passes_c_in_another_form(self):
-        self.assertEqual(len(re.findall(r"'-c'", self.text)), 3)
+        self.assertEqual(len(re.findall(r"'-c'", self.text)), 5)
 
     def _run(self, exe):
         with tempfile.TemporaryDirectory() as d:
@@ -61,7 +61,7 @@ class TestCheckPs1ProgramsHaveNoDoubleQuote(unittest.TestCase):
                                                               sys.executable, str(f)],
                                capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(ROOT), env=env, timeout=120)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(r.stdout.count("OK "), 3, r.stdout)
+        self.assertEqual(r.stdout.count("OK "), 5, r.stdout)
         self.assertIn('"found": 1', r.stdout)               # the real inspect_comment ran, against a stored comment (no network)
         for k in ("wrapped_in_tags", "escaped", "same_text_check"):
             self.assertIn(f'"{k}": true', r.stdout)

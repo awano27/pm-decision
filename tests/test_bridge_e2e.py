@@ -151,5 +151,54 @@ class TestSelfOpenFromTheReader(unittest.TestCase):   # N5: status says whether 
             self.assertEqual(st["self_open"], st["selfChatOpen"], teams)
 
 
+def read_chat(messages):
+    """The fake self chat holding `messages`, read by the bridge exactly as the real reader is called."""
+    with tempfile.TemporaryDirectory() as d:
+        chat = Path(d) / "chat.json"
+        chat.write_text(json.dumps({"messages": messages}, ensure_ascii=False), encoding="utf-8")
+        with mock.patch.dict(os.environ, {"KIMERU_FAKE_CHAT": str(chat)}):
+            return notify.PowerShellBridge(script=FAKE).read()
+
+
+@unittest.skipUnless(os.name == "nt" and shutil.which("powershell"), "needs Windows PowerShell")
+class TestSplitBodyIsNotRead(unittest.TestCase):
+    """S1 (send_ready_split=1): the heading and the body of an approved reply are self-chat posts that the reader does not turn
+    into replies or boundaries. The lines after a body's first line (`OK N`, `詳細 N`) are not read, so the timeline and the fresh
+    replies are the same as in the chat without the split pair."""
+    APPROVAL = "[kimeru #1]\nOK 1 / NG 1 / 詳細 1"
+    HEADING = "[kimeru 送信用 #1] 架空の相手ZQへ。次の投稿をそのまま送ってください"
+
+    def test_the_body_lines_after_the_marker_are_not_replies_or_boundaries(self):
+        plain = read_chat([self.APPROVAL, "OK 1"])
+        split = read_chat([self.APPROVAL, "OK 1", self.HEADING, "[kimeru 本文 #1]\nOK 2\n詳細 3\n承知しました。"])
+        self.assertEqual(split["timeline"], ["P:1", "R:OK 1"])
+        self.assertEqual(split["timeline"], plain["timeline"])
+        self.assertEqual(notify.fresh_entries(split), [("OK 1", 0)])
+        self.assertEqual(notify.fresh_entries(split), notify.fresh_entries(plain))
+        self.assertEqual(notify.fresh_replies(split), ["OK 1"])
+        self.assertEqual([notify._reply_number(e[2:]) for e in split["timeline"] if e.startswith("R:")], ["1"])
+
+    def test_a_body_line_that_says_ok_for_the_same_number_is_not_a_second_reply(self):
+        plain = read_chat([self.APPROVAL, "OK 1"])
+        split = read_chat([self.APPROVAL, "OK 1", self.HEADING, "[kimeru 本文 #1]\n承知しました。\nOK 1"])
+        self.assertEqual(split["timeline"], plain["timeline"])
+        self.assertEqual(notify.fresh_entries(split), notify.fresh_entries(plain))
+        self.assertEqual(notify.fresh_entries(split), [("OK 1", 0)])
+
+    def test_the_heading_and_the_body_alone_make_no_timeline_entry(self):
+        self.assertEqual(read_chat([self.HEADING])["timeline"], [])
+        self.assertEqual(read_chat(["[kimeru 本文 #1]\nOK 1\n詳細 1"])["timeline"], [])
+
+
+class TestTheRealReaderKeepsOnlyTheFirstLineOfAPost(unittest.TestCase):
+    """The Teams reader (tools/teams-self.ps1) reads a Teams window, so no test runs it. This pins the rule that a split body
+    depends on: only the first line of a post that starts with `[kimeru` is read."""
+
+    def test_the_reader_skips_every_line_after_the_first_of_a_kimeru_post(self):
+        src = (ROOT / "tools" / "teams-self.ps1").read_text(encoding="utf-8")
+        self.assertIn("$isPost = ([string]$el.Current.Name).TrimStart().StartsWith('[kimeru')", src)
+        self.assertIn("if ($isPost -and $li -gt 0) { continue }", src)
+
+
 if __name__ == "__main__":
     unittest.main()

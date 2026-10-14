@@ -516,6 +516,13 @@ class TestSendReadySplit(unittest.TestCase):
         execute.send_ready_posts(3, {"record": self.rec(author="")}, posts.append, split=True)
         self.assertEqual(posts[0], "[kimeru 送信用 #3] 相手へ。次の投稿をそのまま送ってください")
 
+    def test_split_clips_a_counterpart_name_longer_than_forty_characters_to_forty(self):
+        name = "架空の相手ZQ" * 6   # 48 characters
+        posts = []
+        execute.send_ready_posts(3, {"record": self.rec(author=name)}, posts.append, split=True)
+        self.assertEqual(posts[0], "[kimeru 送信用 #3] " + name[:39] + "…へ。次の投稿をそのまま送ってください")
+        self.assertEqual(len(name[:39] + "…"), 40)
+
     def test_split_puts_the_chat_link_on_the_heading_and_never_in_the_body(self):
         posts = []
         execute.send_ready_posts(3, {"record": self.rec()}, posts.append, link=True, split=True)

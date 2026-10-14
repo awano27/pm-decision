@@ -475,12 +475,13 @@ def send_ready_posts(num, item, post, link=False, split=False):
 
 
 def _counterpart(item):
-    """The other person's name, on one line (the author of the message the reply answers); `相手` when the record has none."""
+    """The other person's name, on one line and at most 40 characters (the author of the message the reply answers); `相手` when the
+    record has none."""
     rec = item.get("record") or {}
     for src in (rec.get("event"), rec.get("material_event")):
         name = " ".join(str(src.get("author") or "").split()) if isinstance(src, dict) else ""
         if name:
-            return name
+            return name if len(name) <= 40 else name[:39] + "…"
     return "相手"
 
 

@@ -145,7 +145,7 @@ OK 1 / NG 1 / 修正 1 <点> / 聞き返し 1 / 詳細 1
 
 確認待ちは短い投稿で届き、`詳細 1` で元の文面・判断メモ・下書きの全文を確認できます。スマホから `修正 1 もっと短く` と返すと、同じ番号で改訂して確認を求めます。`OK 1` で承認した文面はコピーして相手に送れます。**承認したことと、送信・作業が完了したことは別に記録します。**
 
-実際の Teams で試す準備は [管理された PC での導入](docs/managed-environments.md) と [実機確認の手順](docs/managed-pc-check.md) を参照してください。
+実際の Teams で試す準備は [管理された PC での導入](docs/managed-environments.md) と [実機確認の手順](docs/managed-pc-check.md) を参照してください。デモから自分の Teams で 1 回動かすまでの順番は [最初の 30 分](docs/quickstart.md) にまとめています。
 
 ---
 
@@ -435,6 +435,7 @@ flowchart LR
 
 | 知りたいこと | ドキュメント |
 |---|---|
+| デモから自分の Teams で 1 回動かすまで | [最初の 30 分](docs/quickstart.md) |
 | 管理された PC へ持ち込む・実機で確認する | [導入](docs/managed-environments.md) / [実機確認](docs/managed-pc-check.md) |
 | コマンド・設定・入力形式・グラフを書く | [リファレンス](docs/reference.md) |
 | 判断モデルを持ち込む | [Kev の持ち込み用フォルダ](docs/kev-bundle.md) |

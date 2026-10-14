@@ -126,6 +126,31 @@ class TestT18PutsTheSettingBack(unittest.TestCase):
         self.assertIn("$env:KIMERU_M365_NO_REST = $noRestPrev", restore)
 
 
+class TestTeamsWithoutAWindow(unittest.TestCase):   # N2: Teams that runs with no window is not "not started"
+    OLD_SKIP = "SKIP（自動: Teams が起動していない。自動では起動しない）"
+
+    def test_the_two_states_have_their_own_sentences(self):
+        self.assertIn("Teams は起動しているが、ウィンドウが表示されていない", CHECK)
+        self.assertIn("Teams が起動していない", CHECK)
+        self.assertIn("function Teams-Down", CHECK)
+
+    def test_the_skip_for_a_missing_window_is_not_the_old_sentence_alone(self):
+        self.assertNotIn(self.OLD_SKIP, CHECK)
+        guard = next(l for l in CHECK.splitlines() if "-not (Self 'status').teams) { $uia = $false; Rec 'T1-T5'" in l)
+        self.assertIn("Teams-Down", guard)
+
+    def test_the_manual_start_says_which_state_teams_is_in_before_it_starts_it(self):
+        block = CHECK[CHECK.index('Say "Teams を起動"'):CHECK.index("Start-Process 'explorer.exe' 'shell:AppsFolder\\MSTeams")]
+        self.assertIn("Teams-Down", block)
+
+    def test_the_status_reports_the_process_and_the_window_apart(self):
+        text = (ROOT / "tools" / "teams-self.ps1").read_text(encoding="utf-8-sig")
+        status = next(l for l in text.splitlines() if "$Action -eq 'status'" in l)
+        self.assertIn("teams = [bool]$w", status)   # the old field keeps its meaning
+        self.assertIn("teams_process = ", status)
+        self.assertIn("teams_window = [bool]$w", status)
+
+
 class TestNoEnvironmentDetails(unittest.TestCase):
 
     def test_public_documents_do_not_name_the_tested_environment(self):

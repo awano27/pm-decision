@@ -144,12 +144,19 @@ Rec 'T0' ("PS={0} LanguageMode={1} Teams={2}" -f $PSVersionTable.PSVersion, $lan
 $uia = $lang -eq 'FullLanguage'
 if (-not $uia) { Rec 'T1-T5' 'SKIP（ConstrainedLanguage: 組織ポリシーで画面操作不可）' }
 
+# N2: Teams that runs with no window on screen (tray) is not "not started": the two states get their own sentence
+function Teams-Down($st) {
+  if ($st.teams_process) { 'Teams は起動しているが、ウィンドウが表示されていない。Teams のウィンドウを開いてチャット一覧を表示してから実行する' } else { 'Teams が起動していない' }
+}
+
 $selfOk = $false
 if ($uia -and $Auto -and -not ($Only | Where-Object { $_ -in @('T1', 'T3', 'T12', 'T23') })) { $uia = $false; Rec 'T1-T5' 'SKIP（自動: 画面の確認を選んでいない）' }
-if ($uia -and $Auto -and -not (Self 'status').teams) { $uia = $false; Rec 'T1-T5' 'SKIP（自動: Teams が起動していない。自動では起動しない）' }
+if ($uia -and $Auto -and -not (Self 'status').teams) { $uia = $false; Rec 'T1-T5' ("SKIP（自動: {0}。自動では起動しない）" -f (Teams-Down (Self 'status'))) }
 if ($uia) {
   Say "Teams を起動"
   if (-not (Self 'status').teams) {
+    $down = Self 'status'
+    Write-Host ("   {0}（最大 60 秒、待ちます）" -f (Teams-Down $down)) -ForegroundColor Yellow
     Start-Process 'explorer.exe' 'shell:AppsFolder\MSTeams_8wekyb3d8bbwe!MSTeams'
     for ($i = 0; $i -lt 12 -and -not (Self 'status').teams; $i++) { Start-Sleep -Seconds 5 }
     Start-Sleep -Seconds 10   # let the chat list render

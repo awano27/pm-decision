@@ -2,7 +2,7 @@
 .SYNOPSIS
   Teams "chat with yourself" bridge via built-in Windows UI Automation (no downloads, no admin).
 
-  status               -> JSON {teams, selfChatOpen}
+  status               -> JSON {teams, teams_process, teams_window, selfChatOpen}
   open                 -> select the self chat in the chat list, verify by window title
   post -Text <s>       -> open self chat, paste text into the compose box (NOT sent)
   post -Text <s> -Send -> same, then press Enter after re-verifying the window title
@@ -932,7 +932,8 @@ if ($Action -eq 'learn') {
   Out-Json ([ordered]@{ ok = $true; learned = $true; itemFound = [bool](Find-SelfItem $w) })   # the name itself is not printed
   exit 0
 }
-if ($Action -eq 'status') { Out-Json @{ ok = $true; teams = [bool]$w; selfChatOpen = [bool](Test-SelfOpen $w) }; exit 0 }
+# N2: teams = the window (kept as it was); teams_process = a ms-teams process runs; teams_window = its window is on screen to read
+if ($Action -eq 'status') { Out-Json @{ ok = $true; teams = [bool]$w; teams_process = [bool](@(Get-TeamsPids).Count); teams_window = [bool]$w; selfChatOpen = [bool](Test-SelfOpen $w) }; exit 0 }
 if (-not $w) { Fail 'Teams window not found' }
 $w = Open-SelfChat $w
 Ensure-Learned $w

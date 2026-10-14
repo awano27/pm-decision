@@ -268,6 +268,11 @@ class BridgeError(RuntimeError):
         self.data = data or {}
 
 
+# N2: what `chats` says when the list cannot be read and Teams runs with no window, or does not run (one line each, no names)
+TEAMS_NO_WINDOW = "Teams のウィンドウが表示されていません（起動はしています）。Teams のウィンドウを開いてチャット一覧を表示してください"
+TEAMS_NOT_RUNNING = "Teams が起動していません"
+
+
 class PowerShellBridge:
     """Runs tools/teams-self.ps1 (built-in UI Automation, no downloads)."""
 
@@ -304,7 +309,21 @@ class PowerShellBridge:
         return self._run("-Action", "read")
 
     def chats(self):
-        return self._run("-Action", "chats").get("chats", [])
+        try:
+            return self._run("-Action", "chats").get("chats", [])
+        except BridgeError as e:
+            raise BridgeError(self._no_list_reason(e), e.data) from e
+
+    def _no_list_reason(self, first):
+        """N2: the chat list cannot be read. Teams that runs with no window shown (tray) is not "not started": one status read tells
+        the two apart. Any other case, or a status that cannot be read or has no such fields, keeps the script's own message."""
+        try:
+            st = self._run("-Action", "status")
+        except Exception:   # the status only words the error; the first failure is the one reported
+            return str(first)
+        if st.get("teams_window") or "teams_process" not in st:
+            return str(first)
+        return TEAMS_NO_WINDOW if st.get("teams_process") else TEAMS_NOT_RUNNING
 
     def probe(self):
         """Read only (`kimeru diagnose`): the self-chat messages as the send readback reads them. The texts stay in memory."""

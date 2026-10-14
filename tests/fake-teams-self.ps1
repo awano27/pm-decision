@@ -60,7 +60,14 @@ switch ($Action) {
     }
     Out-Json @{ ok = $true; posts = @(); replies = @(); timeline = @($tl) }
   }
+  'status' {
+    # N2: KIMERU_FAKE_TEAMS = window (the default) | tray (the process runs, no window on screen) | none (not running)
+    $st = if ($env:KIMERU_FAKE_TEAMS) { $env:KIMERU_FAKE_TEAMS } else { 'window' }
+    $win = [bool]($st -eq 'window')
+    Out-Json @{ ok = $true; teams = $win; teams_process = [bool]($st -ne 'none'); teams_window = $win; selfChatOpen = $win }
+  }
   'chats' {
+    if ($env:KIMERU_FAKE_TEAMS -in 'tray', 'none') { Out-Json @{ ok = $false; error = 'Teams window not found' }; exit 2 }
     $f = $env:KIMERU_FAKE_CHATS
     $rows = if ($f -and (Test-Path $f)) { @((Get-Content $f -Raw -Encoding UTF8 | ConvertFrom-Json).chats) } else { @() }
     Out-Json @{ ok = $true; chats = @($rows | ForEach-Object { @{ id = $_.id; kind = $_.kind; title = $_.title; preview = $_.preview; time = $_.time; unread = [bool]$_.unread; mention = [bool]$_.mention } }) }

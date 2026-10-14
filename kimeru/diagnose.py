@@ -31,6 +31,8 @@ KNOWN_MESSAGES = [re.compile(p) for p in (
     r"^brief delivery_unknown; use delivery show/confirm/retry$",
     r"^brief delivery [a-z_]+$",
     r"^Teams window not found$",
+    r"^Teams のウィンドウが表示されていません（起動はしています）。Teams のウィンドウを開いてチャット一覧を表示してください$",   # N2
+    r"^Teams が起動していません$",
     r"^compose box not found$",
     r"^compose box does not start with \[kimeru; not sending$",
     r"^compose box does not hold exactly the planned text \(before=\d+ box=\d+ planned=\d+ endsWith=\w+ startsWith=\w+\); not sent",

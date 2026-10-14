@@ -7,25 +7,27 @@
 <p align="center"><sub>kimeru（「決める」。リポジトリ名は pm-decision・<a href="docs/naming.md">名前について</a>） — approval-first decision drafts for PMs on Windows and Teams</sub></p>
 
 <p align="center">
-  <b>PM の「どうする？」を、先回りして決める。</b><br>
-  Teams・監視アラート・Azure DevOps・議事録が届くたびに判断し、<br>
-  確信があれば決めて次の一手まで用意し、迷えばあなたに聞く（例外: 設定 <code>learn=1</code> のとき、議事録の行で種類が決まらないものは、「不要」と 3 回返して OK した言い回しに限り、確かめずに記録だけにすることがあります。取り消しは <code>kimeru learn revert A&lt;番号&gt;</code>）。承認は Teams の自分とのチャットに <code>OK 1</code> と返すだけ（PC でもスマホでも）。相手へは、承認した文面をあなたがコピーして送ります。
+  <b>届いた依頼から、次にやることと返信案を用意する。</b><br>
+  Windows と Teams で働く PM・リーダー向けの業務整理ツール。<br>
+  チャット・アラート・チケット・議事録を見て、対応手順と確認すべき点をまとめ、未完了の作業を追えます。<br>
+  初期設定はキーワードによる簡易判定。合図は PC の通知で、スマホには通知されません。<br>
+  承認した返信案は、あなたがコピーして相手に送ります。
 </p>
 
 <p align="center">
   <a href="https://github.com/awano27/pm-decision/actions/workflows/ci.yml"><img alt="tests (Windows 3.10-3.12, Linux 3.12)" src="https://github.com/awano27/pm-decision/actions/workflows/ci.yml/badge.svg?branch=main"></a>
   <img alt="platform" src="https://img.shields.io/badge/platform-Windows%2010%2F11-0E1726?style=flat-square&labelColor=0E1726&color=8CB8F0">
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-0E1726?style=flat-square&labelColor=0E1726&color=8CB8F0">
-  <img alt="dependencies" src="https://img.shields.io/badge/dependencies-none-0E1726?style=flat-square&labelColor=0E1726&color=75CFA3">
-  <img alt="judge" src="https://img.shields.io/badge/judge-local%20Kev%20%7C%20Jev-0E1726?style=flat-square&labelColor=0E1726&color=75CFA3">
+  <img alt="Python runtime dependencies: none" src="https://img.shields.io/badge/runtime%20dependencies-none-0E1726?style=flat-square&labelColor=0E1726&color=75CFA3">
+  <img alt="Optional judge: Kev or Jev" src="https://img.shields.io/badge/judge-Kev%20%7C%20Jev-0E1726?style=flat-square&labelColor=0E1726&color=75CFA3">
   <img alt="admin" src="https://img.shields.io/badge/admin%20rights-not%20needed-0E1726?style=flat-square&labelColor=0E1726&color=F2C166">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-0E1726?style=flat-square&labelColor=0E1726&color=D5DEEA">
-  <img alt="status" src="https://img.shields.io/badge/status-v1.1%20%C2%B7%20experimental%20parts-0E1726?style=flat-square&labelColor=0E1726&color=E89B4B">
+  <img alt="status: validation phase" src="https://img.shields.io/badge/status-v1.1%20%C2%B7%20validation%20phase-0E1726?style=flat-square&labelColor=0E1726&color=E89B4B">
 </p>
 
 <p align="center">
   <a href="#-30-秒でわかる-kimeru">30 秒でわかる</a> ·
-  <a href="#-向いている人と向かない人">向いている人</a> ·
+  <a href="#-ダウンロードだけで動きますか">動かすために必要なもの</a> ·
   <a href="#-まず動かす">まず動かす</a> ·
   <a href="#-毎日の使い方">毎日の使い方</a> ·
   <a href="#-データの行き先">データの行き先</a> ·
@@ -37,101 +39,78 @@
 
 ## ⏱ 30 秒でわかる kimeru
 
-PM の 1 日は、小さな判断の連続です。**このチャットは判断を求めているのか。このアラートは今すぐ人を呼ぶべきか。このチケットは着手できるか。議事録のこの行は決定か、タスクか。**
+**依頼を読んで、対応手順・返信案・確認待ちの一覧を作ります。** 判断が難しい件は Teams の自分とのチャットであなたに確認します。たとえば、次のような場面で使えます。
 
-kimeru は、届いたものを 1 件ずつ見て、**決めるか、あなたに聞くか** を選びます。
-
-1. **届く** — Teams のチャット、監視アラート、Azure DevOps のチケット、議事録
-2. **判断する** — 障害などの重大事象は、規則が先に決めます。それ以外は判断モデル（この PC で動かす **Kev**〔接続先は既定でこの PC〕か、クラウドの **Jev**。`--backend` を付けないときは、キーワードによる簡易判定）が、型どおりの質問に確率で答えます。Kev にリモート接続を明示許可した場合は、その接続先へ内容を送ります
-3. **用意する** — 進め方の手順と、返信・起票の下書き（文面用の LLM を設定したとき。設定しなければ定型文）
-4. **あなたが決める** — 自分とのチャットに届く `[kimeru #1]` に `OK 1` と返すだけ（スマホの Teams からでも可）。合図は **PC の Windows 通知** で、スマホには通知されません（件数と番号だけを届ける経路は設定できます）。**外部への書き込みは、既定では記録だけ**。承認した返信文は自分とのチャットに戻り、相手へはあなたがコピーして送ります
-
-```mermaid
-flowchart TB
-    subgraph IN["① 届く"]
-      direction LR
-      T["💬 Teams"]
-      AL["🚨 アラート"]
-      DV["🎫 DevOps"]
-      MN["📝 議事録"]
-    end
-    subgraph JU["② 判断する"]
-      direction TB
-      RU{"規則<br/>重大事象か？"}
-      MO{"判断モデル<br/>Kev / Jev"}
-      PB["進め方の型<br/>手順と期限"]
-    end
-    subgraph OUT["③ 用意する"]
-      direction TB
-      CR["🔔 当番呼び出し・P1<br/>＋ 通知"]
-      WR["✍ LLM が文面とメモを下書き"]
-    end
-    subgraph AP["④ 決める"]
-      direction TB
-      HU["🙋 承認<br/>OK / NG / 修正 / 聞き返し"]
-      RC["✅ 記録"]
-    end
-    IN --> RU
-    RU -- 重大 --> CR
-    RU -- それ以外 --> MO
-    MO -- 確信あり --> PB --> WR
-    MO -- 迷った --> WR
-    WR --> HU --> RC
-    CR --> RC
-    classDef inp fill:#e8f0fd,stroke:#36c,color:#123
-    classDef jud fill:#fdf3e0,stroke:#d90,color:#321
-    classDef mk fill:#eef7ee,stroke:#2a7,color:#132
-    classDef ap fill:#f3e8fd,stroke:#84c,color:#213
-    class T,AL,DV,MN inp
-    class RU,MO,PB jud
-    class CR,WR mk
-    class HU,RC ap
-```
-
-> **判断モデルは文章を書きません。** 「これは判断依頼か」「今すぐ人を呼ぶか」といった型付きの質問に、確率で答えるだけです。文章を書くのは別の LLM（任意）で、その文面は必ずあなたの承認を待ちます。
-
-**3 段の安全網** — 間違えてはいけない順に、3 つの守りがあります。
-
-| 段 | 何をするか | 結果 |
+| 困っていること・入力例 | kimeru が用意するもの | あなたがすること |
 |---|---|---|
-| ① 規則 | 障害・全ユーザー影響などの重大事象を、モデルに聞く前に拾う | 即決定して、必ず知らせる |
-| ② 判断モデル | 確率で答える。確信があれば決める | 自動で決定（判断の経路と確信度をすべて記録） |
-| ③ あなた | 迷ったもの、Sev0/1 なのにモデルの評価が低いもの、優先度 1 の ADO をモデルが下げようとしたもの | 承認待ち。`OK` / `NG` / `修正` / `聞き返し` で返す |
+| **リリース延期の相談** — 「QA 環境が止まった。日程を変えてよい？」 | 復旧見込みの確認 → 影響するチームの確認 → 選択肢の比較、という手順と返信案 | 必要な情報を集め、案を確認・修正して相手へ送る |
+| **障害の通知** — 「決済 API のエラーが増え、顧客が支払えない」 | 重大事象を規則でチェックし、障害対応の手順と通知対象を記録 | 通知を見て、実際の連絡・障害対応を行う |
+| **情報不足のチケット** — 「CSV 出力を追加したいが、受け入れ条件は未定」 | 足りない情報の確認案。登録された案件とあなたの回答から、ローカルの要件案も作成できる | 必須・任意・対象外・受け入れ条件を回答し、内容を確認する |
+| **会議後の宿題** — 「ログ基盤を見直す。担当・期限は未定」 | 議事録を決定・タスク・リスクに分け、担当・期限の確認案を用意 | 議事録を指定形式で保存し、担当や期限を決める |
+
+連携や判断モデルを準備した後の利用例です。実際の入力に対する判断精度は、あなたの業務で確認してください。
+
+### ほかにできること
+
+- **朝のまとめを見る** — 確認待ちと、承認済みの未完了作業を分けて、今日の優先事項をまとめる。
+- **要件案をファイルに残す** — 確認待ちとして登録された案件と、あなたが入力した回答を Markdown / JSON に保存する。未回答の項目は不明として残る。
+- **承認後の進捗を追う** — 作業中・完了・停止中を手動で記録する。承認しただけで完了にはしない。
+- **判断を見返す** — HTML レポートで判断の経路と結果を見る。週次集計や、導入前後の確認時間の記録もできる。
+
+**既定では、相手への返信・起票・当番呼び出しを実行せず、計画として記録します。** 自分とのチャットへの投稿は `--send`、ADO コメントの実行は別の設定と文面の承認が必要です。
 
 ---
 
-## 🙋 向いている人と向かない人
+## 📦 ダウンロードだけで動きますか
 
-| 向いている | 向かない |
+**PC に Python 3.10 以上があれば、ソース ZIP だけでデモ・サンプルの判断・HTML レポートを動かせます。Python がない PC では、ZIP を展開するだけでは動きません。**
+
+[Code → Download ZIP](https://github.com/awano27/pm-decision) と [Releases の Source code](https://github.com/awano27/pm-decision/releases) には、kimeru 本体・判断の規則・対応手順・サンプル・起動補助スクリプトが入っています。**Python 本体、Kev のモデル、Azure CLI、文章生成用の CLI は同梱されていません。**
+
+| 使いたい機能 | ソース ZIP に加えて必要なもの |
 |---|---|
-| Windows の PC と Teams で働く PM・リーダー | Mac / Linux（Teams の読み取りが Windows の画面操作のため） |
-| 管理者権限を使わずに動かしたい（導入は組織のルールと承認に従う） | Slack や Google Chat が中心 |
-| 判断をローカル接続で行いたい（Kev の接続先をこの PC にする） | 返信や起票まで全自動でやってほしい（kimeru は承認制で、既定では記録だけ） |
-| 「決める前に、材料と選択肢を並べてほしい」 | 判断そのものを LLM に任せたい |
+| **まず体験する** — 同梱デモ、JSON サンプルの処理、HTML レポート | Python 3.10 以上。追加の Python パッケージや API キーは不要 |
+| **記録をローカルで扱う** — 登録済み案件の作業一覧、要件案の保存 | Python 3.10 以上と既存案件の記録。要件の未回答項目は不明として保存する |
+| **モデルで判断する** | Kev の実行環境とモデル、または Jev の API キーと接続環境。ZIP の初期設定はキーワードによる簡易判定 |
+| **Teams の依頼を読む・承認する** | Windows のデスクトップ版 Teams、サインイン済みのアカウント、自分とのチャットの動作確認 |
+| **ADO・監視アラートを取り込む** | Azure CLI、本人のサインイン、対象プロジェクト・サブスクリプションへの権限 |
+| **LLM で返信案やメモを書く** | 選んだ writer の CLI・モデル・利用可能なアカウント、または Microsoft 365 Copilot の環境。未設定なら定型文 |
+| **スマホに通知する** | 通知経路の設定と、実際の端末での受領確認。自分との Teams チャットへの投稿だけでは通知されない |
 
----
+2026-10-15 に公開 main と v1.1.0 のソース ZIP を取得し、Python 3.11・追加パッケージなし・通信を禁止した環境で、9 件のデモ、1 件のサンプル、HTML 生成、作業一覧、要件案の Markdown / JSON 保存を確認しました。Teams・ADO・実モデルとの連携や、すべての Windows PC での動作を確認した結果ではありません。
 
-## ✅ すること・しないこと
+<details>
+<summary><b>インストールできない会社 PC に持ち込む場合</b></summary>
 
-| すること | しないこと |
-|---|---|
-| 届いたイベントを判断し、決めるか聞くかを選ぶ | あなたの代わりに勝手に返信・起票する。**外部への書き込みは、既定では記録だけ**。有効にできるのは ADO のコメントだけで、承認した文面を承認のあとに 1 回だけ書く |
-| 重大事象（障害・全ユーザー影響）を規則で先に拾い、必ず知らせる | 重大事象の判定をモデルだけに任せる |
-| 判断の経路と確信度をすべて記録する | 理由の分からない「おすすめ」を出す |
-| 迷ったら `unsure` として人に回す（確信が低いときに安全側の決定を記録して知らせる経路もある。[reference](docs/reference.md#judge-ノード)）。例外は設定 `learn=1` のときだけで、議事録の行のうち「不要」と 3 回返して OK した言い回しに当たるものは、確かめずに記録だけにすることがある（[reference](docs/reference.md)） | 確信が低いのに断定する |
-| （任意）文面の下書きと判断メモを LLM に作らせ、人が確認する | LLM に判断そのものをさせる |
+Python・Kev・Azure CLI をまとめた持ち込み用パッケージは、別途準備した環境から `tools/make-bundle.ps1` で作れます。通常のソース ZIP にこれらが含まれているわけではありません。2026-10-15 時点の公開リリースには Source code の ZIP / tar.gz があり、これらを同梱した実行用パッケージは公開されていません。
+
+`START.cmd` は、Python・Kev・Azure CLI などの配置を確かめ、準備と対話式チェックを進める入口です。ソース ZIP だけで全機能を起動するボタンではありません。パッケージの作成はコミット済みファイルを使うため、手元の未コミット修正は含まれません。詳細は [管理された PC での導入](docs/managed-environments.md) を参照してください。
+
+</details>
 
 ---
 
 ## 🚀 まず動かす
 
-**前提は Python 3.10 以上と git だけ**（依存パッケージなし）。判断モデルなしのオフラインで動きます。`pip install` / `uv tool install` での導入は対応していません（判断グラフなどのデータが同梱されないため）。clone したフォルダで `python -m kimeru` を使ってください。この README の `kimeru …` は `python -m kimeru …` の略です。
+**最初は、実際の Teams や ADO に接続せず、架空の PM の 1 日を試します。**
 
-```bash
-git clone https://github.com/awano27/pm-decision.git && cd pm-decision
-python -m kimeru demo                          # PM の 1 日（9 イベント）を約 1 分で再生して out/demo/report.html を作る（--pace 0 で待ちなし）
-python -m kimeru run examples/teams_chat.json  # 1 件だけ判断させる
+1. [Code → Download ZIP](https://github.com/awano27/pm-decision) から取得して展開する。
+2. 展開先の `README.md` と `kimeru` フォルダが並んでいる場所で PowerShell を開く。
+3. `python --version` で 3.10 以上が表示されることを確認し、次を実行する。
+
+```powershell
+python -m kimeru --backend stub --out out/demo demo --pace 0
 ```
+
+Git を使う場合は、次の手順でも同じデモを試せます。
+
+```powershell
+git clone https://github.com/awano27/pm-decision.git kimeru
+cd kimeru
+python -m kimeru --backend stub --out out/demo demo --pace 0
+```
+
+9 件のイベントを処理し、**`out/demo/report.html`** に判断の経路・対応案・確認待ちをまとめます。ブラウザで開いて結果を確認してください。
 
 `demo` の最後に、こう出ます。
 
@@ -143,13 +122,19 @@ python -m kimeru run examples/teams_chat.json  # 1 件だけ判断させる
     レポート: out\demo\report.html
 ```
 
-`demo` は専用の `out\demo` に書き、`run`・`daily`・自動運転の記録（`out\`）には触れません。デモ以外の記録があるフォルダを `--out` に指定すると、消さずに止まります（`--fresh` を付けると、その記録を `before-demo-<日時>\` へ移してから始めます）。
+> `stub` はキーワードによる簡易判定です。デモ内の Teams は模擬で、実際の Teams や ADO には書き込みません。件数は同梱シナリオの結果で、実際の業務精度を示すものではありません。writer を設定している場合は、その送り先にも注意してください（[データの行き先](#-データの行き先)）。
 
-> オフラインの `demo` と `run` は、キーワードによる簡易判定です。本物の判断には、PC の中で動く **Kev** か TypeSafe の **Jev** を使います（[しくみ](#-しくみ)）。
+1 件だけ試すなら、デモとは別の出力先に保存できます。
 
-### 実際には、こう見える
+```powershell
+python -m kimeru --backend stub --out out/example run examples/teams_chat.json
+```
 
-迷った件は、自分とのチャットに **1 通の短い投稿**（5 行ほど）として届きます。誰の何の件か、kimeru の提案（次の一手）、返信の下書き（あれば 120 字まで）、返し方。元のメッセージの全文・判断メモ・足りない情報・すべての下書きは、`詳細 N` と返すと `[kimeru 詳細 #N]` として返ってきます（判断はそのままです）。下は文面用の LLM に Copilot を設定したときの表示です（文面は説明用の例。`python examples/readme_post.py` で同じ表示を再現できます。設定しないときは、メモと下書きの代わりに定型文が入ります）。ADO のコメントの実行を有効にした件だけ、「OK で ADO にコメントを書きます」と書き込み先と文面が出ます。既定は記録だけなので、投稿には効果の説明を書きません。
+### Teams では、こう使う
+
+Teams の連携と writer を設定すると、確認待ちの件に元の依頼・判断メモ・返信案を添えて、自分とのチャットへ投稿します。下は架空の依頼を使った説明例です。writer が未設定なら、返信案は定型文になります。
+
+迷った件は、自分とのチャットに **1 通の短い投稿**（5 行ほど）として届きます。
 
 ```text
 [kimeru #1] 佐藤（QA）さん: リリース日を来週火曜にずらしてよいか判断お願いします。QA…
@@ -158,106 +143,103 @@ python -m kimeru run examples/teams_chat.json  # 1 件だけ判断させる
 OK 1 / NG 1 / 修正 1 <点> / 聞き返し 1 / 詳細 1
 ```
 
-Teams の自分とのチャットに `OK 1` と返すだけ（スマホの Teams からでも）。`修正 1 もっと短く` と返すと、書き直して同じ #1 で出し直します。承認しても相手に送るのは kimeru ではなく、あなたです（文面が自分とのチャットに返ってくるので、コピーして送ります）。
+確認待ちは短い投稿で届き、`詳細 1` で元の文面・判断メモ・下書きの全文を確認できます。スマホから `修正 1 もっと短く` と返すと、同じ番号で改訂して確認を求めます。`OK 1` で承認した文面はコピーして相手に送れます。**承認したことと、送信・作業が完了したことは別に記録します。**
 
-<details>
-<summary><b>ほかの出力の例</b>（判断依頼の手順、重大障害、朝のまとめ。架空のイベントを実際に通した結果）</summary>
+実際の Teams で試す準備は [管理された PC での導入](docs/managed-environments.md) と [実機確認の手順](docs/managed-pc-check.md) を参照してください。
 
-#### 判断依頼のチャットに、次の一手まで用意する
+---
 
-```text
-[08:30] QA リーダーから 1 対 1 チャット
-    「リリース日を来週火曜にずらしてよいか判断お願いします。QA 環境が止まっていて至急です」
-      [判断] intent: decision（確信度 0.85）
-      [進め方] 型=スケジュール変更
-        1. 遅延原因の復旧見込みを担当者に確認（今日）
-        2. 現行日程に依存するチーム・顧客を確認（今日）
-        3. 選択肢（延期・スコープ縮小・現状維持）を比較（今日）
-        4. 日程を決定し記録（今日）
-        5. 関係者へ変更を通知（今日）
+## 🧠 しくみ
+
+**規則 → 判断モデル → あなたの確認**の順に処理します。判断ポイントと進め方の型（9 種類）は JSON で定義し、自分のチーム向けに追加できます。
+
+```mermaid
+flowchart TD
+    E["依頼・アラート・作業項目・議事録"] --> R{"重大事象の規則"}
+    R -- 該当 --> N["対応案を決定・通知対象として記録"]
+    R -- それ以外 --> J["型付きの質問で判断"]
+    J --> P["手順・期限・返信案を用意"]
+    P --> H["必要な件を人が確認・承認・修正"]
+    N --> L["判断の経路と結果を保存"]
+    H --> L
 ```
 
-#### 重大障害は、モデルに聞く前に規則で決め、必ず知らせる
+**判断モデルは文章を書きません。** 「これは判断依頼か」「今すぐ人を呼ぶか」といった質問に、型付きの答えと確率を返します。文章を書く LLM（writer）は任意で、生成した文面は人の確認を待ちます。
 
-```text
-[09:10] 監視アラート（決済 API: 5xx error rate 23% for 10 minutes; customers cannot complete checkout）
-      [規則] critical_outage: 該当 → モデルに聞かずに決定
-    → 当番を呼び出し（予定） / 障害対応の手順 5 件を起票（予定）
+| 段 | 何をするか | 結果 |
+|---|---|---|
+| ① 規則 | 障害・全ユーザー影響などを、モデルに聞く前に拾う | 対応案を決定し、通知対象にする |
+| ② 判断モデル | 確率とグラフの条件に沿って、決定するか確認を求めるかを選ぶ | 判断の経路と確信度を記録 |
+| ③ あなた | 迷った件、重大度とモデルの評価が食い違った件を確認する | 承認・却下・保留・修正を記録 |
 
-[kimeru 通知] 決済 API: 5xx error rate 23% for 10 minutes
-→ 自動で決定しました（記録: 当番呼び出し, ADO 起票）      ← 自分とのチャットに投稿。返信は不要
-```
+既定はデモ用の `stub` です。業務で使う判断モデルは、設定・起動して選びます。
 
-#### 翌朝、今日やることの上位 3 件と、3 行の要点
+| 判断モデル | 内容の送り先 | 準備 |
+|---|---|---|
+| **Kev** | 既定はこの PC の `http://127.0.0.1:8009/v1` | Kev を起動し、`--backend kev` を指定 |
+| **Jev**（TypeSafe） | TypeSafe のクラウド API | `TYPESAFE_API_KEY` を環境変数で設定し、`--backend jev` を指定 |
 
-文面用の LLM（ここでは Copilot）を設定したときの出力です。設定しないときは、要点の 3 行が付かず、上位 3 件だけになります。
+Kev のリモート接続は、`kev_url_remote_ok=1` で明示許可した場合だけ利用できます。セットアップは [導入手順](docs/managed-environments.md)、グラフ・設定・環境変数は [リファレンス](docs/reference.md) を参照してください。
 
-```text
-[kimeru brief] 今日の進め方
-今日の要点（Copilot）:
-・最優先は障害対応の取りまとめです。社内外への一次連絡と対応責任者の指名が本日中に必要です。
-・スケジュール変更の判断についても、遅延原因の復旧見込みを本日中に担当者に確認してください。
-1. 確認待ち #1: 障害対応の取りまとめ: …
-```
+Kev のモデルを持ち込む方法は [Kev の持ち込み用フォルダ](docs/kev-bundle.md) にあります。管理された PC の PowerShell が ConstrainedLanguage の場合、Teams の画面読み取りは動きません。利用前に [実機確認](docs/managed-pc-check.md) で確かめてください。
 
-数値・人名は説明用です。
+設定 `learn=1` のときは、種類が決まらない議事録の行に限り、「不要」のフィードバックから作った規則を本人が承認すると、その言い回しを確認待ちにせず記録だけにすることがあります。取り消しは `python -m kimeru learn revert A<番号>` です。
 
-</details>
+---
+
+## 🙋 向いている人と向かない人
+
+| 向いている | 向かない |
+|---|---|
+| Windows の PC と Teams で働く PM・リーダー | Mac / Linux（Teams の読み取りが Windows の画面操作のため） |
+| 管理者権限なしの会社 PC で、持ち込み用フォルダから試したい | Slack や Google Chat が中心 |
+| 判断をローカル接続で行いたい（Kev の接続先をこの PC にする） | 返信や起票まで全自動でやってほしい（kimeru は承認制で、既定では記録だけ） |
+| 「決める前に、材料と選択肢を並べてほしい」 | 判断そのものを LLM に任せたい |
 
 ---
 
 ## 📅 毎日の使い方
 
-**朝にまとめを見る → 日中は PC の通知を合図に自分とのチャットで承認（スマホの Teams からでも） → 会議の後は議事録を置くだけ。**
+**朝にまとめを見る → 日中に必要な件を確認する → 終わった作業を記録する。** Teams 連携と判断モデルを準備した後の流れです。
 
 | いつ | kimeru がすること | あなたがすること |
 | --- | --- | --- |
 | 朝 8 時 | 今日の要点と、やることの上位 3 件を自分とのチャットへ | 読む |
-| チャットが来たとき | 判断依頼か・急ぎかを判断し、進め方・返信の下書き・判断メモを用意 | 迷ったものだけ `OK N` / `NG N` / `詳細 N`（全文を見る）/ `修正 N …` / `聞き返し N`。承認後に返る `[kimeru 送信用 #N]` の文面は、自分でコピーして相手へ送る |
-| アラートが鳴ったとき | 重大なら当番呼び出しを記録し **[kimeru 通知]**、将来のリスクなら予防タスク | 迷ったものだけ確認 |
-| チケットが起票されたとき | 重大バグは P1（通知）、情報不足なら確認コメント案（題名・種別・リンク付きの確認待ち。起票者は `詳細 N`。writer の有無に関係なく出る）、それ以外は優先度 | 迷ったものと情報不足だけ確認。自動で決めた P2・P3 は、朝のまとめに件数と上位 5 件で出る |
+| チャットが来たとき | 判断依頼か・急ぎかを判断し、進め方・返信案・判断メモを用意 | `OK N` / `NG N` / `修正 N …` / `聞き返し N` で確認待ちに返す |
+| アラートが鳴ったとき | 重大なら対応案を記録して通知対象にする。将来のリスクなら予防タスク案 | 通知と対応案を確認する |
+| チケットが起票されたとき | 重大バグの優先度や、情報不足の確認コメント案を用意 | 確認待ちの文面や対応案を確認する |
 | 会議の後 | 議事録の 1 行ずつを決定・タスク・リスクに仕分け | Copilot の要約を `.txt` で置く（[形式](docs/minutes-format.md)） |
 
 ```powershell
-python -m kimeru --backend kev daily --once --send   # 1 サイクル: 取り込み → 判断 → 下書き → 確認待ちを投稿 → 返信を反映 → 朝のまとめ
-python -m kimeru --backend kev daily --send          # --once なしなら、300 秒ごとに繰り返す（--interval で変更）
-python -m kimeru schedule install                    # タスクスケジューラに登録して自動運転（管理者権限不要。登録されるのは daily --once --send で、自分とのチャットへ実際に投稿する）
+python -m kimeru --backend kev daily --once --send   # 1 サイクルを実行し、自分とのチャットへ投稿
 ```
 
-知っておくこと:
+`--send` は実際に投稿します。接続先・自分とのチャット・利用する writer を [実機確認の手順](docs/managed-pc-check.md) で確かめてから実行してください。管理された PC の手順書には、Teams が定期的に切り替わる問題が解決するまで自動運転を使わない旨の注意があります。まずは `--once` で 1 サイクルずつ確認してください。
+
+取り込みと通知の条件:
 
 - **Teams は、画面のチャット一覧から読みます**（UI Automation。画面に表示されている範囲だけを読みます。組織で使う前に、画面の自動操作が認められているかを確認してください）。ほかのチャットを開いて全文を読むのは、設定 `read_full=1` にしたときだけです（開いたチャットは既読になります）
 - ADO とアラートは、本人の `az login` で取得します
 - 判断モデルが止まっている間のイベントは受信箱に残り、復帰後に判断されます（同じイベントを二重に判断しません）
 - 自分とのチャットへの投稿は、あなたのスマホや PC には通知されません。そこで kimeru は **PC に Windows の通知** を出します（クリックで自分とのチャットが開く。`KIMERU_TOAST=0` で止める）。iPhone には、**件数と番号だけ** を届ける経路を選べます（[docs/push-notification.md](docs/push-notification.md)）
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant S as 📥 Teams / ADO / アラート
-    participant K as 🤖 kimeru
-    participant L as ✍ LLM（任意）
-    participant M as 🧑 あなた（PC 通知を見て、PC かスマホの Teams で返信）
-    S->>K: 新しいイベント
-    K->>K: 規則 → 判断モデルで判断
-    K->>L: 文面とメモの下書きを依頼
-    L-->>K: 下書き（⚠ 検査つき）
-    K->>M: [kimeru #1] 自分宛てチャットに投稿 ＋ PC 通知（スマホには通知なし）
-    M->>K: OK 1 / NG 1 / 詳細 1 / 修正 1 … / 聞き返し 1
-    K->>K: 行動を記録（既定は記録のみ）
-```
-
 ### 承認の返信
 
 | 返信 | 動き |
 |---|---|
 | `OK N` | 下書きのまま承認し、行動を **記録**（相手への送信・起票はしません）。ADO へのコメントを有効にしているときは、`--send` を付けない実行の OK は記録だけで、ADO へは次の `--send` の実行で 1 回書きます |
-| `NG N` | 却下。何も記録しません |
-| `保留 N` | 後で決める。次のまとめにも残ります |
-| `保留 N <いつ>`（例: `保留 3 明日`、`保留 3 金`、`保留 3 来週`、`保留 3 15時`、`保留 3 3日後`、`保留 3 10/20`） | その日の朝（設定 `brief_hour`、既定 8 時）まで保留し、その日に同じ #N で出し直します（1 行目に `（保留から・2 日目）`）。出し直しは 1 回の返信につき 1 回で、承認・却下・実行はしません。読めない語（`保留 3 来月`）や 8 日以上先は日付なしの保留になり、次の投稿の 1 行目に `保留（日付なし）` と一度出します |
 | `詳細 N` | 全文（元のメッセージ・判断メモ・すべての下書き・足りない情報）を `[kimeru 詳細 #N]` として返します。承認ではなく、何も記録しません。返信 1 通につき 1 回答えます |
+| `NG N` | 却下として記録。提案した行動は実行しません |
+| `保留 N` | 後で決める。次のまとめにも残ります |
 | `修正 N <指示>` | 指示に沿って書き直し、同じ #N で出し直します |
 | `聞き返し N` | 「聞き返しの返信」を返信の下書きにして、同じ #N で出し直します。`OK N` で記録 |
+
+<details>
+<summary>期限を付けた保留・学習・作業完了・送信済みの返信</summary>
+
+| 返信 | 動き |
+|---|---|
+| `保留 N <いつ>`（例: `保留 3 明日`、`保留 3 金`、`保留 3 来週`、`保留 3 15時`、`保留 3 3日後`、`保留 3 10/20`） | その日の朝（設定 `brief_hour`、既定 8 時）まで保留し、その日に同じ #N で出し直します（1 行目に `（保留から・2 日目）`）。出し直しは 1 回の返信につき 1 回で、承認・却下・実行はしません。読めない語（`保留 3 来月`）や 8 日以上先は日付なしの保留になり、次の投稿の 1 行目に `保留（日付なし）` と一度出します |
 | `違う N` | （設定 `KIMERU_LEARN=1` のとき）#N の最終結果が違ったと、正誤として記録します。件の状態・投稿・承認・実行は変わりません |
 | `違う N k` | （`KIMERU_LEARN=1` のとき）直前の `詳細 N` に出した「迷った質問」の k 番が正しい答えだったと、正誤として記録します（記録だけ） |
 | `不要 N` | （`KIMERU_LEARN=1` のとき）#N は見る必要がなかったと、NG と同じく却下します。同じ言い回しの「不要」が 2 日にわたり 3 回・OK 0 のとき、その言い回しを記録だけにする規則の札を出します（議事録の行で、種類が決まらないものに限る）。OK で規則になります |
@@ -273,21 +255,34 @@ sequenceDiagram
 
 確認待ちの件に、同じ人からのお礼・了解だけのメッセージが続いたときは、件の続きの 1 行に足すだけで、投稿し直しません（何も返信せず、保留や承認の状態も変えません）。件の続きで出し直すときは、1 行目に最初の依頼を残し、続きは `続き「…」` の 1 行で示します（保留だった件は `（前回 保留）` と付き、OK か NG で消えます）。
 
-ADO のコメントの実行を有効にしたときだけ、次の 3 つが加わります。
-
-<details>
-<summary>ADO のコメントの実行を有効にしたときの返信（<code>再実行 N</code> / <code>再実行 N-k</code> / <code>済 N</code>）</summary>
-
-- `再実行 N` — ADO のコメントの実行が失敗した、または結果が分からないときだけ。同じ文面がすでに書かれていないか ADO で確かめてから、もう一度書きます（1 通の返信につき 1 回。番号が使い回されても、前の件の結果は数えません）。結果の投稿より前に送った返信と、結果の投稿が画面から流れたあとの番号だけの `再実行 N` は、効きません
-- `再実行 N-k`（k は結果の回数。結果の投稿に書いてあります）— 画面に何が見えていても、最新の結果のときだけ 1 回効きます。区切りは `-` のほか、`ー` `−` `‐` `‑` `‒` `–` `—` `―` `─` `ｰ` `－` も同じに読み、全角でも大丈夫です。k が最新の結果の回数より小さい返信は無視して記録します（通知は「無視: 古い回数」）。大きい返信は、「回数が大きすぎる」と記録し、その回数の結果が出て追いついたときに 1 回だけ効きます（結果の投稿の案内のとおり。二重に書くことは、同じ文面の確認が防ぎます）。`1/2`・`1〜2`・`1 2`・`1一2` のように、区切りが読めない形は、効かせずに、形の種類ごとに 1 回、「再実行（形が違います）」と通知して記録します（返信の文字は残しません）
-- `済 N` — ADO で書かれているのを確かめたときに、その件を閉じます
-- 管理 PC の試験（`run-check.cmd`）が自分とのチャットに書く投稿は `[kimeru 試験 #N]` で始まり、`daily` の件の承認や再実行には当たりません
-
-手順: [docs/execute-ado-comment.md](docs/execute-ado-comment.md)
-
 </details>
 
+ADO コメントを実際に書く場合は、`execute ado.comment` の設定と文面の承認が必要です。実行結果の確認や `再実行 N-k`・`済 N` の使い方は [ADO コメントの実行](docs/execute-ado-comment.md) にまとめています。
+
+### 承認した後の作業と、届いたか分からない通知
+
+朝のまとめは、確認待ちと承認済みの未完了作業を分けて表示します。承認だけで作業が完了したことにはしません。手動の進捗は次のように記録できます。
+
+```powershell
+python -m kimeru --out <出力先> work list
+python -m kimeru --out <出力先> work set 1 in_progress
+python -m kimeru --out <出力先> work set 1 done
+```
+
+`done` は実際の作業が終わってから付けるローカルの進捗です。ADO の状態は変更しません。送信の結果が分からない場合は自動再送を保留し、本人が確認してから解除します。操作は [進捗と配信の確認](docs/reference.md#手動の進捗と曖昧な配信の確認) を参照してください。
+
 同梱の判断グラフと進め方の型の一覧は [docs/reference.md](docs/reference.md#入力形式) に、会話で新機能の要件を検討する例は [シナリオ](docs/scenarios/requirements-review.md) にあります。既存 case からローカル要件ファイルを作る操作は [要件ドラフト](docs/requirements.md) を参照してください。
+
+<details>
+<summary>定期実行の登録（実機確認後。実際に投稿する設定）</summary>
+
+管理された PC では、先に手順書の自動運転の注意を確認してください。登録したタスクは常に送信を有効にして動きます。短時間の試行や停止方法は [実機確認の手順](docs/managed-pc-check.md) を参照してください。
+
+```powershell
+python -m kimeru schedule install                    # タスクスケジューラに登録して自動運転（管理者権限不要。登録されるのは daily --once --send で、自分とのチャットへ実際に投稿する）
+```
+
+</details>
 
 ### 止める・消す
 
@@ -299,7 +294,7 @@ python -m kimeru schedule remove        # 自動運転のタスクを消す（�
 python -m kimeru config unset backend   # install のときに保存した判断モデルの既定を戻す（ado_org・ado_project も同じ）
 ```
 
-- 記録の場所: この README の手順なら作業フォルダの `out\`（取り込んだ原本は `out\inbox\done\`、デモは `out\demo\`）。`setup-managed` で入れたなら `%LOCALAPPDATA%\kimeru`。同僚のメッセージの抜粋と、取り込んだ原本の全文（`daily` が既定 7 日で消す）が入っています。要らなくなったらフォルダごと消してください
+- 記録の場所: `--out` で指定したフォルダです。この README のデモは `out\demo\`、1 件のサンプルは `out\example\` に保存します。取り込んだ原本は inbox の `done/` に全文で残り、`daily` が既定 7 日で消します。`setup-managed` で入れた場合の出力先は `%LOCALAPPDATA%\kimeru` です。保存先を確かめ、不要になった記録を削除してください
 - `out\run-daily.vbs`（自動運転の起動用）は `schedule remove` のあとも残ります。手で消せます
 - 状態フォルダ（既定 `%LOCALAPPDATA%\kimeru`。`config.json`・`self-name.txt`・`reviews.jsonl`・`fixtures_user.jsonl` など）は `schedule remove` では消えません。消すときはフォルダごと削除します
 - `setup-managed` で入れた場合は `.\setup-managed.cmd remove`（[手順](docs/managed-pc-check.md)）
@@ -328,6 +323,9 @@ python -m kimeru config unset backend   # install のときに保存した判断
 
 ### 待ち時間と下書き利用の計測
 
+<details>
+<summary>集計の意味・共有する方法・不明として扱う条件</summary>
+
 `out/decisions.jsonl` に判断・writer の処理秒数、下書き準備時刻、計測用の世代と出所を残し、`out/report.html` で承認記録・明示した試行記録と照合します。本文を含む通常の HTML はローカル確認用です。共有する場合は `python -m kimeru trial report --share` を使います。週の数字は `kimeru digest --week` で見られ、到着から判断・承認までの中央値は実測の件数と不明の件数つきで出ます。設定 `weekly_report=1` のときは、月曜の朝のまとめの末尾にも同じ 6 行が入ります。
 
 | 指標 | 測るもの / 未測定のもの |
@@ -342,43 +340,19 @@ python -m kimeru config unset backend   # install のときに保存した判断
 
 新しい隔離フォルダで `python -m kimeru --backend stub --out <デモ専用出力先> demo --pace 0` を実行すると、待ちの演出を省いたオフライン demo と HTML を作れます。ユーザー設定を読むため、既存設定がある環境では `KIMERU_STATE_DIR` も空の試験専用フォルダに向け、外部 writer の設定を引き継がないでください。Teams はメモリ内の模擬で、実投稿はありません。計測値は `synthetic demo` と表示し、実利用・業務効果の証拠には混ぜません。
 
+</details>
+
 ---
 
-## 🧠 しくみ
+## ✍ 下書きを選ぶ
 
-**判断はデータです。** 判断ポイント（グラフ）も進め方の型（9 種類）も JSON で、自分のチームの判断を足せます。`kimeru validate` が閉路・到達不能・ルート漏れを検査します。
-
-**判断モデル** — 型付きの質問に確率で答えるモデルです。2 つから選びます。`demo` と `run` を `--backend` なしで動かすと、どちらも使わないキーワードの簡易判定になります。
-
-本物の判断を始める前に揃えるもの:
-
-- **Kev（この PC で動かす）**: メモリ bf16 で約 10GB（fp32 なら約 14GB）、ディスク約 11GB。自分で立てるなら Python 3.12 か 3.13 と [uv](https://docs.astral.sh/uv/)（上流の前提）。ネットの無い PC へは、開発 PC で作った持ち込み用フォルダを運びます（[作り方](docs/kev-bundle.md)）。重みの取得と初回の起動にかかる時間は未測定です。CPU だけでの判断は、作者環境で 1 イベント約 20 秒（bf16）〜約 1 分（fp32）（[動作確認の状況](docs/evaluation.md#動作確認の状況)）
-- **Jev（クラウド）**: TypeSafe の API キー（取得は [docs.typesafe.ai](https://docs.typesafe.ai)。費用は TypeSafe の料金に従い、このリポジトリでは扱いません）。鍵は環境変数 `TYPESAFE_API_KEY` に入れます（[設定のしかた](docs/managed-pc-check.md)）
-- **管理された PC**: PowerShell が ConstrainedLanguage（組織のポリシー）だと Teams の読み取りが動きません。`run-check.cmd` の確認で SKIP と表示されます
-
-| | Kev（既定はローカル接続） | Jev（TypeSafe） |
-|---|---|---|
-| どこで動く | `kev_url` の接続先。既定はこの PC。リモート接続には `kev_url_remote_ok=1` が必要 | クラウド API |
-| 準備 | 持ち込み用フォルダ 1 つ（[作り方](docs/kev-bundle.md)。約 11GB） | `TYPESAFE_API_KEY`（費用は TypeSafe の料金に従う） |
-| メモリ | bf16 で約 10GB。CPU が bf16 に対応していなければ、起動時に自動で fp32（約 14GB） | — |
-| 使い方 | `--backend kev` | `--backend jev` |
-
-```bash
-# Kev を自分で立てる場合（別フォルダ。Python 3.12/3.13 と uv が要る。初回に重みを取得）
-uv run --extra serve python -m kev.serve --run jaredpalmer/kev-4b --port 8009
-# 「Uvicorn running on http://127.0.0.1:8009」と出てから実行する（接続できないと 1 行で止まる）
-python -m kimeru --backend kev run examples/teams_chat.json
-```
-
-[Kev](https://github.com/jaredpalmer/kev) は Jev と同じ API のモデルです（Apache-2.0）。既定の接続はこの PC ですが、リモート接続を明示的に許可した場合は判断対象の内容がその接続先へ送られます（`kev_url_remote_ok=1`）。
-
-**文面の下書き（writer）** — 何をするかは判断モデルが決め、その後の文面と判断メモを文章生成 LLM に書かせます。`kimeru config set writer <名前>` で選びます。
+返信案や判断メモを文章生成 LLM に書かせる場合は、`python -m kimeru config set writer <名前>` で writer を選びます。未設定なら定型文で動きます。
 
 | writer | 誰が書く | 本文の送り先 |
 |---|---|---|
 | `copilot` | GitHub Copilot CLI | GitHub Copilot |
 | `claude` | Claude Code CLI | Anthropic |
-| `codex` | OpenAI Codex CLI | OpenAI |
+| `codex` | 現在は定型文にフォールバック | writer を呼ばない |
 | `grok` | xAI Grok CLI（遅い） | xAI |
 | `cmd` | 任意の CLI（`ollama run <モデル>` など） | コマンド次第（ローカルなら PC の外に出ない） |
 | `m365` | あなたが Microsoft 365 Copilot に貼る（手動） | 組織の M365 |
@@ -396,14 +370,15 @@ python -m kimeru --backend kev run examples/teams_chat.json
 ```mermaid
 flowchart LR
     subgraph PC["💻 この PC（既定の Kev 接続先）"]
-      E --> KEV[Kev 判断<br/>既定はこの PC]
-      KEV --> REC[(out/ の記録)]
+      E[判断対象の内容] --> KEV[Kev<br/>ローカル接続時]
+      E --> REC[(ローカルの記録)]
     end
     E -. "writer 設定時のみ" .-> W
     subgraph EXT["☁ 選んだ writer の送り先"]
-      W["GitHub Copilot / Claude<br/>Codex / Grok / M365 Copilot"]
+      W["GitHub Copilot / Claude<br/>Grok / M365 Copilot など"]
     end
-    KEV -. "Jev 選択時のみ" .-> JEV[TypeSafe Jev]
+    E -. "Jev 選択時のみ" .-> JEV[TypeSafe Jev]
+    E -. "Kev のリモート接続を許可したとき" .-> REMOTE[指定した Kev 接続先]
     REC -. "件数と番号だけ（設定時）" .-> PUSH[スマホ通知]
     style PC fill:#e8f7ee,stroke:#2a7
     style EXT fill:#fdf3e0,stroke:#d90
@@ -411,11 +386,11 @@ flowchart LR
 
 | | 既定 | 設定したときだけ |
 |---|---|---|
-| 外部への書き込み | **しない。** ADO 更新・当番呼び出し・相手への返信は、計画として `out/decisions.jsonl` に残るだけ。実際に送るのは `--send` を付けたときの自分とのチャットへの投稿だけ | ADO のコメント（`kimeru config set execute ado.comment`）。承認のあとに 1 回だけ、同じ文面がすでにあれば書かない |
-| 判断 | Kev の既定接続はこの PC。リモート先を明示許可した場合は、その接続先へ内容を送る | Jev を選ぶと、イベントの内容と朝のまとめの題名が TypeSafe の API へ |
+| 外部への書き込み | ADO 更新・当番呼び出し・相手への返信は、計画として記録する | `--send` で自分とのチャットへ投稿。ADO コメントは `execute ado.comment` を設定し、文面を承認した後に実行。同じ文面がすでにあれば書かない |
+| 判断 | `stub` の簡易判定。モデルへ送らない | Kev は既定でこの PC へ接続。リモート先は明示許可が必要。Jev はイベントの内容と朝のまとめの題名を TypeSafe の API へ送る |
 | 文面の下書き | 定型文。外部 writer を呼びません | writer を設定すると、対応している provider へ材料を送ります。Codex writer は安全な no-tool 起動を保証できないため、現在は定型文にフォールバックします。任意 CLI writer は設定したコマンド次第です。組織が認めた経路だけを使ってください |
 | 通知 | PC の Windows 通知。**件数と番号だけ** | iPhone などへも件数と番号だけ。送り先の URL は記録・表示に出ません |
-| 記録 | `--out` のフォルダ（既定は作業フォルダの `out/`。`setup-managed` で入れた自動運転は `%LOCALAPPDATA%\kimeru`）に、判断の経路・確認待ち・ログ。判断の記録に残る元のメッセージは 120 文字まで。ただし取り込んだ原本は `inbox/done/` に全文で残り、既定 7 日で消える（`inbox_done_keep_days`。詳しくは [SECURITY.md](SECURITY.md#記録に残る範囲と期間)） | — |
+| 記録 | `--out` のフォルダ（既定は作業フォルダの `out/`。`setup-managed` で入れた自動運転は `%LOCALAPPDATA%\kimeru`）に、判断の経路・確認待ち・ログ。判断の記録に残る元のメッセージは 120 文字まで。ただし取り込んだ原本は `inbox/done/` に全文で残り、既定 7 日で消える（`inbox_done_keep_days`。詳しくは [SECURITY.md](SECURITY.md#記録に残る範囲と期間)） | 全文の保存や保持期間は設定で変更できる。配信確認に必要な本文が残ることもある |
 
 記録には同僚のメッセージの一部が含まれます。PC の外に出さないでください。性能・業務効果は、再現可能な測定と利用規約を確認するまで保証しません。詳しくは [SECURITY.md](SECURITY.md)。
 
@@ -423,29 +398,23 @@ flowchart LR
 
 ## 🚦 いまの状態
 
-**v1.1 です。** 判断から承認・通知までの主な流れは、実際の Windows PC（Teams・Azure DevOps・GitHub Copilot 付き）で確かめています。ただし、判断の精度は作者が作った **架空のイベント** での評価で、**実際の業務データでの精度はこれからです**。
+**業務での有効性を検証している段階です。** 同梱デモはモデルなしで試せます。Teams・ADO との連携には作者の環境での確認記録がありますが、画面構成や組織の設定によって動作は変わります。動作確認と判断精度の評価は別です。
 
 | 状態 | 内容 |
 |---|---|
-| ✅ **使える** | Teams・ADO・議事録の取り込み / Kev の判断 / 承認の流れ（`OK` `NG` `保留` `修正` `聞き返し`）/ PC の通知 / GitHub Copilot CLI での下書き / M365 だけの人向けの手動貼り付け（実機で確かめたもの: [動作確認の状況](docs/evaluation.md#動作確認の状況)） |
-| 🔬 **実装済み・実機の確認はこれから** | 監視アラートの取り込み / Claude・Grok での下書き / 設定ファイル / iPhone への push 通知 / 承認した ADO コメントの実行 / Teams の全文読み取り / 判断の速さの調整 / `calibrate`。**どれも既定では無効**で、有効にするまで動きません |
+| ✅ **実装済み** | 4 種類の入力の判断 / 手順・返信案 / 承認・修正・保留 / 作業進捗 / 要件ドラフト / HTML レポート。モデルなしのデモで流れを試せる |
+| 🔬 **利用環境での確認が必要** | Teams の取り込みと自分とのチャットへの投稿 / Kev・Jev 接続 / writer / PC・スマホ通知 / ADO コメントの実行 / 全文読み取り / 定期実行。監視アラートの取り込みと Claude・Grok の下書きは実機の確認が必要 |
 | 🧪 **実験的** | `m365-auto`（Teams 内の Microsoft 365 Copilot の画面操作。画面の作りに依存し、失敗すると 30 分休んで手動の依頼文に切り替わる） |
-| ⛔ **現在は使えない** | Codex での下書き（ツール利用を確実に無効化できないため、選んでも定型文になります） |
+| ⛔ **現在は使えない** | Codex による AI 下書き。選んでも定型文にフォールバックする |
 | ⏳ **これから** | 実データでの評価 / スマホへの通知の実機確認 / `m365-auto` を複数環境で確認して実験的から外す |
 
-```mermaid
-pie showData title Kev-4B の評価（現行の採点方式・架空の開発用 99 件・2026-10-06）
-    "正しい行動" : 65
-    "人の確認へ" : 22
-    "安全側の代替行動" : 10
-    "誤った行動" : 2
-```
+### 既知の課題
 
-上の図は、作者が作った **架空の** 開発用 99 件を、現行の採点方式（最終の行動と手順まで一致して正しい）で採点した結果です（2026-10-06、commit cb13df1、Kev-4B（重みの取得 2026-09-26）、作者の開発 PC の CPU（bf16））。重大な取りこぼしは 0 件、誤った行動は 2 件でした。調整に使っていない検証用 48 件では、正しい行動 37・人の確認へ 10・安全側の代替 0・誤った行動 1・重大な取りこぼし 0 です。条件と内訳は [docs/evaluation.md](docs/evaluation.md#kev-4b-の評価現行の採点方式) にあります。架空のデータでの成績で、実際の業務での精度や将来の性能を保証しません。
+**実データでの判断精度・時間短縮は未検証です。** 現行の採点方式による架空イベントの Kev 評価には、2026-10-06 の確認記録があります。業務精度や将来の性能を保証するものではありません。条件・内訳・動作確認・既知の課題は [評価資料](docs/evaluation.md#kev-4b-の評価現行の採点方式) を参照してください。
 
-**確かめた環境は、作者の環境だけです**（[動作確認の状況](docs/evaluation.md#動作確認の状況)）。**他の人の環境での結果はまだありません。** [1 週間の試し方](docs/trial-week.md) で測り、`kimeru digest --week --share` と `kimeru config show --share` の出力（数値と環境だけ。本文・パス・組織は含みません）を Issue の「利用結果の報告」に貼ってもらえると助かります。
+### 利用者の環境での結果
 
-v1.0 のあと、作者とは別の AI エージェントによるコードレビューを繰り返し、見つかった問題を直しました（人による外部レビューはまだありません）。有効にするまで動かない機能（`execute` `push` `read_full`）は、安全側の挙動を先に固めています。内容は [CHANGELOG.md](CHANGELOG.md)、実機で確かめる手順は [docs/managed-pc-check.md](docs/managed-pc-check.md)。
+作者の環境での確認記録は [動作確認の状況](docs/evaluation.md#動作確認の状況) にあります。利用環境での効果は、[1 週間の試し方](docs/trial-week.md) で、確認にかかった時間・下書きの採用・通知の受領・作業の完了を測ってください。報告には `python -m kimeru digest --week --share` と `python -m kimeru config show --share` の出力を使えます。変更履歴は [CHANGELOG.md](CHANGELOG.md) を参照してください。
 
 ---
 
@@ -463,20 +432,17 @@ v1.0 のあと、作者とは別の AI エージェントによるコードレ�
 
 ## 📚 ドキュメント
 
-| | |
+| 知りたいこと | ドキュメント |
 |---|---|
-| [docs/reference.md](docs/reference.md) | コマンド・設定・環境変数・出力ファイル・入力形式・グラフの書き方・評価の実行 |
-| [docs/writers.md](docs/writers.md) | 文面の下書き（writer）の詳細と安全のしくみ |
-| [docs/evaluation.md](docs/evaluation.md) | 精度・動作確認・既知の課題 |
-| [docs/managed-environments.md](docs/managed-environments.md) | 管理者権限なしの PC・閉域の環境で使う手順 |
-| [docs/managed-pc-check.md](docs/managed-pc-check.md) | 管理された PC での動作確認（何も送らない `run-auto-check.cmd`、送信を伴う `run-check.cmd`） |
-| [docs/kev-bundle.md](docs/kev-bundle.md) | Kev の持ち込み用フォルダの作り方 |
-| [docs/push-notification.md](docs/push-notification.md) / [docs/execute-ado-comment.md](docs/execute-ado-comment.md) | push 通知 / ADO コメントの実行 |
-| [docs/trial-week.md](docs/trial-week.md) | 1 週間の試し方と報告 |
-| [docs/first-run-observation.md](docs/first-run-observation.md) | 初めて使う人の観察（30 分）の手順と記録様式 |
-| [docs/requirements.md](docs/requirements.md) | 要件ドラフトの作成・hash 承認と最初の試行範囲 |
-| [docs/naming.md](docs/naming.md) | 名前（kimeru と pm-decision）について |
-| [SECURITY.md](SECURITY.md) / [CONTRIBUTING.md](CONTRIBUTING.md) / [CHANGELOG.md](CHANGELOG.md) | 安全・貢献・変更履歴 |
+| 会社 PC へ持ち込む・実機で確認する | [導入](docs/managed-environments.md) / [実機確認](docs/managed-pc-check.md) |
+| コマンド・設定・入力形式・グラフを書く | [リファレンス](docs/reference.md) |
+| 判断モデルを持ち込む | [Kev の持ち込み用フォルダ](docs/kev-bundle.md) |
+| 下書き用の LLM を選ぶ | [writer](docs/writers.md) |
+| スマホ通知・ADO コメントを有効にする | [push 通知](docs/push-notification.md) / [ADO コメント](docs/execute-ado-comment.md) |
+| 要件ドラフトを作る・議事録を取り込む | [要件ドラフト](docs/requirements.md) / [議事録の形式](docs/minutes-format.md) |
+| 効果を測る・動作状況を確認する | [初回の観察](docs/first-run-observation.md) / [1 週間の試行](docs/trial-week.md) / [評価と既知の課題](docs/evaluation.md) |
+| プロジェクトの名前を確認する | [kimeru と pm-decision](docs/naming.md) |
+| 安全・開発・変更点を確認する | [セキュリティ](SECURITY.md) / [貢献](CONTRIBUTING.md) / [変更履歴](CHANGELOG.md) |
 
 ## 🤝 貢献
 

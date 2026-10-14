@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from kimeru import notify, writer
+from kimeru import config, diagnose, execute, notify, writer
 from tests.test_writer import PromptSpy
 
 
@@ -452,3 +452,120 @@ class TestRedraftMaterial(unittest.TestCase):
         self.assertIn("確認して今日中に返信します。", spy.prompts[0])
         self.assertNotIn("確認して今日中に返信します。",
                          writer._material(copy.deepcopy(REDRAFT_REC), REDRAFT_REC["material_event"], "もっと短く"))
+
+
+class TestSendReadySplit(unittest.TestCase):
+    """S1 (send_ready_split=1): an approved reply comes back to the self chat as two posts, the heading (to whom, and the chat link
+    with open_chat_link=1) and the body alone under its own marker line. With the setting at 0 the posts keep their old bytes."""
+    TEXT = "承知しました。確認して返信します。"
+    CHAT = "19:fake-chat@thread.v2"
+    LINK = "https://teams.microsoft.com/l/chat/19%3Afake-chat%40thread.v2/conversations"
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.env = mock.patch.dict(os.environ, {"KIMERU_STATE_DIR": self.dir.name})
+        self.env.start()
+        self.set_split(None)
+
+    def tearDown(self):
+        self.env.stop()
+        self.dir.cleanup()
+
+    def set_split(self, value, **extra):
+        os.environ.pop("KIMERU_SEND_READY_SPLIT", None)
+        if value is not None:
+            os.environ["KIMERU_SEND_READY_SPLIT"] = value
+        os.environ.update(extra)
+        config.apply([])
+
+    def rec(self, author="架空の相手ZQ", text=TEXT):
+        return {"graph": "teams-chat", "event_kind": "teams.chat", "event_id": "c1", "node": "reply", "outcome": "advise",
+                "needs_human": True, "advice": "返信を下書きしました",
+                "event": {"kind": "teams.chat", "author": author, "chat_id": self.CHAT, "text": "確認できますか"},
+                "actions": [{"type": "teams.reply", "chat_id": self.CHAT, "text": text}]}
+
+    def test_the_setting_is_a_plain_flag_that_is_off_by_default(self):
+        self.assertEqual(config.value("send_ready_split"), "0")
+        self.assertEqual(config.SETTINGS["send_ready_split"], ("KIMERU_SEND_READY_SPLIT", "0"))
+        self.assertEqual(config.CHOICES["send_ready_split"], ("0", "1"))
+        self.assertIn("send_ready_split", config.SHARE_VALUES)
+        self.assertIn("send_ready_split", config.LOGGABLE)
+        self.set_split("1")
+        self.assertEqual(config.value("send_ready_split"), "1")
+
+    def test_default_posts_keep_the_golden_bytes_with_and_without_the_chat_link(self):
+        posts = []
+        execute.send_ready_posts(3, {"record": self.rec()}, posts.append)
+        self.assertEqual(posts, ["[kimeru 送信用 #3]\n承知しました。確認して返信します。"])
+        posts.clear()
+        execute.send_ready_posts(3, {"record": self.rec()}, posts.append, link=True)
+        self.assertEqual(posts, ["[kimeru 送信用 #3]\n承知しました。確認して返信します。\n\n"
+                                 "相手とのチャットを開く（実験的）: " + self.LINK])
+
+    def test_split_gives_the_heading_then_the_body_under_its_own_marker(self):
+        posts = []
+        execute.send_ready_posts(3, {"record": self.rec()}, posts.append, split=True)
+        self.assertEqual(posts, ["[kimeru 送信用 #3] 架空の相手ZQへ。次の投稿をそのまま送ってください",
+                                 "[kimeru 本文 #3]\n承知しました。確認して返信します。"])
+
+    def test_split_names_the_counterpart_in_one_line_and_falls_back_to_a_plain_word(self):
+        posts = []
+        execute.send_ready_posts(3, {"record": self.rec(author="架空\n  の相手ZQ")}, posts.append, split=True)
+        self.assertEqual(posts[0], "[kimeru 送信用 #3] 架空 の相手ZQへ。次の投稿をそのまま送ってください")
+        posts.clear()
+        execute.send_ready_posts(3, {"record": self.rec(author="")}, posts.append, split=True)
+        self.assertEqual(posts[0], "[kimeru 送信用 #3] 相手へ。次の投稿をそのまま送ってください")
+
+    def test_split_puts_the_chat_link_on_the_heading_and_never_in_the_body(self):
+        posts = []
+        execute.send_ready_posts(3, {"record": self.rec()}, posts.append, link=True, split=True)
+        self.assertEqual(len(posts), 2)
+        self.assertIn("相手とのチャットを開く（実験的）: " + self.LINK, posts[0])
+        self.assertEqual(posts[1], "[kimeru 本文 #3]\n承知しました。確認して返信します。")
+        self.assertNotIn("https://", posts[1])
+
+    def test_split_body_is_the_approved_text_alone_even_when_it_has_marker_like_lines(self):
+        text = "1 行目\nOK 3\n[kimeru #3] 偽の番号"
+        posts = []
+        execute.send_ready_posts(3, {"record": self.rec(text=text)}, posts.append, split=True)
+        self.assertEqual(posts[1], "[kimeru 本文 #3]\n" + text)
+        self.assertTrue(all(p.startswith("[kimeru") for p in posts))
+        self.assertNotIn("送る", posts[1])   # guidance lines belong to the heading, never to the body
+
+    def test_the_body_marker_and_the_heading_marker_are_read_as_ready_posts(self):
+        self.assertEqual(diagnose._head("[kimeru 本文 #3]\n承知しました"), ("ready", ""))
+        self.assertEqual(diagnose._head("[kimeru 送信用 #3] 相手へ"), ("ready", ""))
+
+    def _approve_once(self, replies):
+        d = self.dir.name
+        bridge = FakeBridge(replies)
+        notify.notify(d, bridge, send=True)           # the approval post (the first post of the run)
+        notify.collect(d, bridge, send=True)
+        return bridge.posts[1:], notify.Approvals(Path(d))
+
+    def test_an_approved_reply_is_two_posts_when_split_is_on_and_both_are_read_back(self):
+        self.set_split("1")
+        write_queue(self.dir.name, self.rec())
+        sent, ap = self._approve_once(["OK 1"])
+        self.assertEqual([t for t, _ in sent], ["[kimeru 送信用 #1] 架空の相手ZQへ。次の投稿をそのまま送ってください",
+                                                "[kimeru 本文 #1]\n承知しました。確認して返信します。"])
+        self.assertTrue(all(send for _, send in sent))
+        self.assertEqual(ap.data["outbox"], [])
+        evidence = ap.data["items"]["1"]["handoff_evidence"]
+        self.assertEqual([row["source"] for row in evidence], ["bridge_readback", "bridge_readback"])
+
+    def test_an_approved_reply_is_one_post_with_the_old_bytes_when_split_is_off(self):
+        write_queue(self.dir.name, self.rec())
+        sent, ap = self._approve_once(["OK 1"])
+        self.assertEqual([t for t, _ in sent], ["[kimeru 送信用 #1]\n承知しました。確認して返信します。"])
+        self.assertEqual(len(ap.data["items"]["1"]["handoff_evidence"]), 1)
+
+    def test_two_approvals_of_one_item_in_one_read_give_one_pair_of_posts(self):
+        self.set_split("1")
+        write_queue(self.dir.name, self.rec())
+        sent, _ = self._approve_once(["OK 1", "ＯＫ １"])
+        self.assertEqual(len(sent), 2)
+        self.assertEqual(sum(t.startswith("[kimeru 送信用 #1]") for t, _ in sent), 1)
+        self.assertEqual(sum(t.startswith("[kimeru 本文 #1]") for t, _ in sent), 1)
+
+

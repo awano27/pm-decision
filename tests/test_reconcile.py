@@ -292,5 +292,71 @@ class TestScripts(unittest.TestCase):
         self.assertIn("配信結果が不明の件はありません", res.read_text(encoding="utf-8-sig"))
 
 
+HEAD_TEXT = "[kimeru 送信用 #1] 架空の相手ZQへ。次の投稿をそのまま送ってください"
+BODY_TEXT = "[kimeru 本文 #1]\n承知しました。確認して返信します。"
+
+
+class SplitPoster:
+    """Accepts every post with a readback, as the self chat does when it is reachable."""
+    def __init__(self):
+        self.posts = []
+
+    def post(self, text, send):
+        self.posts.append(text)
+        return {"ok": True, "typed": True, "sent": True, "readback": {"matched": True, "message_id": f"m-{len(self.posts)}"}}
+
+
+class TestSplitPairDelivery(unittest.TestCase):
+    """S1: the body post of an approved reply (send_ready_split=1) is a continuation of its heading. The reconcile of an unknown
+    delivery decides by the text it is looking for: a body on the screen does not settle the heading, and a settled heading leaves
+    the body queued for the next post."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="kimeru-split-"))
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+
+    def write(self, outbox, unknown, attempt_body):
+        item = {"key": "k1", "status": "approved", "posted": True, "revision": 1,
+                "record": {"actions": [{"type": "teams.reply", "chat_id": "19:fake@thread.v2", "text": "承知しました。確認して返信します。"}]}}
+        ap = {"next": 2, "items": {"1": item}, "outbox": list(outbox), "outbox_delivery_unknown": True,
+              "outbox_delivery_unknown_at": _at(10),
+              "outbox_delivery_attempt": {"kind": "outbox", "target": "outbox", "part": "outbox", "revision": 1,
+                                          "identity": "1", "at": _at(10), "body": attempt_body}}
+        (self.dir / "approvals.json").write_text(json.dumps(ap, ensure_ascii=False), encoding="utf-8")
+
+    def ap(self):
+        return json.loads((self.dir / "approvals.json").read_text(encoding="utf-8"))
+
+    def test_an_unknown_body_on_the_screen_is_confirmed_and_the_queue_is_empty(self):
+        self.write([BODY_TEXT], unknown=True, attempt_body=BODY_TEXT)
+        res = reconcile.reconcile(self.dir, FakeBridge(screen(BODY_TEXT)), NOW)
+        self.assertEqual(res["counts"]["found"], 1)
+        ap = self.ap()
+        self.assertEqual(ap["outbox"], [])
+        self.assertNotIn("outbox_delivery_unknown", ap)
+        self.assertEqual(len(ap["items"]["1"]["handoff_evidence"]), 1)
+
+    def test_a_settled_heading_leaves_the_body_queued_and_it_is_posted_once(self):
+        self.write([HEAD_TEXT, BODY_TEXT], unknown=True, attempt_body=HEAD_TEXT)
+        res = reconcile.reconcile(self.dir, FakeBridge(screen(HEAD_TEXT)), NOW)
+        self.assertEqual(res["counts"]["found"], 1)
+        ap = self.ap()
+        self.assertEqual(ap["outbox"], [BODY_TEXT])
+        self.assertNotIn("outbox_delivery_unknown", ap)
+        poster = SplitPoster()
+        self.assertTrue(notify.flush_outbox(notify.Approvals(self.dir), poster, True))
+        self.assertEqual(poster.posts, [BODY_TEXT])
+        self.assertEqual(self.ap()["outbox"], [])
+
+    def test_a_body_on_the_screen_does_not_settle_an_unknown_heading(self):
+        self.write([HEAD_TEXT, BODY_TEXT], unknown=True, attempt_body=HEAD_TEXT)
+        res = reconcile.reconcile(self.dir, FakeBridge(screen(BODY_TEXT)), NOW)
+        self.assertEqual(res["counts"]["found"], 0)
+        ap = self.ap()
+        self.assertEqual(ap["outbox"], [HEAD_TEXT, BODY_TEXT])     # nothing was taken off the queue
+        self.assertNotIn("outbox_delivery_unknown", ap)            # released: the heading goes out again, then the body
+        self.assertEqual(ap["items"]["1"].get("handoff_evidence", []), [])
+
+
 if __name__ == "__main__":
     unittest.main()

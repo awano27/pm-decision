@@ -1044,7 +1044,7 @@ def confirm_delivery(out, kind, target, confirm_delivered=False, source="user_co
                 if not isinstance(attempt.get("body"), str) or not box or box[0] != attempt["body"]:
                     return {"status": "attempt_mismatch"}
             if box:
-                handoff = re.match(r"^\[kimeru 送信用 #(\d+)\]", str(box[0]))
+                handoff = re.match(r"^\[kimeru (?:送信用|本文) #(\d+)\]", str(box[0]))
                 if handoff:
                     item = ap.data.get("items", {}).get(handoff.group(1))
                     if item:
@@ -1742,7 +1742,7 @@ def flush_outbox(ap, bridge, send):
         return False
     for k, text in enumerate(box):
         fsutil.refresh(ap.path.with_name("approvals.lock"))
-        handoff = re.match(r"^\[kimeru 送信用 #(\d+)\]", str(text))
+        handoff = re.match(r"^\[kimeru (?:送信用|本文) #(\d+)\]", str(text))
         handoff_item = ap.data.get("items", {}).get(handoff.group(1)) if handoff else None
         revision = handoff_item.get("revision", 1) if handoff_item else None
         identity = handoff.group(1) if handoff else hashlib.sha256(str(text).encode("utf-8")).hexdigest()
@@ -1844,7 +1844,8 @@ def _after_approval(out, ap, num, it, bridge, real=False, send=False):
     ap.save()   # the approval itself is saved before anything is attempted (what is posted is flushed once, at the end of collect)
     result = execute.run_approved(out, ap, num, it, post) if real else []
     if config.value("send_ready_post") != "0":
-        execute.send_ready_posts(num, it, post, link=config.value("open_chat_link") == "1")
+        execute.send_ready_posts(num, it, post, link=config.value("open_chat_link") == "1",
+                                 split=config.value("send_ready_split") == "1")
     return result
 
 

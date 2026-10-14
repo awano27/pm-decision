@@ -53,7 +53,7 @@ KNOWN_MESSAGES = [re.compile(p) for p in (
 )]
 CLASS = re.compile(r"^([A-Z][A-Za-z0-9_]{1,60}(?:Error|Exception|Unavailable|Expired|Exit|Interrupt|Failure)): ?(.*)$", re.S)
 TRUNCATION = ("…", "...", "もっと見る", "さらに表示", "See more", "Show more", "続きを読む")
-HEAD = re.compile(r"^\[kimeru (?:(?P<test>試験 )?(?P<run>実行 )?#(?P<num>\d+)(?P<copilot> Copilot 用)?|(?P<notice>通知)|(?P<ready>(?:送信用|詳細) #\d+)|(?P<brief>brief))")
+HEAD = re.compile(r"^\[kimeru (?:(?P<test>試験 )?(?P<run>実行 )?#(?P<num>\d+)(?P<copilot> Copilot 用)?|(?P<notice>通知)|(?P<ready>(?:送信用|詳細|本文) #\d+)|(?P<brief>brief))")
 
 
 def norm(s):
@@ -145,7 +145,7 @@ def unknown_deliveries(out):
                      "evidence": {}})
     if ap.get("outbox_delivery_unknown"):
         att = ap.get("outbox_delivery_attempt") or {}
-        m = re.match(r"^\[kimeru (?:実行|送信用) #(\d+)", str(att.get("body") or ""))
+        m = re.match(r"^\[kimeru (?:実行|送信用|本文) #(\d+)", str(att.get("body") or ""))
         rows.append({"kind": "outbox", "case": "#" + m.group(1) if m else "-", "part": "outbox",
                      "at": att.get("at") or ap.get("outbox_delivery_unknown_at"), "body": att.get("body"), "evidence": {}})
     st = fsutil.read_json(out / "daily_state.json", {})

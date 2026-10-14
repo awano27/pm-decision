@@ -457,15 +457,31 @@ def close_unknown(out, ap, num, item):
     return n
 
 
-def send_ready_posts(num, item, post, link=False):
-    """teams.reply / teams.post are not sent. The text goes back to the self chat, alone, ready to copy."""
+def send_ready_posts(num, item, post, link=False, split=False):
+    """teams.reply / teams.post are not sent. The text goes back to the self chat, alone, ready to copy. With split (S1,
+    send_ready_split=1) it comes as two posts: the heading (to whom, and the chat link) and the body alone under its own marker
+    line `[kimeru 本文 #N]`, so that a long press copies the body after one line is removed."""
     for action in item["record"].get("actions", []):
         if action.get("type") in SEND_READY and str(action.get("text", "")).strip():
-            body = f"[kimeru 送信用 #{num}]\n{action['text']}"
+            tail = ""
             if link and action.get("chat_id"):
-                body += "\n\n相手とのチャットを開く（実験的）: https://teams.microsoft.com/l/chat/" \
-                        + urllib.parse.quote(str(action["chat_id"]), safe="") + "/conversations"
-            _tell(post, body)
+                tail = "\n\n相手とのチャットを開く（実験的）: https://teams.microsoft.com/l/chat/" \
+                       + urllib.parse.quote(str(action["chat_id"]), safe="") + "/conversations"
+            if split:
+                _tell(post, f"[kimeru 送信用 #{num}] {_counterpart(item)}へ。次の投稿をそのまま送ってください" + tail)
+                _tell(post, f"[kimeru 本文 #{num}]\n{action['text']}")
+            else:
+                _tell(post, f"[kimeru 送信用 #{num}]\n{action['text']}" + tail)
+
+
+def _counterpart(item):
+    """The other person's name, on one line (the author of the message the reply answers); `相手` when the record has none."""
+    rec = item.get("record") or {}
+    for src in (rec.get("event"), rec.get("material_event")):
+        name = " ".join(str(src.get("author") or "").split()) if isinstance(src, dict) else ""
+        if name:
+            return name
+    return "相手"
 
 
 def _tell(post, text):

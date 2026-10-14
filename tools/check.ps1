@@ -176,9 +176,20 @@ if ($uia) {
   } elseif (Want 'T2') { Rec 'T2' 'SKIP' }
 
   Say "T3 自分とのチャット"
-  $s = Self 'open'; $r = Self 'read'
-  $selfOk = [bool]($s.ok -and $r.ok)
-  Rec 'T3' $(if ($selfOk) { "OK open/read（timeline=$(@($r.timeline).Count)件）" } else { "NG $($s.error) $($r.error)" })
+  if ($Auto) {
+    # N5: the automatic check opens no chat. It reads the self chat only when the reader reports it open already (status.self_open)
+    $st = Self 'status'
+    $selfOk = [bool]$st.self_open
+    if ($selfOk) {
+      $r = Self 'read'
+      $selfOk = [bool]$r.ok
+      Rec 'T3' $(if ($selfOk) { "OK read（開いていた自分とのチャットを読んだ。timeline=$(@($r.timeline).Count)件）" } else { "NG $($r.error)" })
+    } else { Rec 'T3' 'SKIP（自動: 自分とのチャットが開いていない。手で開いてから再実行するか run-check.cmd T3）' }
+  } else {
+    $s = Self 'open'; $r = Self 'read'
+    $selfOk = [bool]($s.ok -and $r.ok)
+    Rec 'T3' $(if ($selfOk) { "OK open/read（timeline=$(@($r.timeline).Count)件）" } else { "NG $($s.error) $($r.error)" })
+  }
   if (-not $selfOk -and $Auto) { Rec 'T3-learn' 'SKIP（自動: 自分とのチャットを手で開く手順は行わない）' }
   elseif (-not $selfOk) {
     # names are masked by diag; this tells us how the work account labels the self chat
@@ -323,7 +334,8 @@ if ($py) {
 }
 
 # ---- T23: how long is the preview Teams gives? (read only; lengths only, never text) ----
-if ($uia -and $selfOk -and (Want 'T23')) {
+# N5: the list is only read, so the automatic check runs T23 whether or not the self chat is open (T3 opens nothing there)
+if ($uia -and ($selfOk -or $Auto) -and (Want 'T23')) {
   Say "T23 チャット一覧のプレビューの長さ（読み取りだけ。文字数の分布だけを記録します）"
   $c = Self 'chats'
   if (-not $c.ok) { Rec 'T23' ('NG ' + $c.error) }

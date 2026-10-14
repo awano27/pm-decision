@@ -137,5 +137,19 @@ class TestTheLabelReply(unittest.TestCase):
         self.assertEqual(notify.fresh_entries(read), [("違う 12 3", 0), ("違う 12", 0)])
 
 
+@unittest.skipUnless(os.name == "nt" and shutil.which("powershell"), "needs Windows PowerShell")
+class TestSelfOpenFromTheReader(unittest.TestCase):   # N5: status says whether the self chat is open, for the automatic check
+    def status(self, teams):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"KIMERU_FAKE_TEAMS": teams,
+                                                                               "KIMERU_FAKE_CHAT": str(Path(d) / "chat.json")}):
+            return notify.PowerShellBridge(script=FAKE)._run("-Action", "status")
+
+    def test_the_self_chat_counts_as_open_only_while_the_window_is_shown(self):
+        for teams, open_now in (("window", True), ("tray", False), ("none", False)):
+            st = self.status(teams)
+            self.assertEqual(st["self_open"], open_now, teams)
+            self.assertEqual(st["self_open"], st["selfChatOpen"], teams)
+
+
 if __name__ == "__main__":
     unittest.main()

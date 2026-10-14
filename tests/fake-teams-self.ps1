@@ -64,7 +64,8 @@ switch ($Action) {
     # N2: KIMERU_FAKE_TEAMS = window (the default) | tray (the process runs, no window on screen) | none (not running)
     $st = if ($env:KIMERU_FAKE_TEAMS) { $env:KIMERU_FAKE_TEAMS } else { 'window' }
     $win = [bool]($st -eq 'window')
-    Out-Json @{ ok = $true; teams = $win; teams_process = [bool]($st -ne 'none'); teams_window = $win; selfChatOpen = $win }
+    # N5: self_open: the fake's self chat is open whenever its window is shown (as selfChatOpen)
+    Out-Json @{ ok = $true; teams = $win; teams_process = [bool]($st -ne 'none'); teams_window = $win; selfChatOpen = $win; self_open = $win }
   }
   'chats' {
     if ($env:KIMERU_FAKE_TEAMS -in 'tray', 'none') { Out-Json @{ ok = $false; error = 'Teams window not found' }; exit 2 }

@@ -9,7 +9,9 @@ try:
 except ImportError:
     import hidden_words
 
+import os
 import re
+import shutil
 import subprocess
 import unittest
 from pathlib import Path
@@ -78,36 +80,68 @@ class TestAutoMode(unittest.TestCase):
             self.assertIn(f, ignored)
 
 
-class TestTheAutomaticCheckSaysWhatItDoes(unittest.TestCase):
-    # T3 may open the self chat, so the automatic check must not say that it opens no chat (AC3)
-    NOT_OPENED = ("チャットを開かない", "チャットを開かず", "チャットを開きません")
+class TestTheAutomaticCheckOpensNoChat(unittest.TestCase):   # N5: the self chat is read only when it is already open
+    MAY_OPEN = ("開くことがあり", "may be opened", "brought to the front", "前面に出す")
     AUTO_MARKERS = ("自動の確認", "run-auto-check", "check-auto", "何も送らず", "何も送らない", "Nothing is sent")
 
-    def test_the_banner_the_user_sees_says_the_self_chat_may_open(self):
+    def t3_block(self):
+        start = CHECK.index('Say "T3 自分とのチャット"')
+        return CHECK[start:CHECK.index("if (-not $selfOk -and $Auto) { Rec 'T3-learn'", start)].splitlines()
+
+    def test_the_banner_the_user_sees_says_no_chat_is_opened(self):
         banner = next(l for l in AUTO.decode("utf-8-sig").splitlines() if "kimeru 自動の確認" in l)
-        self.assertIn("何も送らない・貼らない・質問しない", banner)
-        self.assertIn("自分とのチャットは開くことがあります", banner)
-        for phrase in self.NOT_OPENED:
+        self.assertIn("何も送らない・チャットを開かない・質問しない", banner)
+        for phrase in self.MAY_OPEN:
             self.assertNotIn(phrase, banner)
 
-    def test_no_tracked_script_or_doc_says_the_automatic_check_does_not_open_a_chat(self):
-        # CHANGELOG.md is not scanned: it quotes the old wording when it records the fix. Other lines about another
-        # subject (the daily read of the self chat, sent_watch) are not about the automatic check and are not scanned.
+    def test_no_tracked_script_or_doc_says_the_automatic_check_may_open_a_chat(self):
+        # CHANGELOG.md is not scanned: it quotes the wording of each fix. Other lines (the diagnose read, the daily read) are not about
+        # the automatic check and are not scanned.
         files = [f for f in _tracked("*.cmd", "*.ps1", "*.md") if f != "CHANGELOG.md"]
         self.assertIn("run-auto-check.cmd", files)
         for f in files:
             for line in (ROOT / f).read_text(encoding="utf-8-sig", errors="replace").splitlines():
                 if any(m in line for m in self.AUTO_MARKERS):
-                    for phrase in self.NOT_OPENED:
+                    for phrase in self.MAY_OPEN:
                         self.assertNotIn(phrase, line, f)
 
-    def test_the_three_files_of_the_automatic_check_say_the_self_chat_may_open(self):
-        for f in ("run-auto-check.cmd", "tools/check-auto.ps1", "docs/managed-pc-check.md"):
-            text = (ROOT / f).read_text(encoding="utf-8-sig", errors="replace")
-            for phrase in self.NOT_OPENED:
-                self.assertNotIn(phrase, text, f)
-        self.assertIn("The self chat may be opened", (ROOT / "run-auto-check.cmd").read_text(encoding="utf-8-sig"))
-        self.assertIn("自分とのチャットは開くことがあり", (ROOT / "docs" / "managed-pc-check.md").read_text(encoding="utf-8-sig"))
+    def test_the_three_files_of_the_automatic_check_say_no_chat_is_opened(self):
+        self.assertIn("no chat is opened", (ROOT / "run-auto-check.cmd").read_text(encoding="utf-8-sig"))
+        self.assertIn("no chat is opened", AUTO.decode("utf-8-sig"))
+        doc = (ROOT / "docs" / "managed-pc-check.md").read_text(encoding="utf-8-sig")
+        self.assertIn("チャットを開かず", doc)
+        self.assertIn("T3 は SKIP", doc)
+
+    def test_the_automatic_branch_of_t3_never_calls_open_and_reads_only_an_open_self_chat(self):
+        lines = self.t3_block()
+        auto = lines[lines.index("  if ($Auto) {"):lines.index("  } else {")]
+        self.assertFalse(any("Self 'open'" in l for l in auto))
+        self.assertTrue(any("Self 'read'" in l for l in auto))
+        self.assertTrue(any("self_open" in l for l in auto))
+        self.assertTrue(any("Self 'open'" in l for l in lines[lines.index("  } else {"):]), "the manual check still opens it")
+
+    def test_an_automatic_check_without_an_open_self_chat_records_a_skip_that_names_the_manual_steps(self):
+        self.assertIn("Rec 'T3' 'SKIP（自動: 自分とのチャットが開いていない。手で開いてから再実行するか run-check.cmd T3）'", CHECK)
+
+    def test_the_list_read_of_t23_runs_in_the_automatic_check_too(self):
+        self.assertIn("if ($uia -and ($selfOk -or $Auto) -and (Want 'T23')) {", CHECK)
+
+    def test_status_says_whether_the_self_chat_is_open_and_the_fake_reader_says_so_too(self):
+        text = (ROOT / "tools" / "teams-self.ps1").read_text(encoding="utf-8-sig")
+        status = next(l for l in text.splitlines() if "$Action -eq 'status'" in l)
+        self.assertIn("self_open = $so", status)
+        self.assertIn("selfChatOpen = $so", status)
+        fake = (ROOT / "tests" / "fake-teams-self.ps1").read_text(encoding="utf-8-sig")
+        self.assertIn("self_open = $win", fake)
+
+    def test_the_scripts_of_the_automatic_check_parse_without_errors(self):
+        if os.name != "nt" or not shutil.which("powershell"):
+            self.skipTest("needs Windows PowerShell")
+        for f in ("tools/check.ps1", "tools/teams-self.ps1", "tools/check-auto.ps1"):
+            cmd = ("& { param($f) $e=$null;$t=$null;[void][System.Management.Automation.Language.Parser]::ParseFile($f,[ref]$t,[ref]$e);"
+                   "if($e){$e|%{$_.Message};exit 1} } '" + str(ROOT / f) + "'")
+            r = subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, text=True, timeout=60)
+            self.assertEqual(r.returncode, 0, f + r.stdout + r.stderr)
 
 
 class TestT18PutsTheSettingBack(unittest.TestCase):

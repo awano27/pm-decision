@@ -11,6 +11,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -19,6 +20,7 @@ from tests.test_execute import Bridge as SelfBridge
 
 PEER = "19:abc@unq.gbl.spaces"   # a made-up chat id (the fixtures never hold a real one)
 REPLY_TEXT = "受領しました。本日中に判断して返信します。"
+OK_AT = datetime(2026, 10, 15, 9, 0)   # the clock of a run that approves (the 48 hours of REPLY_WINDOW count from it)
 
 # the texts of an approval of a teams.reply with execute unset, captured at the base commit (the item number 7): they must not change
 GOLDEN_POST = ('[kimeru #7] 山田さん: 明日の件、判断できますか\n→ 本日中に判断が必要: 山田「明日の件、判断できますか」\n'
@@ -48,17 +50,20 @@ def golden_record():
 
 
 class SendBridge(SelfBridge):
-    """The self chat of test_execute.Bridge, plus `sendto`: every call is recorded, and `result` is the answer the script gives."""
+    """The self chat of test_execute.Bridge, plus `sendto`: every call is recorded. `result`, `error` and `restore` are the answer the
+    script gives (`restore` says how the chat that was open was put back)."""
 
-    def __init__(self, result="done", error=""):
+    def __init__(self, result="done", error="", restore="restored"):
         super().__init__()
-        self.sent, self.result, self.error = [], result, error
+        self.sent, self.result, self.error, self.restore = [], result, error, restore
 
     def sendto(self, chat_id, text):
         self.sent.append((chat_id, text))
+        answer = {"ok": self.result == "done", "result": self.result, "restore": self.restore, "returned": True}
         if self.result == "done":
-            return {"ok": True, "result": "done", "restore": "restored", "returned": True}
-        raise notify.BridgeError(self.error or self.result, {"ok": False, "result": self.result, "error": self.error or self.result})
+            return answer
+        answer["error"] = self.error or self.result
+        raise notify.BridgeError(answer["error"], answer)
 
 
 class Base(unittest.TestCase):
@@ -83,9 +88,10 @@ class Base(unittest.TestCase):
         os.environ["KIMERU_EXECUTE"] = value
         config.apply([])
 
-    def add_reply(self, chat_kind="oneOnOne", chat_id=PEER, mention=False, action_chat=None):
+    def add_reply(self, chat_kind="oneOnOne", chat_id=PEER, mention=False, action_chat=None, event_kind="teams.chat"):
         """A teams.chat decision with one reply, kept in the approvals file and not posted yet."""
         rec = golden_record()
+        rec["event_kind"] = event_kind
         rec["event"].update({"chat_kind": chat_kind, "chat_id": chat_id, "mentions_me": mention})
         rec["actions"][0]["chat_id"] = action_chat if action_chat is not None else chat_id
         ap = notify.Approvals(self.out)
@@ -105,6 +111,20 @@ class Base(unittest.TestCase):
 
     def collect(self, bridge, send=True):
         return notify.collect(self.out, bridge, real=True, send=send)
+
+    def reply_at(self, bridge, line, when):
+        """A reply that is on the screen, read by a run whose clock is `when`."""
+        bridge.replies.append(line)
+        return notify.collect(self.out, bridge, real=True, send=True, now=when)
+
+    def add_other_pending(self):
+        """A second decision, posted and still waiting (an ADO item, no reply): the self chat is read for it whatever item 1 holds."""
+        other = {"graph": "workitem-intake", "event_kind": "ado.workitem.created", "event_id": "4812", "node": "triage_pm",
+                 "outcome": "advise", "needs_human": True, "advice": "優先度を判定できないチケット #4812",
+                 "actions": [{"type": "ado.update", "id": "4812", "fields": {"Microsoft.VSTS.Common.Priority": 2}}]}
+        ap = notify.Approvals(self.out)
+        ap.add("ado.workitem:4812:triage", other)
+        ap.save()
 
     def item(self):
         return json.loads((self.out / "approvals.json").read_text(encoding="utf-8"))["items"]["1"]
@@ -263,6 +283,9 @@ class TestOnlyOneToOne(Base):
     def test_a_group_chat_is_not_a_target_and_the_post_says_so(self):
         self.assert_not_sent(chat_kind="group")
 
+    def test_a_message_that_is_not_a_teams_chat_event_is_not_a_target(self):
+        self.assert_not_sent(event_kind="ado.workitem.created")
+
     def test_a_meeting_chat_is_not_a_target(self):
         self.assert_not_sent(chat_kind="meeting")
 
@@ -354,6 +377,138 @@ class TestBridgeSendTo(unittest.TestCase):
             with self.assertRaises(notify.BridgeError) as cm:
                 notify.PowerShellBridge(script="teams-self.ps1").sendto(PEER, "本文")
         self.assertEqual(cm.exception.data["result"], "failed")
+
+
+class TestAnswerWithTheSwitchOff(Base):
+    """With execute unset the self chat is not read for `送る N` by default (the default reads nothing new). When another reason reads
+    it, the `送る N` is answered once, with one record, and nothing is sent."""
+
+    def test_a_send_word_read_for_another_reason_gets_one_notice_and_one_record_and_no_send(self):
+        self.add_reply()
+        self.add_other_pending()
+        bridge = self.post_it()
+        self.reply(bridge, "OK 1")
+        self.reply(bridge, "送る 1")
+        self.assertEqual(bridge.sent, [])
+        self.assertEqual([(r["state"], r["reason"]) for r in self.executions()], [("skipped", "not_enabled")])
+        self.assertEqual(sum("記録だけです" in p for p in bridge.posts), 1)
+        self.collect(bridge)                               # the same line, read again: no second notice and no second record
+        self.collect(bridge)
+        self.assertEqual(len(self.executions()), 1)
+        self.assertEqual(sum("記録だけです" in p for p in bridge.posts), 1)
+        self.assertEqual(bridge.sent, [])
+
+    def test_a_send_word_sent_after_the_switch_is_turned_on_says_the_text_was_not_fixed_and_sends_nothing(self):
+        self.add_reply()
+        self.add_other_pending()
+        bridge = self.post_it()
+        self.reply(bridge, "OK 1")
+        self.reply(bridge, "送る 1")
+        self.enable()
+        self.reply(bridge, "送る 1")                        # a new line: the approval was made while switched off, so no text was fixed
+        self.assertEqual(bridge.sent, [])
+        self.assertEqual([(r["state"], r["reason"]) for r in self.executions()],
+                         [("skipped", "not_enabled"), ("skipped", "not_frozen")])
+        self.assertEqual(sum("返信を有効にする前に出されたため" in p for p in bridge.posts), 1)
+        self.assertEqual(sum("送信用の投稿の文面を、手で送ってください" in p for p in bridge.posts), 1)
+
+
+class TestReplyWindow(Base):
+    """`送る N` is read for REPLY_WINDOW (48 hours) after the OK, and only then (with execute teams.reply). After it the self chat is not
+    read for the item at all, so nothing answers a later `送る N`. While the window is open, every run reads the self chat."""
+
+    def test_a_send_word_at_forty_seven_hours_after_the_ok_is_sent_once(self):
+        self.enable()
+        self.add_reply()
+        bridge = self.post_it()
+        self.reply_at(bridge, "OK 1", OK_AT)
+        self.reply_at(bridge, "送る 1", OK_AT + timedelta(hours=47))
+        self.assertEqual(bridge.sent, [(PEER, REPLY_TEXT)])
+
+    def test_a_send_word_at_forty_nine_hours_after_the_ok_is_not_read_and_sends_nothing(self):
+        self.enable()
+        self.add_reply()
+        bridge = self.post_it()
+        self.reply_at(bridge, "OK 1", OK_AT)
+        bridge.replies.append("送る 1")                     # on the screen, after the window
+        with mock.patch.object(bridge, "read", wraps=bridge.read) as read:
+            notify.collect(self.out, bridge, real=True, send=True, now=OK_AT + timedelta(hours=49))
+        self.assertEqual(read.call_count, 0)
+        self.assertEqual(bridge.sent, [])
+        self.assertFalse((self.out / "executions.jsonl").exists())
+
+    def test_while_the_window_is_open_each_run_reads_the_self_chat(self):
+        self.enable()
+        self.add_reply()
+        bridge = self.post_it()
+        self.reply_at(bridge, "OK 1", OK_AT)
+        with mock.patch.object(bridge, "read", wraps=bridge.read) as read:
+            notify.collect(self.out, bridge, real=True, send=True, now=OK_AT + timedelta(hours=1))
+        self.assertEqual(read.call_count, 1)               # the extra read that docs/execute-teams-reply.md names
+
+    def test_the_window_does_not_open_with_the_switch_off(self):
+        self.add_reply()
+        bridge = self.post_it()
+        self.reply_at(bridge, "OK 1", OK_AT)
+        self.assertNotIn("reply_open_at", self.item())
+        self.assertFalse(execute.reply_open(self.item(), OK_AT + timedelta(hours=1)))
+
+    def test_a_non_target_is_recorded_inside_the_window_and_never_sent(self):
+        self.enable()
+        self.add_reply(chat_kind="group")
+        bridge = self.post_it()
+        self.reply_at(bridge, "OK 1", OK_AT)
+        self.reply_at(bridge, "送る 1", OK_AT + timedelta(hours=1))
+        self.assertEqual(bridge.sent, [])
+        self.assertEqual([(r["state"], r["reason"]) for r in self.executions()], [("skipped", "not_target")])
+
+
+class TestFailuresAndWhatIsShown(Base):
+    def test_a_draft_in_the_box_is_a_failure_that_is_not_sent_again_by_a_send_word(self):
+        self.enable()
+        self.add_reply()
+        bridge = self.post_it()
+        bridge.result, bridge.error = "failed", "the input box of that chat holds a draft; nothing pasted"
+        self.reply(bridge, "OK 1")
+        self.reply(bridge, "送る 1")
+        self.assertTrue(any("送れませんでした（相手の入力欄に下書きがあるため、何も貼っていません）" in p for p in bridge.posts))
+        self.reply(bridge, "送る 1")                        # a send word after a failure sends nothing: only 再実行 does
+        self.assertEqual(len(bridge.sent), 1)
+        self.assertEqual(self.item()["exec"]["0"]["state"], "failed")
+
+    def _restore_case(self, result, error):
+        self.enable()
+        self.add_reply()
+        bridge = self.post_it()
+        bridge.result, bridge.error, bridge.restore = result, error, "failed"
+        self.reply(bridge, "OK 1")
+        self.reply(bridge, "送る 1")
+        return bridge
+
+    def test_a_chat_that_could_not_be_put_back_is_said_after_a_failed_send(self):
+        bridge = self._restore_case("failed", "wrong chat")
+        self.assertTrue(any("送れませんでした" in p and "開いていたチャットへ戻せませんでした" in p for p in bridge.posts))
+
+    def test_a_chat_that_could_not_be_put_back_is_said_after_an_unknown_send(self):
+        bridge = self._restore_case("unknown", "not seen in the chat list")
+        self.assertTrue(any("送れたか分かりません" in p and "開いていたチャットへ戻せませんでした" in p for p in bridge.posts))
+
+    def test_a_chat_that_could_not_be_put_back_is_said_after_a_done_send_too(self):
+        bridge = self._restore_case("done", "")
+        self.assertTrue(any("送りました" in p and "開いていたチャットへ戻せませんでした" in p for p in bridge.posts))
+
+    def test_the_ready_post_shows_the_text_that_is_sent_even_after_the_text_was_edited(self):
+        self.enable()
+        self.add_reply()
+        bridge = self.post_it()
+        ap = notify.Approvals(self.out)
+        ap.data["items"]["1"]["record"]["actions"][0]["text"] = "後から直した文"
+        ap.save()
+        self.reply(bridge, "OK 1")
+        self.assertTrue(any(p.startswith(f"[kimeru 送信用 #1]\n{REPLY_TEXT}\n\n") for p in bridge.posts))
+        self.assertFalse(any("後から直した文" in p for p in bridge.posts))
+        self.reply(bridge, "送る 1")
+        self.assertEqual(bridge.sent, [(PEER, REPLY_TEXT)])
 
 
 class TestReplyWord(unittest.TestCase):

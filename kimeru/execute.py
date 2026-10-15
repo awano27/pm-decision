@@ -22,7 +22,8 @@ implemented here. The rules:
     when that read fails on a redo, an unknown result stays unknown (`済 N` still works);
   - the result goes back to the self chat through an outbox (kept until it is really posted), and every attempt, `running`
     included, is written to executions.jsonl;
-  - teams.reply is sent only by `送る N` (reply_request), never by an OK: once, to the 1 対 1 chat the event came from, with the text and
+  - teams.reply is sent only by `送る N` (reply_request), never by an OK: once, within 48 hours of the OK (REPLY_WINDOW), to the 1 対 1
+    chat the event came from, with the text and
     the chat fixed when the approval post was made (freeze, reply_text / reply_chat). Without --send the request is only recorded;
     the next --send run sends it. teams.post is never sent: approving one returns a post with the text alone, ready to copy.
 
@@ -507,7 +508,8 @@ def reply_pending(item):
 
 def reply_open(item, now):
     """True while an approved item still has a reply that `送る N` may send (not sent, not closed, not skipped) and its OK is at most
-    REPLY_WINDOW old. Only then is the self chat read for the item; later a `送る N` is not read, and the PM approves again to send."""
+    REPLY_WINDOW old. Only then is the self chat read for the item. After REPLY_WINDOW a `送る N` is not read and nothing answers it:
+    the PM sends the text by hand from the 送信用 post (the approval stays)."""
     opened = (item or {}).get("reply_open_at")
     if (item or {}).get("status") != "approved" or not opened:
         return False
@@ -522,19 +524,34 @@ def reply_open(item, now):
                for i, a in enumerate(((item or {}).get("record") or {}).get("actions", [])))
 
 
+def _restore_note(answer):
+    """The sentence for a chat that could not be put back (the script's `restore`): "" when it was put back."""
+    return "（開いていたチャットへ戻せませんでした。Teams を確かめてください）" if (answer or {}).get("restore") == "failed" else ""
+
+
 def _sent_outcome(bridge, chat_id, text):
     """(outcome, error, note) of one send: "done", "failed" (nothing was pasted or sent: a definite failure) or "unknown" (the send
     may have happened). The script answers with `result`; one that does not say what happened is unknown, so nothing is sent twice
-    because of it. `note` is the sentence for a chat that could not be put back ("" when it was)."""
+    because of it. `note` is the sentence for a chat that could not be put back, whatever the outcome ("" when it was)."""
     try:
         res = bridge.sendto(chat_id, text) or {}
-    except Exception as e:   # the script's own failure (BridgeError carries its JSON), a timeout, a script that cannot start
+    except Exception as e:   # the script's own answer (BridgeError carries its JSON), a timeout, a script that cannot start
         data = getattr(e, "data", None) or {}
-        return ("failed" if data.get("result") == "failed" else "unknown"), _clean(data.get("error") or e), ""
-    note = "（開いていたチャットへ戻せませんでした。Teams を確かめてください）" if res.get("restore") == "failed" else ""
+        outcome = "failed" if data.get("result") == "failed" else "unknown"
+        return outcome, _clean(data.get("error") or e), _restore_note(data)
+    note = _restore_note(res)
     if res.get("result") == "done":
         return "done", None, note
     return ("failed" if res.get("result") == "failed" else "unknown"), _clean(res.get("error") or res.get("result") or "no answer"), note
+
+
+def _why_not_sent(error):
+    """The words of a failed send for the PM: the script's `wrong chat` and a draft in the box are said in Japanese."""
+    if error == "wrong chat":
+        return "相手のチャットを確かめられず、何も貼っていません"
+    if str(error or "").startswith("the input box"):   # the script's words for a draft of the person's own in that box
+        return "相手の入力欄に下書きがあるため、何も貼っていません"
+    return error or "理由は不明"
 
 
 def _reply_result_text(num, outcome, to, error=None):
@@ -543,7 +560,7 @@ def _reply_result_text(num, outcome, to, error=None):
     if outcome == "done":
         return f"[kimeru 実行 #{num}] 送りました（{to} とのチャット）"
     if outcome == "failed":
-        why = "相手のチャットを確かめられず、何も貼っていません" if error == "wrong chat" else (error or "理由は不明")
+        why = _why_not_sent(error)
         return f"[kimeru 実行 #{num}] 送れませんでした（{why}）。承認は残っています。直したら「再実行 {num}」と返信してください"
     return (f"[kimeru 実行 #{num}] {to} とのチャットへ送れたか分かりません。Teams で、自分の送った文がそのチャットにあるか見てください。"
             f"あれば「済 {num}」、無ければ「再実行 {num}」と返信してください")
@@ -560,9 +577,12 @@ def reply_request(out, ap, num, item, post, bridge, send, retry_only=False):
     for i, action in enumerate(item["record"].get("actions", [])):
         if action.get("type") not in REPLY_KINDS:
             continue
-        cur = (state.get(str(i)) or {}).get("state")
-        if cur in ("done", "closed", "skipped"):
-            continue                                   # sent (or closed, or never to be sent) already: never again
+        prev = state.get(str(i)) or {}
+        cur = prev.get("state")
+        if cur in ("done", "closed") or (cur == "skipped" and prev.get("reason") == NOT_TARGET):
+            continue                                   # sent or closed already, or not a target (never to be sent): never again
+        # a skip for the switch (not_enabled) or for a text that was not fixed (not_frozen) is answered by each later `送る N` (a new
+        # line on the screen): the PM is told what is still missing, and nothing is sent by it
         if cur in ("failed", "running", "unknown") and not retry_only:
             continue                                   # a failure or an unknown result waits for the PM's `再実行` / `済`
         if cur == "requested" and not send:
@@ -587,8 +607,8 @@ def reply_request(out, ap, num, item, post, bridge, send, retry_only=False):
             state[str(i)] = {"key": key, "state": "skipped", "reason": NOT_FROZEN, "at": _now()}
             _log(out, {**base, "state": "skipped", "reason": NOT_FROZEN})
             ap.save()
-            _tell(post, f"[kimeru 実行 #{num}] 送りません（この承認の投稿は、返信を有効にする前に出されたため、送る文面を示していません）。"
-                        f"承認の投稿を出し直してから、もう一度「送る {num}」と返信してください")
+            _tell(post, f"[kimeru 実行 #{num}] 送りません（この承認は、返信を有効にする前に出されたため、送る文面を固定していません）。"
+                        f"相手へは、承認のときの送信用の投稿の文面を、手で送ってください")
             results.append({"index": i, "type": action.get("type"), "state": "skipped"})
             continue
         if not send:                                   # a `--send` 無しの実行: only the request is recorded (R13)
@@ -633,6 +653,14 @@ def close_unknown(out, ap, num, item):
     return n
 
 
+def _shown_text(action):
+    """The text a ready-to-copy post shows. For a reply that `送る N` will send, it is the text fixed at the approval (reply_text), so
+    the shown text is the sent text; otherwise the action's own text, as it always was."""
+    if action.get("type") in REPLY_KINDS and is_gated(action) and action.get("reply_text"):
+        return str(action["reply_text"])
+    return action["text"]
+
+
 def send_ready_posts(num, item, post, link=False, split=False):
     """teams.reply / teams.post are not sent. The text goes back to the self chat, alone, ready to copy. With split (S1,
     send_ready_split=1) it comes as two posts: the heading (to whom, and the chat link) and the body alone under its own marker
@@ -644,11 +672,12 @@ def send_ready_posts(num, item, post, link=False, split=False):
                 tail = "\n\n相手とのチャットを開く（実験的）: https://teams.microsoft.com/l/chat/" \
                        + urllib.parse.quote(str(action["chat_id"]), safe="") + "/conversations"
             ask = _send_line(num, item, action)
+            body = _shown_text(action)
             if split:
                 _tell(post, f"[kimeru 送信用 #{num}] {_counterpart(item)}へ。次の投稿をそのまま送ってください" + tail + ask)
-                _tell(post, f"[kimeru 本文 #{num}]\n{action['text']}")
+                _tell(post, f"[kimeru 本文 #{num}]\n{body}")
             else:
-                _tell(post, f"[kimeru 送信用 #{num}]\n{action['text']}" + tail + ask)
+                _tell(post, f"[kimeru 送信用 #{num}]\n{body}" + tail + ask)
 
 
 def _send_line(num, item, action):

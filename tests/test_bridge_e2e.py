@@ -229,7 +229,7 @@ class TestSendWordAndSendTo(unittest.TestCase):
             got = bridge.sendto("19:abc@unq.gbl.spaces", "一行目\n二行目（確認）")
         self.assertEqual(got["result"], "done")
         rows = [json.loads(line) for line in log.read_text(encoding="utf-8-sig").splitlines()]
-        self.assertEqual(rows, [{"chat": "19:abc@unq.gbl.spaces", "text": "一行目\n二行目（確認）", "mode": "done"}])
+        self.assertEqual(rows, [{"chat": "19:abc@unq.gbl.spaces", "text": "一行目\n二行目（確認）", "mode": "done", "pasted": True}])
 
     def test_a_send_the_fake_refuses_raises_with_its_result_and_nothing_else(self):   # S2: failed / unknown are answers, not a crash
         with mock.patch.dict(os.environ, {"KIMERU_FAKE_SENDTO": "failed"}):
@@ -237,6 +237,25 @@ class TestSendWordAndSendTo(unittest.TestCase):
                 notify.PowerShellBridge(script=FAKE).sendto("19:abc@unq.gbl.spaces", "本文")
         self.assertEqual(cm.exception.data["result"], "failed")
         self.assertEqual(cm.exception.data["error"], "wrong chat")
+
+    def test_a_draft_in_the_box_fails_and_the_log_shows_that_nothing_was_pasted(self):   # S2: the real script's draft branch, as the fake answers it
+        log = self.dir / "send.jsonl"
+        with mock.patch.dict(os.environ, {"KIMERU_FAKE_SENDTO": "draft", "KIMERU_FAKE_SENDLOG": str(log)}):
+            with self.assertRaises(notify.BridgeError) as cm:
+                notify.PowerShellBridge(script=FAKE).sendto("19:abc@unq.gbl.spaces", "本文")
+        self.assertEqual(cm.exception.data["result"], "failed")
+        self.assertIn("draft", cm.exception.data["error"])
+        rows = [json.loads(line) for line in log.read_text(encoding="utf-8-sig").splitlines()]
+        self.assertEqual([(r["mode"], r["pasted"]) for r in rows], [("draft", False)])
+
+    def test_a_send_that_is_not_seen_is_unknown_and_the_log_shows_the_text_was_pasted(self):   # S2: unknown is never retried by itself
+        log = self.dir / "send.jsonl"
+        with mock.patch.dict(os.environ, {"KIMERU_FAKE_SENDTO": "unknown", "KIMERU_FAKE_SENDLOG": str(log)}):
+            with self.assertRaises(notify.BridgeError) as cm:
+                notify.PowerShellBridge(script=FAKE).sendto("19:abc@unq.gbl.spaces", "本文")
+        self.assertEqual(cm.exception.data["result"], "unknown")
+        rows = [json.loads(line) for line in log.read_text(encoding="utf-8-sig").splitlines()]
+        self.assertEqual([(r["mode"], r["pasted"]) for r in rows], [("unknown", True)])
 
     def test_the_teams_scripts_parse_without_errors(self):   # S2: the sendto action is valid PowerShell (no Teams window is needed)
         for script in (ROOT / "tools" / "teams-self.ps1", FAKE):

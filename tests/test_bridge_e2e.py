@@ -190,6 +190,62 @@ class TestSplitBodyIsNotRead(unittest.TestCase):
         self.assertEqual(read_chat(["[kimeru 本文 #1]\nOK 1\n詳細 1"])["timeline"], [])
 
 
+@unittest.skipUnless(os.name == "nt" and shutil.which("powershell"), "needs Windows PowerShell")
+class TestSendWordAndSendTo(unittest.TestCase):
+    """S2: the send word the reader hands back, and sendto through the bridge. The fake answers; nothing reaches Teams."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.chat = self.dir / "chat.json"
+        os.environ["KIMERU_FAKE_CHAT"] = str(self.chat)
+        self.out = self.dir / "out"
+        r = subprocess.run([sys.executable, "-m", "kimeru", "--out", str(self.out), "run",
+                            str(ROOT / "examples" / "meeting_minutes.json")], cwd=ROOT, capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        (self.out / "approvals.json").write_text('{"next": 278, "items": {}}', encoding="utf-8")
+
+    def tearDown(self):
+        os.environ.pop("KIMERU_FAKE_CHAT", None)
+        self.tmp.cleanup()
+
+    def reply(self, text):
+        chat = json.loads(self.chat.read_text(encoding="utf-8-sig"))
+        chat["messages"].append(text)
+        self.chat.write_text(json.dumps(chat, ensure_ascii=False), encoding="utf-8")
+
+    def test_a_send_word_is_handed_back_below_the_approval_post(self):   # S2: `送る N` is a reply the reader hands back
+        bridge = notify.PowerShellBridge(script=FAKE)
+        notify.notify(self.out, bridge, send=True)
+        self.reply("送る 278")
+        read = bridge.read()
+        self.assertIn("R:送る 278", read["timeline"])
+        self.assertEqual(notify.fresh_entries(read), [("送る 278", 0)])
+
+    def test_the_fake_chat_sends_once_through_the_bridge_and_the_text_arrives_whole(self):   # S2: sendto, answered by the fake
+        log = self.dir / "send.jsonl"
+        bridge = notify.PowerShellBridge(script=FAKE)
+        with mock.patch.dict(os.environ, {"KIMERU_FAKE_SENDLOG": str(log)}):
+            got = bridge.sendto("19:abc@unq.gbl.spaces", "一行目\n二行目（確認）")
+        self.assertEqual(got["result"], "done")
+        rows = [json.loads(line) for line in log.read_text(encoding="utf-8-sig").splitlines()]
+        self.assertEqual(rows, [{"chat": "19:abc@unq.gbl.spaces", "text": "一行目\n二行目（確認）", "mode": "done"}])
+
+    def test_a_send_the_fake_refuses_raises_with_its_result_and_nothing_else(self):   # S2: failed / unknown are answers, not a crash
+        with mock.patch.dict(os.environ, {"KIMERU_FAKE_SENDTO": "failed"}):
+            with self.assertRaises(notify.BridgeError) as cm:
+                notify.PowerShellBridge(script=FAKE).sendto("19:abc@unq.gbl.spaces", "本文")
+        self.assertEqual(cm.exception.data["result"], "failed")
+        self.assertEqual(cm.exception.data["error"], "wrong chat")
+
+    def test_the_teams_scripts_parse_without_errors(self):   # S2: the sendto action is valid PowerShell (no Teams window is needed)
+        for script in (ROOT / "tools" / "teams-self.ps1", FAKE):
+            cmd = ("$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('" + str(script).replace("'", "''")
+                   + "',[ref]$null,[ref]$e); if ($e) { $e | ForEach-Object { $_.Message } }; exit @($e).Count")
+            r = subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, text=True, encoding="utf-8", timeout=120)
+            self.assertEqual((r.returncode, r.stdout.strip()), (0, ""), script.name)
+
+
 class TestTheRealReaderKeepsOnlyTheFirstLineOfAPost(unittest.TestCase):
     """The Teams reader (tools/teams-self.ps1) reads a Teams window, so no test runs it. This pins the rule that a split body
     depends on: only the first line of a post that starts with `[kimeru` is read."""

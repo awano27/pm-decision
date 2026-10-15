@@ -16,6 +16,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 from datetime import datetime, timezone
 import unicodedata
 from pathlib import Path
@@ -24,7 +25,7 @@ from . import actions, config, explain, fsutil, hold, labels, learn
 from . import writer as writer_mod
 
 HERE = Path(__file__).resolve().parent.parent
-REPLY = re.compile(r"^(OK|NG|保留|聞き返し|詳細|再実行|済)\s*#?(\d+)\s*[.。!！]*$", re.IGNORECASE)
+REPLY = re.compile(r"^(OK|NG|保留|聞き返し|詳細|再実行|済|送る)\s*#?(\d+)\s*[.。!！]*$", re.IGNORECASE)
 REDRAFT = re.compile(r"^修正\s*#?(\d+)\s*[:：]?\s*(\S.*)$")
 REDO_K = re.compile(r"^再実行\s*#?(\d+)\s*-\s*(\d+)\s*[.。!！]*$")   # `再実行 N-k`: run again, k = the result count the PM saw (stated in the result post)
 REDO_BAD = re.compile(r"^再実行\s*#?(\d+)\s*[^\w\s.。!！]+\s*\d*\s*[.。!！]*$")   # looks like `再実行 N-k` but with a mark that is not a dash (~ / and the like): recorded, not dropped
@@ -181,7 +182,7 @@ def _hold_reply(line):
     return hold.parse_hold_until(line)
 
 
-STATUS = {"OK": "approved", "NG": "rejected", "保留": "held", "聞き返し": "ask_back", "詳細": "detail", "再実行": "redo", "済": "closed", "不要": "rejected"}   # 聞き返し / 詳細 / 再実行 / 済: not decisions; 不要 (R33, learn=1): NG, and not needed
+STATUS = {"OK": "approved", "NG": "rejected", "保留": "held", "聞き返し": "ask_back", "詳細": "detail", "再実行": "redo", "済": "closed", "不要": "rejected", "送る": "send"}   # 聞き返し / 詳細 / 再実行 / 済 / 送る: not decisions; 不要 (R33, learn=1): NG, and not needed; 送る (S2): the approved reply goes out (execute.reply_request), not a decision
 
 
 TEST_ENV = "KIMERU_TEST_MARK"   # tools/check.ps1 sets it for the kimeru commands it runs: they post and read test posts
@@ -280,8 +281,9 @@ class PowerShellBridge:
         self.script = str(script)
 
     def _run(self, *args):
-        # readchat moves the screen, waits for a quiet keyboard and puts the chat back: it needs more than the others (its own limit is 90 s)
-        timeout = 300 if "readchat" in args else 120
+        # readchat moves the screen, waits for a quiet keyboard and puts the chat back: it needs more than the others (its own limit is 90 s);
+        # sendto does the same kind of work (opens one chat, pastes, sends once, puts the chat back)
+        timeout = 300 if ("readchat" in args or "sendto" in args) else 120
         try:
             r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", self.script, *args],
                                capture_output=True, text=True, encoding="utf-8", timeout=timeout)
@@ -333,6 +335,21 @@ class PowerShellBridge:
         """Open one chat, read its last messages (read only) and go back to the chat that was open. Slow (a few seconds).
         `preview`: the start of the chat's list preview; a layout that reports no selection is checked against it."""
         return self._run("-Action", "readchat", "-ChatId", chat_id, "-Count", str(count), *(["-Preview", preview] if preview else []))
+
+    def sendto(self, chat_id, text):
+        """`送る N` (S2): puts the approved text into one 1 対 1 chat and sends it ONCE (tools/teams-self.ps1 -Action sendto). The text
+        travels in a temporary file, never on the command line, and the file is removed after the call. Returns the script's answer
+        when it is "done"; any other answer raises BridgeError with it (data["result"] is "failed" or "unknown")."""
+        fd, path = tempfile.mkstemp(prefix="kimeru-send-", suffix=".txt")
+        try:
+            with os.fdopen(fd, "wb") as f:   # bytes: a text-mode write would turn each line break into CRLF
+                f.write(str(text).encode("utf-8"))
+            return self._run("-Action", "sendto", "-ChatId", str(chat_id), "-TextFile", path)
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
 
 def ado_lines(rec):
@@ -510,6 +527,8 @@ def format_post(n, rec, full=None, marks=None, precedent=None, promise=None, rel
         lines.append(f"OK で ADO{where}の #{writes[0].get('id')} にコメントを書きます（上の文面そのまま）。--send 無しの実行では次の --send で書きます")
     elif any(a.get("exec_skip") for a in actions):
         lines.append("OK は記録だけです（ADO の取り込み元が記録されていません）")
+    if any(a.get("reply_skip") for a in actions):   # S2 (teams.reply switched on): a reply that `送る N` cannot send
+        lines.append("送れません（グループ／相手が特定できない）")
     if rec.get("copilot_request"):
         lines.append(f"↓ 次の投稿を Copilot に貼り、返った文面を 1 行で「下書き {n} 〈文面〉」と返信")
     reply = f"OK {n} / NG {n}"
@@ -540,7 +559,9 @@ def format_detail(n, rec, full=None, precedent=None, promise=None):
     effects = []
     for action in rec.get("actions", []):
         kind = action.get("type", "?")
-        if kind in execute.SEND_READY:
+        if kind in execute.REPLY_KINDS and (action.get("reply_text") or action.get("reply_skip")):   # S2: switched on for this reply
+            effects.append("承認のあと「送る N」と返すと、相手の 1 対 1 のチャットへ 1 回送る（対象外のものは送らない）")
+        elif kind in execute.SEND_READY:
             effects.append("コピー用文面を自分チャットへ返す（相手には送信しない）")
         elif kind == "ado.comment" and action.get("exec_text"):
             effects.append("実行設定が有効なら、承認後に ADO へコメントを書き込む")
@@ -1893,6 +1914,10 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
         # or approved on a run without --send and not written yet (unwritten: the run with --send writes it)
         if real and send and sent.awaiting(ap.data, it, clock):   # R28: a nudged reply whose send is still watched, or one due for today's nudge
             return True
+        if real and send and execute.reply_requested(it):   # S2: a `送る N` read on a run without --send waits for this run (sent below)
+            return True
+        if real and execute.reply_open(it, clock):   # S2: an approved reply that `送る N` may still send is read for, for REPLY_WINDOW after the OK
+            return True
         return it["posted"] and (it["status"] in ("pending", "held") or (
             real and it["status"] == "approved" and (any(execute.unresolved(v) for v in (it.get("exec") or {}).values())
                                                      or (send and unwritten(it)))))
@@ -1927,6 +1952,12 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
                 execute.run_approved(out, ap, int(num), it, post)
     writer = writer if writer is not None else writer_mod.get_writer()
     changes = []
+    if real and send:   # S2: a `送る N` read on a run without --send is sent now, once (the request was recorded; see execute.reply_request)
+        for num, it in ap.data["items"].items():
+            if execute.reply_requested(it):
+                got = execute.reply_request(out, ap, int(num), it, post, bridge, send=True)
+                if got:
+                    changes.append({"id": int(num), "status": "reply_send", "real": got})
     read = bridge.read()
     if real and send:   # R26: `正しい S<k>` / `違う S<k>` label their card's decision (spot.py); no approval item is touched by them
         from . import spot
@@ -1971,7 +2002,7 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
         redo_done.add(num)
         it["redo_mark"] = int(it.get("x_seq", 0))   # the results made so far; those of this redo come after
         ap.save()   # saved before the run: a stop in the middle must not run the same reply again
-        changes.append({"id": int(num), "status": "redo", "real": execute.redo(out, ap, int(num), it, post)})
+        changes.append({"id": int(num), "status": "redo", "real": execute.redo(out, ap, int(num), it, post, bridge=bridge, send=send)})
 
     def redo_candidate(num):
         it = ap.data["items"].get(num)
@@ -2077,6 +2108,12 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
             if real and it and it["status"] == "approved" and execute.close_unknown(out, ap, int(num), it):
                 changes.append({"id": int(num), "status": "closed"})
             continue
+        if word == "送る":   # S2: the approved reply goes to its 1 対 1 chat, once (execute.reply_request); the real run only, never by an OK
+            if real and it and it["status"] == "approved":
+                got = execute.reply_request(out, ap, int(num), it, post, bridge, send)
+                if got:
+                    changes.append({"id": int(num), "status": "reply_send", "real": got})
+            continue
         if word == "不要" and it is not None and learn.is_card(it):   # R33: a card is no case: nothing answers 不要 on it
             continue
         if not it or not it["posted"] or it["status"] not in ("pending", "held"):
@@ -2098,7 +2135,8 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
         new = STATUS[word]
         if new == it["status"]:
             continue
-        if new == "approved" and real and any(execute.is_gated(a) and not a.get("exec_text") and not a.get("exec_skip") for a in it["record"].get("actions", [])):
+        if new == "approved" and real and any(execute.is_gated(a) and not (a.get("exec_text") or a.get("exec_skip") or a.get("reply_text") or a.get("reply_skip"))
+                                              for a in it["record"].get("actions", [])):   # a reply that was not fixed in its post counts too (S2)
             # posted before execution was switched on: it never showed the text that would be written. Nothing is written;
             # the post is made again with the text and the target, and the PM answers again.
             it["posted"], it["request_posted"] = False, False
@@ -2125,6 +2163,8 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
         if word == "不要":   # R33: the mark the rule counts (learn.py); the words of the line are not kept
             ch.update(learn.mark_not_needed(it, now))
         if new == "approved":
+            if real and execute.reply_pending(it):   # S2: the OK of a reply that `送る N` may send: the window starts now (execute.reply_open)
+                it["reply_open_at"] = clock.isoformat()
             ch["executed"] = [actions.execute(a, dry_run=True) for a in it["record"].get("actions", [])]
             ch["real"] = _after_approval(out, ap, int(num), it, bridge, real=real, send=send)
             if learn.is_card(it):   # R21: written only with real and send (learn.adopt); otherwise it waits for such a run

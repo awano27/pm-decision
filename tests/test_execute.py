@@ -320,10 +320,10 @@ class TestSecretsStayOut(Base):
 
 class TestOtherKinds(Base):
     def test_an_unsupported_kind_is_reported_and_stays_record_only(self):
-        os.environ["KIMERU_EXECUTE"] = "ado.update,teams.reply"
+        os.environ["KIMERU_EXECUTE"] = "ado.update"   # teams.reply is implemented since S2 (tests/test_execute_teams_reply.py)
         config.apply([])
         self.assertEqual(execute.enabled_types(), set())
-        self.assertEqual(execute.unsupported(), ["ado.update", "teams.reply"])
+        self.assertEqual(execute.unsupported(), ["ado.update"])
         from contextlib import redirect_stdout
         import io
         buf = io.StringIO()

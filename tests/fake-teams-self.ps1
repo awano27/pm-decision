@@ -6,6 +6,7 @@ param(
   [Parameter(Mandatory = $true)][string]$Action,
   [string]$Text = '',
   [string]$ChatId = '',
+  [string]$TextFile = '',
   [string]$Preview = '',
   [int]$Count = 5,
   [switch]$Send
@@ -55,6 +56,7 @@ switch ($Action) {
       elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^延期\s*#?(\d+)\s+(\S{1,10})\s*[.。!！]*$') { $c = 'R:延期 {0} {1}' -f $Matches[1], $Matches[2].TrimEnd('.', '。', '!', '！') }
       elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^違う\s*#?(\d+)(?:\s+(\d+))?$') { $c = if ($Matches[2]) { 'R:違う {0} {1}' -f $Matches[1], $Matches[2] } else { 'R:違う {0}' -f $Matches[1] } }
       elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^(正しい|違う)\s*S(\d+)$') { $c = 'R:{0} S{1}' -f $Matches[1], $Matches[2] }
+      elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^送る\s*#?(\d+)\s*[.。!！]*$') { $c = 'R:送る {0}' -f $Matches[1] }
       elseif ($first.Normalize([Text.NormalizationForm]::FormKC) -match '^送った\s*#?(\d+)\s*[.。!！]*$') { $c = 'R:送った {0}' -f $Matches[1] }
       if ($c -and ($tl.Count -eq 0 -or $tl[$tl.Count - 1] -ne $c)) { $tl.Add($c) }
     }
@@ -84,6 +86,16 @@ switch ($Action) {
     $ret = [bool]($rs -eq 'restored')
     if ($c.error) { Out-Json @{ ok = $false; error = [string]$c.error; restore = $rs; returned = $ret; hadOriginal = $true }; exit 2 }
     Out-Json @{ ok = $true; opened = $true; how = 'fake'; messages = @(@($c.messages) | Select-Object -Last $Count | ForEach-Object { @{ text = $_; sender = ''; time = '' } }); returned = $ret; restore = $rs; hadOriginal = $true; preview = $Preview }
+  }
+  'sendto' {
+    # the answer contract of the real script (S2): result done = ok true, exit 0; failed / unknown = ok false, exit 2. KIMERU_FAKE_SENDTO
+    # picks the answer (done is the default); every attempt is kept in KIMERU_FAKE_SENDLOG (the chat id and the text), for the test
+    $mode = if ($env:KIMERU_FAKE_SENDTO) { $env:KIMERU_FAKE_SENDTO } else { 'done' }
+    $sendBody = if ($TextFile -and (Test-Path $TextFile)) { [IO.File]::ReadAllText($TextFile, (New-Object Text.UTF8Encoding $false)) } else { '' }
+    if ($env:KIMERU_FAKE_SENDLOG) { Add-Content -Path $env:KIMERU_FAKE_SENDLOG -Value (@{ chat = $ChatId; text = $sendBody; mode = $mode } | ConvertTo-Json -Compress) -Encoding UTF8 }
+    if ($mode -eq 'done') { Out-Json @{ ok = $true; result = 'done'; restore = 'restored'; returned = $true }; exit 0 }
+    $err = if ($mode -eq 'failed') { 'wrong chat' } else { 'not seen in the chat list' }
+    Out-Json @{ ok = $false; result = $mode; error = $err; restore = 'restored'; returned = $true }; exit 2
   }
   default { Out-Json @{ ok = $false; error = "unsupported $Action" }; exit 2 }
 }

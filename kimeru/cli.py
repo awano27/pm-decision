@@ -71,7 +71,7 @@ SAVE_FAILED = {"state": "preview_only", "why": "全文を保存できなかっ�
 
 
 EVENT_KEEP = ("kind", "id", "author", "text", "item", "meeting", "title", "description", "work_item_type",
-              "repro_steps", "acceptance_criteria", "test_steps", "area", "type", "created_by", "rule", "severity", "condition", "mentions_me", "context", "date", "chat_id", "chat_title", "origin")
+              "repro_steps", "acceptance_criteria", "test_steps", "area", "type", "created_by", "rule", "severity", "condition", "mentions_me", "context", "date", "chat_id", "chat_kind", "chat_title", "origin")
 
 
 EVENT_TEXT = ("text", "description", "repro_steps", "acceptance_criteria", "test_steps", "item", "title", "meeting", "condition", "context")   # free text: cut in the records

@@ -10,7 +10,7 @@ python -m kimeru config set ado_project "<プロジェクト>"
 python -m kimeru config set execute ado.comment
 ```
 
-- `execute` に書けるのは、実装済みの `ado.comment` だけです。ほかの種類（`ado.update` など）を書くと、「未対応」と表示され、これまでどおり記録のみです。
+- `execute` に書けるのは、実装済みの `ado.comment` と `teams.reply`（[相手への返信の送信](execute-teams-reply.md)）です。ほかの種類（`ado.update` など）を書くと、「未対応」と表示され、これまでどおり記録のみです。
 - 認証は、あなた自身の `az` のサインイン（`az login`）です。トークンは記録も表示もしません。
 - 元に戻す: `python -m kimeru config unset execute`
 
@@ -72,7 +72,7 @@ python -m kimeru config set execute ado.comment
 
 ## 相手への返信
 
-`teams.reply` / `teams.post` は、送りません。承認すると、**送る文面だけ** の投稿（`[kimeru 送信用 #N]`）が自分とのチャットに返ります。iPhone で長押しして、コピーして送ってください。
+`teams.post` は送りません。`teams.reply` は、`execute teams.reply` を設定し、`送る N` と返したときだけ 1 回送ります（[相手への返信の送信](execute-teams-reply.md)）。既定では送りません。承認すると、**送る文面だけ** の投稿（`[kimeru 送信用 #N]`）が自分とのチャットに返ります。iPhone で長押しして、コピーして送ってください。
 `config set open_chat_link 1` にすると、相手とのチャットを開くリンクが付きます（実験的。リンクに文面は入りません）。
 
 ## 試験（管理された PC）

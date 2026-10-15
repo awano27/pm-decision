@@ -28,9 +28,10 @@
   Personal Teams shows "(あなた)"; work accounts may show "(自分)". Override with -SelfMarker.
 #>
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('status', 'open', 'post', 'send', 'read', 'diag', 'learn', 'chats', 'readchat', 'test-messages', 'test-compare', 'test-readback', 'test-container', 'test-failure', 'test-send-once', 'probe')][string]$Action,
+  [Parameter(Mandatory = $true)][ValidateSet('status', 'open', 'post', 'send', 'sendto', 'read', 'diag', 'learn', 'chats', 'readchat', 'test-messages', 'test-compare', 'test-readback', 'test-container', 'test-failure', 'test-send-once', 'probe')][string]$Action,
   [string]$Text = '',
-  [string]$ChatId = '',      # readchat: the chat to open (its id from `chats`)
+  [string]$ChatId = '',      # readchat, sendto: the chat to open (its id from `chats`; sendto: a 1 対 1 chat only)
+  [string]$TextFile = '',    # sendto: the file that holds the approved text (UTF-8); the caller removes it after the call
   [int]$Count = 5,           # readchat: how many of the last messages to read
   [string]$ReadbackText = '',
   [string]$TestRows = '',
@@ -735,6 +736,7 @@ if ($Action -eq 'test-container') {
   Out-Json @{ identity = (Select-MessageContainerId $snapshot.ancestors ([string]$snapshot.fallback)) }; exit 0
 }
 if ($Action -in 'open', 'post', 'send', 'read', 'readchat') { Enter-UiLock $(if ($Action -eq 'readchat') { 60000 } else { 180000 }) }
+if ($Action -eq 'sendto') { Enter-UiLock 180000 }   # S2: one Teams operation at a time, as the others
 if ($Action -eq 'probe') { Enter-UiLock 180000 }   # the read the approvals step makes: one Teams operation at a time
 if ($Action -in 'post', 'send') { Wait-UserIdle 3 60 }   # writing moves the screen: not while the person works. readchat does not wait: it checks and postpones
 $w = Get-TeamsWindow
@@ -1125,6 +1127,120 @@ if ($Action -eq 'post') {
   Out-Json @{ ok = $true; typed = $typed; sent = $sent; readback = $readback }; exit 0
 }
 
+function Test-ChatHeaderId($win, [string]$id) {
+  # the open chat's header carries the chat id ("chat-header-<id>"): the id says which chat is open, never its title (S2, sendto)
+  if (-not $win -or -not $id) { return $false }
+  $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, "chat-header-$id")
+  $h = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
+  [bool]($h -and $h.Current.BoundingRectangle.Height -gt 0)
+}
+function Get-ChatRowPreview($win, [string]$id) {
+  # the last-message preview of one chat's row in the list ('' when the row is not on screen). Read only (S2, sendto)
+  if (-not $win -or -not $id) { return '' }
+  foreach ($it in (Get-ChatItems $win)) {
+    if ((Get-ChatId $it) -ne $id) { continue }
+    foreach ($d in (Get-Raw $it 4)) {
+      if ([string]$d.Current.AutomationId -like 'message-preview-chat-list-item_*') {
+        $txt = (@(Get-Raw $d 3 | ForEach-Object { $_.Current.Name } | Where-Object { $_ }) -join ' ').Trim()
+        if (-not $txt) { $txt = [string]$d.Current.Name }
+        return $txt
+      }
+    }
+  }
+  ''
+}
+
+if ($Action -eq 'sendto') {
+  # `送る N` (execute.py, S2): puts the approved text into ONE 1 対 1 chat and sends it once. The chat is opened by its link and is the
+  # chat only when its header carries the chat id (never the title). The text comes from -TextFile, never from the command line.
+  # Answer: result = done (the sent line is at the head of that chat's row in the list), failed (nothing was pasted or sent: a wrong chat,
+  # a draft in the box, ...) or unknown (the send was attempted and is not seen: the person checks Teams). The chat that was open is put
+  # back afterwards. The other chat's messages are never read: its box is checked before the send, and its list row after.
+  $script:InRead = $true   # a Fail inside becomes an exception here, so that the chat that was open is still put back
+  $script:Deadline = (Get-Date).AddSeconds(120)
+  $result = 'unknown'; $errMsg = ''; $origId = $null; $origTitle = ''; $navigated = $false; $attempted = $false; $seen = $false
+  $sendBody = ''; $saved = $null; $restore = 'unchanged'
+  try {
+    Wait-UserIdle 3 60
+    if (-not $w) { Fail 'Teams window not found' }
+    if (-not $ChatId -or $ChatId -eq '48:notes' -or $ChatId -notmatch '^[0-9A-Za-z:@._\-]{3,120}$') { Fail 'sendto needs the id of one 1:1 chat (not the self chat)' }
+    if (-not $TextFile -or -not (Test-Path -LiteralPath $TextFile)) { Fail 'sendto needs the text file; nothing sent' }
+    $sendBody = [IO.File]::ReadAllText($TextFile, (New-Object Text.UTF8Encoding $false))
+    if (-not $sendBody.Trim()) { Fail 'the text is empty; nothing sent' }
+    Assert-Idle
+    $origId = Get-SelectedChatId $w
+    $origTitle = Get-WinChatTitle $w
+    if (-not (Test-ChatHeaderId $w $ChatId)) {
+      Save-Foreground $w
+      $navigated = $true
+      Start-Process ("msteams:/l/chat/{0}/conversations" -f $ChatId)
+      for ($i = 0; $i -lt 30 -and -not (Test-ChatHeaderId (Get-TeamsWindow) $ChatId); $i++) { Start-Sleep -Milliseconds 300; Test-Deadline }
+    }
+    $w = Get-TeamsWindow
+    if (-not (Test-ChatHeaderId $w $ChatId)) { Fail 'wrong chat' }
+    $box = Get-Box $w
+    $before = Squash (Get-BoxText $box)
+    if ($before.Length -gt 2 -and $before -ne (Squash ([string]$box.Current.Name))) { Fail 'the input box of that chat holds a draft; nothing pasted' }
+    try { $saved = [System.Windows.Forms.Clipboard]::GetText() } catch {}
+    try {
+      [System.Windows.Forms.Clipboard]::SetText($sendBody)
+      $box = Get-Box $w
+      Assert-Foreground $w
+      $box.SetFocus(); Start-Sleep -Milliseconds 200
+      $r = $box.Current.BoundingRectangle
+      if ($r.Width -gt 0) {
+        [void][K.W]::SetCursorPos([int]($r.X + [math]::Min(80, $r.Width / 2)), [int]($r.Y + $r.Height / 2))
+        [K.W]::mouse_event(2, 0, 0, 0, 0); [K.W]::mouse_event(4, 0, 0, 0, 0); Start-Sleep -Milliseconds 200
+      }
+      Assert-Foreground $w
+      [System.Windows.Forms.SendKeys]::SendWait('^v'); Start-Sleep -Milliseconds 400
+    } finally {
+      if ($saved) { [System.Windows.Forms.Clipboard]::SetText($saved) } else { [System.Windows.Forms.Clipboard]::Clear() }
+    }
+    $box = Get-Box $w
+    if (-not (Test-MeaningfulTextMatch (Get-BoxText $box) $sendBody)) {
+      # the box must hold exactly the approved text: our paste is taken out again (a draft that was there is not touched)
+      if ((Squash (Get-BoxText $box)) -ne $before) {
+        $box.SetFocus(); Start-Sleep -Milliseconds 150
+        if (Test-BoxFocused) { [System.Windows.Forms.SendKeys]::SendWait('^a'); Start-Sleep -Milliseconds 100; [System.Windows.Forms.SendKeys]::SendWait('{DEL}') }
+      }
+      Fail 'the box does not hold exactly the approved text; not sent'
+    }
+    $btnFound = @(Find-All $w $CT::Button | Where-Object { $_.Current.Name -match '^(送信|Send)(\s*\(|$)' -and $_.Current.IsEnabled } | Select-Object -First 1)
+    if ($btnFound.Count -gt 0) {
+      $attempted = $true
+      try { $btnFound[0].GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch {}
+    } else {
+      Assert-Foreground $w
+      (Get-Box $w).SetFocus(); Start-Sleep -Milliseconds 150
+      Assert-Foreground $w
+      if (-not (Test-BoxFocused)) { Fail 'keyboard focus is not the compose box; nothing sent' }
+      $attempted = $true
+      try { Send-KeyOnce '^{ENTER}' } catch {}
+    }
+    # the box empties when the message went out; the chat's row shows the head of the text (the person's own line: "あなた: ...")
+    $head = Squash $sendBody
+    if ($head.Length -gt 12) { $head = $head.Substring(0, 12) }
+    for ($i = 0; $i -lt 16; $i++) {
+      Start-Sleep -Milliseconds 400
+      $row = Get-ChatRowPreview (Get-TeamsWindow) $ChatId
+      if ($row -match '^\s*(あなた|自分|You|Me)\s*[:：]' -and (Squash $row).Contains($head)) { $seen = $true; break }
+    }
+    if ($seen) { $result = 'done' }
+  } catch {
+    $m = [string]$_.Exception.Message
+    $errMsg = if ($m.StartsWith('KFAIL:')) { $m.Substring(6) } else { 'unexpected error while sending (' + $_.Exception.GetType().Name + ')' }
+  }
+  if ($errMsg) { $result = if ($attempted) { 'unknown' } else { 'failed' } }
+  if ($navigated) { $restore = Restore-Original $origId $origTitle }   # the chat that was open is put back (or the self chat, or failed)
+  Restore-Foreground
+  $script:InRead = $false
+  $answer = [ordered]@{ ok = ($result -eq 'done'); result = $result; restore = $restore; returned = [bool]($restore -in 'restored', 'unchanged', 'none') }
+  if ($result -ne 'done') { $answer.error = if ($errMsg) { $errMsg } else { 'not seen in the chat list' } }
+  Out-Json $answer
+  if ($result -eq 'done') { exit 0 } else { exit 2 }
+}
+
 if ($Action -eq 'read') {
   $posts = New-Object System.Collections.Generic.List[string]
   $replies = New-Object System.Collections.Generic.List[string]
@@ -1198,6 +1314,10 @@ if ($Action -eq 'read') {
       elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^延期\s*#?(\d+)\s+(\S{1,10})\s*[.。!！]*$') {
         # R30 `延期 N <いつ>`: the day word is handed back as it is (notify.parse_work reads it)
         $entry = 'R:延期 {0} {1}' -f $Matches[1], $Matches[2].TrimEnd('.', '。', '!', '！')
+      }
+      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^送る\s*#?(\d+)\s*[.。!！]*$') {
+        # `送る N` (S2, notify.parse_reply): the approved reply goes to its 1 対 1 chat, once; it counts only below the approval post of #N
+        $entry = 'R:送る {0}' -f $Matches[1]
       }
       elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^送った\s*#?(\d+)\s*[.。!！]*$') {
         # `送った N` (R28, notify.parse_sent): the PM says the approved reply of #N was sent; it counts only below the approval post of #N

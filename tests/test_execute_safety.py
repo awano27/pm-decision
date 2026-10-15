@@ -238,6 +238,32 @@ class TestRoutesThatNeverExecute(Safety):
         # nothing); nothing else (the demo, eval/, run and watch never ask)
         self.assertEqual(sorted(found), [("cli.py", "daily.cycle"), ("cli.py", "nt.notify")])
 
+    def test_only_the_send_word_path_calls_sendto_and_only_the_redo_and_the_collect_step_reach_it(self):
+        """S2: the bridge's `sendto` (a text into another chat) has one call site, in execute._sent_outcome, reached only through
+        execute.reply_request. reply_request is called by execute.redo (`再実行 N`) and by notify._collect (`送る N`, and the pending
+        send of a run with --send), never by anything else; both are behind the real flag."""
+        import ast
+
+        def calls_by_function(tree, attr):
+            found = []
+
+            def visit(node, fn):
+                for child in ast.iter_child_nodes(node):
+                    name = child.name if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else fn
+                    if isinstance(child, ast.Call) and ((isinstance(child.func, ast.Attribute) and child.func.attr == attr)
+                                                        or (isinstance(child.func, ast.Name) and child.func.id == attr)):
+                        found.append(fn)
+                    visit(child, name)
+            visit(tree, "<module>")
+            return found
+
+        trees = {p.name: ast.parse(p.read_text(encoding="utf-8")) for p in (ROOT / "kimeru").glob("*.py")}
+        sends = {name: calls_by_function(tree, "sendto") for name, tree in trees.items()}
+        self.assertEqual({k: v for k, v in sends.items() if v}, {"execute.py": ["_sent_outcome"]})
+        requests = {name: calls_by_function(tree, "reply_request") for name, tree in trees.items()}
+        self.assertEqual({k: sorted(set(v)) for k, v in requests.items() if v},
+                         {"execute.py": ["redo"], "notify.py": ["_collect"]})
+
     def test_collect_without_real_records_and_writes_nothing(self):
         self.enable()
         bridge = self.decide_and_post()

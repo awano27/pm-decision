@@ -22,7 +22,9 @@ implemented here. The rules:
     when that read fails on a redo, an unknown result stays unknown (`済 N` still works);
   - the result goes back to the self chat through an outbox (kept until it is really posted), and every attempt, `running`
     included, is written to executions.jsonl;
-  - teams.reply / teams.post are never sent: approving one returns a post with the text alone, ready to copy.
+  - teams.reply is sent only by `送る N` (reply_request), never by an OK: once, to the 1 対 1 chat the event came from, with the text and
+    the chat fixed when the approval post was made (freeze, reply_text / reply_chat). Without --send the request is only recorded;
+    the next --send run sends it. teams.post is never sent: approving one returns a post with the text alone, ready to copy.
 
 Authentication is the PM's own `az` sign-in, the token in memory only; organization and project come from the settings.
 Tokens, tenant ids and URL queries never reach a record or a message.
@@ -34,17 +36,22 @@ import json
 import re
 import urllib.error
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import config, fsutil, pull
 
-SUPPORTED = ("ado.comment",)
+SUPPORTED = ("ado.comment", "teams.reply")
 SIGNATURE = "\n\n（kimeru が下書きし、本人が承認した文面です）"
 SIGNATURE_FIXED = "\n\n（kimeru の定型文を、本人が承認した文面です）"   # the graph's own sentence: nothing was drafted
 _OWN_SIGN_OFF = re.compile(r"\s*(?:—|--?)\s*kimeru\s*$")
 SEND_READY = ("teams.reply", "teams.post")
 FIELD = {"teams.reply": "text", "teams.post": "text", "ado.comment": "text"}
+REPLY_KINDS = ("teams.reply",)   # sent by `送る N` (reply_request), never by an OK
+REPLY_KEYS = ("reply_text", "reply_chat", "reply_to", "reply_skip")   # what freeze keeps for a reply
+# why a reply is not sent (the record keeps the word; the post says it in words)
+NOT_ENABLED, NOT_TARGET, NOT_FROZEN = "not_enabled", "not_target", "not_frozen"
+CHAT_ID = re.compile(r"^[0-9A-Za-z:@._\-]{3,120}$")   # the ids a chat list gives: nothing else is passed to the link or the script
 
 
 def requested():
@@ -66,6 +73,11 @@ def signature_on():
 
 def is_gated(action):
     return action.get("type") in enabled_types()
+
+
+def gated_ok(action):
+    """Switched on AND carried out by an OK (the ADO comments). A reply is never carried out by an OK: `送る N` sends it."""
+    return is_gated(action) and action.get("type") not in REPLY_KINDS
 
 
 def idem_key(item_key, index, action):
@@ -116,12 +128,42 @@ def where_of(item, action):
     return {"org": tg.get("org") or "", "project": tg.get("project") or ""}
 
 
+def reply_target_ok(rec, action):
+    """True when a reply may be sent: the event is a teams.chat in a 1 対 1 chat (chat_kind oneOnOne, not through a mention), and the
+    action names that same chat id. A new destination is never made."""
+    ev = rec.get("event") or {}
+    cid = str(action.get("chat_id") or "")
+    return (rec.get("event_kind") == "teams.chat" and ev.get("chat_kind") == "oneOnOne" and not ev.get("mentions_me")
+            and bool(cid) and cid == str(ev.get("chat_id") or "") and bool(CHAT_ID.match(cid)))
+
+
+def _counterpart_rec(rec):
+    """The other person's name, on one line and at most 40 characters (the author of the message the reply answers); `相手` when the
+    record has none."""
+    for src in (rec.get("event"), rec.get("material_event")):
+        name = " ".join(str(src.get("author") or "").split()) if isinstance(src, dict) else ""
+        if name:
+            return name if len(name) <= 40 else name[:39] + "…"
+    return "相手"
+
+
 def freeze(rec, real):
     """Called when an approval post is made. Fixes, per switched-on action, the exact text that OK will write and the target it
     will be written to (both are shown in the post). Without `real` (demo, eval, run, watch) nothing is fixed and nothing is
-    shown: a stale one is removed."""
+    shown: a stale one is removed. A reply is fixed the same way, but it is sent by `送る N` only: its text, its chat and the
+    name of the other person are kept as reply_*; a reply that cannot go to a 1 対 1 chat keeps reply_skip (the post says so)."""
     o_org, o_project = origin_of(rec)
     for a in rec.get("actions", []):
+        if real and is_gated(a) and a.get("type") in REPLY_KINDS:
+            for k in REPLY_KEYS:
+                a.pop(k, None)
+            if reply_target_ok(rec, a):
+                a["reply_text"] = str(a.get("text") or "")
+                a["reply_chat"] = str(a.get("chat_id"))
+                a["reply_to"] = _counterpart_rec(rec)
+            else:
+                a["reply_skip"] = NOT_TARGET
+            continue
         if real and is_gated(a):
             org, project = current_target()
             a["exec_target"] = {"org": org, "project": project}
@@ -134,7 +176,7 @@ def freeze(rec, real):
                 a.pop("exec_origin", None)
                 a["exec_skip"] = NO_ORIGIN
         else:
-            for k in ("exec_text", "exec_target", "exec_origin", "exec_skip"):
+            for k in ("exec_text", "exec_target", "exec_origin", "exec_skip") + REPLY_KEYS:
                 a.pop(k, None)
 
 
@@ -321,6 +363,8 @@ def redo_hint(num, k, text):
 
 
 def _unknown_text(num, action):
+    if action.get("type") in REPLY_KINDS:
+        return _reply_result_text(num, "unknown", action.get("reply_to") or "相手")
     return (f"[kimeru 実行 #{num}] {_target(action)} へのコメントは、書けたかどうか分かりません。"
             f"ADO を確かめてください（作業項目を開いて、コメントがあるかどうか）。"
             f"あれば「済 {num}」、無ければ「再実行 {num}」と返信してください"
@@ -337,7 +381,7 @@ def run_approved(out, ap, num, item, post, http=None, token_fn=None, retry_only=
     results = []
     for i, action in enumerate(item["record"].get("actions", [])):
         t = action.get("type")
-        if not is_gated(action):
+        if not gated_ok(action):                       # a reply is never sent by an OK (see reply_request)
             continue
         key = idem_key(item.get("key"), i, action)
         cur = state.get(str(i))
@@ -436,9 +480,138 @@ def report_unknown(ap, post):
     return told
 
 
-def redo(out, ap, num, item, post, http=None, token_fn=None):
-    """`再実行 N`: run again the actions that failed or whose result is unknown (only on the PM's command)."""
-    return run_approved(out, ap, num, item, post, http=http, token_fn=token_fn, retry_only=True)
+def redo(out, ap, num, item, post, http=None, token_fn=None, bridge=None, send=False):
+    """`再実行 N`: run again the actions that failed or whose result is unknown (only on the PM's command). A reply goes again
+    through reply_request when a bridge is given (the real run); without one a reply is left alone."""
+    res = run_approved(out, ap, num, item, post, http=http, token_fn=token_fn, retry_only=True)
+    if bridge is not None:
+        res += reply_request(out, ap, num, item, post, bridge, send, retry_only=True)
+    return res
+
+
+def reply_requested(item):
+    """True for an approved item whose `送る N` was read on a run without --send: the next run with --send sends it once."""
+    return (item or {}).get("status") == "approved" and any(
+        (v or {}).get("state") == "requested" for v in ((item or {}).get("exec") or {}).values())
+
+
+REPLY_WINDOW = timedelta(hours=48)   # how long after the OK the self chat is read for a `送る N` (only with execute teams.reply)
+
+
+def reply_pending(item):
+    """True for an item with a reply that `送る N` is answered for: the reply is switched on now, and either its text is fixed (it may
+    be sent) or it is not a target (the `送る N` is recorded as such). notify sets reply_open_at on the OK of such an item."""
+    return any(is_gated(a) and a.get("type") in REPLY_KINDS and (a.get("reply_text") or a.get("reply_skip"))
+               for a in ((item or {}).get("record") or {}).get("actions", []))
+
+
+def reply_open(item, now):
+    """True while an approved item still has a reply that `送る N` may send (not sent, not closed, not skipped) and its OK is at most
+    REPLY_WINDOW old. Only then is the self chat read for the item; later a `送る N` is not read, and the PM approves again to send."""
+    opened = (item or {}).get("reply_open_at")
+    if (item or {}).get("status") != "approved" or not opened:
+        return False
+    try:
+        if now - datetime.fromisoformat(opened) > REPLY_WINDOW:
+            return False
+    except (TypeError, ValueError):   # a time that cannot be compared: nothing is read for it
+        return False
+    st = item.get("exec") or {}
+    return any(a.get("type") in REPLY_KINDS and (a.get("reply_text") or a.get("reply_skip"))
+               and (st.get(str(i)) or {}).get("state") in (None, "requested")
+               for i, a in enumerate(((item or {}).get("record") or {}).get("actions", [])))
+
+
+def _sent_outcome(bridge, chat_id, text):
+    """(outcome, error, note) of one send: "done", "failed" (nothing was pasted or sent: a definite failure) or "unknown" (the send
+    may have happened). The script answers with `result`; one that does not say what happened is unknown, so nothing is sent twice
+    because of it. `note` is the sentence for a chat that could not be put back ("" when it was)."""
+    try:
+        res = bridge.sendto(chat_id, text) or {}
+    except Exception as e:   # the script's own failure (BridgeError carries its JSON), a timeout, a script that cannot start
+        data = getattr(e, "data", None) or {}
+        return ("failed" if data.get("result") == "failed" else "unknown"), _clean(data.get("error") or e), ""
+    note = "（開いていたチャットへ戻せませんでした。Teams を確かめてください）" if res.get("restore") == "failed" else ""
+    if res.get("result") == "done":
+        return "done", None, note
+    return ("failed" if res.get("result") == "failed" else "unknown"), _clean(res.get("error") or res.get("result") or "no answer"), note
+
+
+def _reply_result_text(num, outcome, to, error=None):
+    """The result post of a reply (the count `k` is added by notify.count_result). A failure says it can be redone; an unknown result
+    names the two words that settle it (`済` / `再実行`)."""
+    if outcome == "done":
+        return f"[kimeru 実行 #{num}] 送りました（{to} とのチャット）"
+    if outcome == "failed":
+        why = "相手のチャットを確かめられず、何も貼っていません" if error == "wrong chat" else (error or "理由は不明")
+        return f"[kimeru 実行 #{num}] 送れませんでした（{why}）。承認は残っています。直したら「再実行 {num}」と返信してください"
+    return (f"[kimeru 実行 #{num}] {to} とのチャットへ送れたか分かりません。Teams で、自分の送った文がそのチャットにあるか見てください。"
+            f"あれば「済 {num}」、無ければ「再実行 {num}」と返信してください")
+
+
+def reply_request(out, ap, num, item, post, bridge, send, retry_only=False):
+    """`送る N` (and `再実行 N` for a reply that failed or is unknown): the approved text goes to its 1 対 1 chat, ONCE. Never by an
+    OK. The text and the chat are the ones fixed when the approval post was made (freeze). Read without --send, the request is only
+    recorded ("requested"), and the next run with --send sends it. Each send is saved before the call ("running") and after it
+    ("done", "failed" or "unknown"), and the result goes back to the self chat (post). The chat id is not kept in a record.
+    Returns [{"index", "type", "state"}] for what was done or recorded (nothing for a request that waits)."""
+    state = item.setdefault("exec", {})
+    results = []
+    for i, action in enumerate(item["record"].get("actions", [])):
+        if action.get("type") not in REPLY_KINDS:
+            continue
+        cur = (state.get(str(i)) or {}).get("state")
+        if cur in ("done", "closed", "skipped"):
+            continue                                   # sent (or closed, or never to be sent) already: never again
+        if cur in ("failed", "running", "unknown") and not retry_only:
+            continue                                   # a failure or an unknown result waits for the PM's `再実行` / `済`
+        if cur == "requested" and not send:
+            continue                                   # recorded on an earlier run without --send: the next --send run sends it
+        key = idem_key(item.get("key"), i, action)
+        base = {"id": num, "key": key, "type": action.get("type"), "retry": bool(retry_only)}
+        to = action.get("reply_to") or "相手"
+        if not is_gated(action):                       # the switch is off: recorded, and the PM is told once
+            state[str(i)] = {"key": key, "state": "skipped", "reason": NOT_ENABLED, "at": _now()}
+            _log(out, {**base, "state": "skipped", "reason": NOT_ENABLED})
+            ap.save()
+            _tell(post, f"[kimeru 実行 #{num}] 送りません（相手への返信は、execute に teams.reply を入れていないため、記録だけです）")
+            results.append({"index": i, "type": action.get("type"), "state": "skipped"})
+            continue
+        if action.get("reply_skip"):                   # a group, a mention, or no 1 対 1 chat: never sent (the post said so)
+            state[str(i)] = {"key": key, "state": "skipped", "reason": NOT_TARGET, "at": _now()}
+            _log(out, {**base, "state": "skipped", "reason": NOT_TARGET})
+            ap.save()
+            results.append({"index": i, "type": action.get("type"), "state": "skipped"})
+            continue
+        if not action.get("reply_text") or not action.get("reply_chat"):   # the switch was turned on after the post: no text was shown
+            state[str(i)] = {"key": key, "state": "skipped", "reason": NOT_FROZEN, "at": _now()}
+            _log(out, {**base, "state": "skipped", "reason": NOT_FROZEN})
+            ap.save()
+            _tell(post, f"[kimeru 実行 #{num}] 送りません（この承認の投稿は、返信を有効にする前に出されたため、送る文面を示していません）。"
+                        f"承認の投稿を出し直してから、もう一度「送る {num}」と返信してください")
+            results.append({"index": i, "type": action.get("type"), "state": "skipped"})
+            continue
+        if not send:                                   # a `--send` 無しの実行: only the request is recorded (R13)
+            state[str(i)] = {"key": key, "state": "requested", "at": _now()}
+            ap.save()
+            results.append({"index": i, "type": action.get("type"), "state": "requested"})
+            continue
+        text, chat = str(action["reply_text"]), str(action["reply_chat"])
+        state[str(i)] = {"key": key, "state": "running", "at": _now()}
+        ap.save()                                      # before the call: a crash leaves "running" (not sure), never sent again on its own
+        _log(out, {**base, "state": "running", "excerpt": text[:120]})
+        outcome, error, note = _sent_outcome(bridge, chat, text)
+        rec = {"key": key, "state": outcome, "at": _now()}
+        if error:
+            rec["error"] = error
+        if outcome == "unknown":
+            rec["told"] = True
+        state[str(i)] = rec
+        _log(out, {**base, "state": outcome, "excerpt": text[:120], **({"error": error} if error else {})})
+        ap.save()
+        _tell(post, _reply_result_text(num, outcome, to, error) + note)
+        results.append({"index": i, "type": action.get("type"), "state": outcome})
+    return results
 
 
 def close_unknown(out, ap, num, item):
@@ -449,8 +622,11 @@ def close_unknown(out, ap, num, item):
         if not_known(st):
             st["state"], st["closed_at"] = "closed", _now()
             act = item["record"]["actions"][int(i)]
-            _log(out, {"id": num, "key": st.get("key"), "type": "ado.comment", "target": str(act.get("id")), "state": "closed",
-                       **where_of(item, act)})
+            if act.get("type") in REPLY_KINDS:       # a reply: nothing about the other chat is read or written
+                _log(out, {"id": num, "key": st.get("key"), "type": act.get("type"), "state": "closed"})
+            else:
+                _log(out, {"id": num, "key": st.get("key"), "type": "ado.comment", "target": str(act.get("id")), "state": "closed",
+                           **where_of(item, act)})
             n += 1
     if n:
         ap.save()
@@ -467,22 +643,24 @@ def send_ready_posts(num, item, post, link=False, split=False):
             if link and action.get("chat_id"):
                 tail = "\n\n相手とのチャットを開く（実験的）: https://teams.microsoft.com/l/chat/" \
                        + urllib.parse.quote(str(action["chat_id"]), safe="") + "/conversations"
+            ask = _send_line(num, item, action)
             if split:
-                _tell(post, f"[kimeru 送信用 #{num}] {_counterpart(item)}へ。次の投稿をそのまま送ってください" + tail)
+                _tell(post, f"[kimeru 送信用 #{num}] {_counterpart(item)}へ。次の投稿をそのまま送ってください" + tail + ask)
                 _tell(post, f"[kimeru 本文 #{num}]\n{action['text']}")
             else:
-                _tell(post, f"[kimeru 送信用 #{num}]\n{action['text']}" + tail)
+                _tell(post, f"[kimeru 送信用 #{num}]\n{action['text']}" + tail + ask)
+
+
+def _send_line(num, item, action):
+    """The last line of the ready-to-copy post of a reply that `送る N` will send: only when the reply is switched on, its text was
+    fixed at the approval post and it goes to a 1 対 1 chat. "" otherwise, so with the switch off the post is unchanged."""
+    if action.get("type") not in REPLY_KINDS or not is_gated(action) or not action.get("reply_text"):
+        return ""
+    return f"\n\n送る {num} で、この文面をそのまま {action.get('reply_to') or _counterpart(item)} とのチャットへ送ります（PC の Teams から 1 回）"
 
 
 def _counterpart(item):
-    """The other person's name, on one line and at most 40 characters (the author of the message the reply answers); `相手` when the
-    record has none."""
-    rec = item.get("record") or {}
-    for src in (rec.get("event"), rec.get("material_event")):
-        name = " ".join(str(src.get("author") or "").split()) if isinstance(src, dict) else ""
-        if name:
-            return name if len(name) <= 40 else name[:39] + "…"
-    return "相手"
+    return _counterpart_rec(item.get("record") or {})
 
 
 def _tell(post, text):

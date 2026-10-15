@@ -6,6 +6,8 @@ try:   # isolation from the real state folder, whichever way the tests are start
 except ImportError:
     import isolate  # noqa: F401
 
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -16,6 +18,7 @@ from pathlib import Path
 from unittest import mock
 
 from kimeru import cli, config, execute, notify
+from tests.test_execute import WI
 from tests.test_execute import Bridge as SelfBridge
 
 PEER = "19:abc@unq.gbl.spaces"   # a made-up chat id (the fixtures never hold a real one)
@@ -306,6 +309,41 @@ class TestSendOnce(Base):
         self.reply(bridge, "再実行 1-1")
         self.assertEqual(len(bridge.sent), 2)
 
+    def test_with_another_item_pending_a_second_send_word_never_sends_again(self):
+        """The chat is read on every run (another item waits), so each `送る 1` is seen: what stops the second one is the guard of
+        reply_request, not a chat that is left unread."""
+        self.enable()
+        self.add_reply()
+        self.add_other_pending()
+        bridge = self.post_it()
+        self.reply(bridge, "OK 1")
+        self.reply(bridge, "送る 1")
+        self.reply(bridge, "送る 1")
+        self.collect(bridge)
+        self.assertEqual(bridge.sent, [(PEER, REPLY_TEXT)])
+        self.assertEqual([(r["type"], r["state"]) for r in self.executions()], [("teams.reply", "running"), ("teams.reply", "done")])
+        self.assertIn("[kimeru 実行 #1 1] 送りました（山田 とのチャット）", bridge.posts)
+        self.assertEqual(self.item()["exec"]["0"]["state"], "done")
+
+    def test_a_send_that_stops_inside_the_call_stays_running_and_no_later_run_sends_it_again(self):
+        self.enable()
+        self.add_reply()
+        self.add_other_pending()
+        bridge = self.post_it()
+        self.reply(bridge, "OK 1")
+        with mock.patch.object(bridge, "sendto", side_effect=KeyboardInterrupt("simulated stop inside the send")) as send:
+            with self.assertRaises(KeyboardInterrupt):
+                self.reply(bridge, "送る 1")
+        self.assertEqual(send.call_count, 1)
+        self.assertEqual(self.item()["exec"]["0"]["state"], "running")                 # saved before the call
+        self.assertEqual([(r["type"], r["state"]) for r in self.executions()], [("teams.reply", "running")])
+        with mock.patch.object(bridge, "sendto", wraps=bridge.sendto) as again:
+            self.collect(bridge)                                                       # the next run: the same word is still on the screen
+            self.reply(bridge, "送る 1")
+        self.assertEqual(again.call_count, 0)
+        self.assertEqual(len(self.executions()), 1)                                    # no second row: nothing was sent again
+        self.assertTrue(any("送れたか分かりません" in p for p in bridge.posts))         # the PM is told the result is not known
+
 
 class TestOnlyOneToOne(Base):
     def assert_not_sent(self, **kw):
@@ -366,6 +404,98 @@ class TestOnlyTheRealRun(Base):
         self.assertEqual(bridge.sent, [(PEER, REPLY_TEXT)])
         self.collect(bridge)
         self.assertEqual(len(bridge.sent), 1)
+
+    def test_a_send_word_read_without_the_real_flag_sends_nothing_and_leaves_the_state_alone(self):
+        self.enable()
+        self.add_reply()
+        self.add_other_pending()                 # the self chat is read for it, so the word is seen by the runs without the real flag
+        bridge = self.post_it()
+        self.reply(bridge, "OK 1")
+        with mock.patch.object(bridge, "sendto", wraps=bridge.sendto) as send:
+            self.reply(bridge, "送る 1", real=False)
+            notify.collect(self.out, bridge, real=False, send=False)
+            notify.collect(self.out, bridge, real=False, send=False)
+        self.assertEqual(send.call_count, 0)
+        self.assertEqual(bridge.sent, [])
+        self.assertEqual(self.item().get("exec", {}), {})
+        self.assertFalse((self.out / "executions.jsonl").exists())
+        self.assertTrue(all(p.startswith("[kimeru") for p in bridge.posts))
+
+    def test_a_run_without_the_real_flag_does_not_read_the_self_chat_for_an_open_reply(self):
+        self.enable()
+        self.add_reply()
+        bridge = self.post_it()
+        self.reply(bridge, "OK 1")                          # approved: the reply waits for 送る 1, which only a real run reads
+        with mock.patch.object(bridge, "read", wraps=bridge.read) as read:
+            notify.collect(self.out, bridge, real=False, send=True)
+        self.assertEqual(read.call_count, 0)
+        self.assertEqual(bridge.sent, [])
+        self.assertFalse((self.out / "executions.jsonl").exists())
+
+    def test_an_ok_on_a_run_without_the_real_flag_does_not_open_the_reply_window(self):
+        self.enable()
+        self.add_reply()
+        bridge = self.post_it()
+        self.reply(bridge, "OK 1", real=False)
+        self.assertEqual(self.item()["status"], "approved")
+        self.assertNotIn("reply_open_at", self.item())
+        self.assertEqual(bridge.sent, [])
+        self.assertFalse((self.out / "executions.jsonl").exists())
+
+    def test_without_the_real_flag_a_freeze_fixes_no_reply_and_the_ready_post_has_no_send_line(self):
+        self.enable()
+        rec = golden_record()
+        execute.freeze(rec, False)
+        self.assertFalse(any(k in rec["actions"][0] for k in execute.REPLY_KEYS))
+        posts = []
+        execute.send_ready_posts(7, {"record": rec}, posts.append)
+        self.assertEqual(posts, [GOLDEN_READY[0]])
+
+    def test_a_request_recorded_without_send_is_not_sent_by_later_runs_without_send(self):
+        self.enable()
+        self.add_reply()
+        bridge = self.post_it()
+        self.reply(bridge, "OK 1", send=False)
+        self.reply(bridge, "送る 1", send=False)
+        self.assertEqual(self.item()["exec"]["0"]["state"], "requested")
+        with mock.patch.object(bridge, "sendto", wraps=bridge.sendto) as send:
+            self.collect(bridge, send=False)
+            self.collect(bridge, send=False)
+        self.assertEqual(send.call_count, 0)
+        self.assertEqual(self.item()["exec"]["0"]["state"], "requested")
+        self.assertTrue(all(p.startswith("[kimeru") for p in bridge.posts))
+        self.collect(bridge)                                    # the run with --send sends it, once
+        self.assertEqual(bridge.sent, [(PEER, REPLY_TEXT)])
+
+    def test_a_send_word_under_a_test_post_is_not_sent_by_the_real_run_even_when_the_chat_is_read(self):
+        self.enable()
+        self.add_reply()
+        self.add_other_pending()
+        bridge = self.post_it()
+        self.reply(bridge, "OK 1")
+        real_read = bridge.read
+
+        def read_with_a_test_post():   # the test reader's post "[kimeru 試験 #1]" (tools/check.ps1), and a 送る 1 under it
+            got = real_read()
+            got["timeline"] = got["timeline"] + ["T:1", "R:送る 1"]
+            return got
+        bridge.read = read_with_a_test_post
+        self.collect(bridge)
+        self.assertEqual(bridge.sent, [])
+        self.assertFalse((self.out / "executions.jsonl").exists())
+
+    def test_the_run_command_never_reaches_the_send(self):
+        self.enable()
+        self.add_reply()
+        bridge = self.post_it()
+        self.reply(bridge, "OK 1")
+        f = self.out / "w.json"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(WI), encoding="utf-8")
+        with mock.patch.object(notify.PowerShellBridge, "sendto", side_effect=AssertionError("sendto was called")), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(["--out", str(self.out / "o"), "run", str(f)]), 0)
+        self.assertFalse((self.out / "o" / "executions.jsonl").exists())
 
     def test_a_send_word_above_the_approval_post_is_not_read(self):
         self.assertEqual(notify.fresh_entries({"timeline": ["R:送る 1", "P:1"]}), [])
@@ -455,7 +585,8 @@ class TestAnswerWithTheSwitchOff(Base):
 
 class TestReplyWindow(Base):
     """`送る N` is read for REPLY_WINDOW (48 hours) after the OK, and only then (with execute teams.reply). After it the self chat is not
-    read for the item at all, so nothing answers a later `送る N`. While the window is open, every run reads the self chat."""
+    read for the item at all, so nothing answers a later `送る N`; and when another reason reads the self chat, a `送る N` after the
+    window is still ignored (nothing sent, nothing recorded, nothing told). While the window is open, every run reads the self chat."""
 
     def test_a_send_word_at_forty_seven_hours_after_the_ok_is_sent_once(self):
         self.enable()
@@ -501,6 +632,38 @@ class TestReplyWindow(Base):
         self.reply_at(bridge, "送る 1", OK_AT + timedelta(hours=1))
         self.assertEqual(bridge.sent, [])
         self.assertEqual([(r["state"], r["reason"]) for r in self.executions()], [("skipped", "not_target")])
+
+    def test_a_send_word_at_forty_seven_hours_is_sent_when_another_item_makes_the_run_read_the_self_chat(self):
+        self.enable()
+        self.add_reply()
+        self.add_other_pending()
+        bridge = self.post_it()
+        self.reply_at(bridge, "OK 1", OK_AT)
+        self.reply_at(bridge, "送る 1", OK_AT + timedelta(hours=47))
+        self.assertEqual(bridge.sent, [(PEER, REPLY_TEXT)])
+
+    def test_a_send_word_at_forty_nine_hours_is_ignored_when_another_item_makes_the_run_read_the_self_chat(self):
+        """The window is kept even when the self chat is read for another reason: the word is not sent, not recorded, and nothing
+        is told (the docs say a 送る N after 48 hours gets no answer)."""
+        self.enable()
+        self.add_reply()
+        self.add_other_pending()
+        bridge = self.post_it()
+        self.reply_at(bridge, "OK 1", OK_AT)
+        n_posts = len(bridge.posts)
+        with mock.patch.object(bridge, "sendto", wraps=bridge.sendto) as send:
+            self.reply_at(bridge, "送る 1", OK_AT + timedelta(hours=49))
+        self.assertEqual(send.call_count, 0)
+        self.assertEqual(bridge.sent, [])
+        self.assertEqual(self.item().get("exec", {}), {})
+        self.assertFalse((self.out / "executions.jsonl").exists())
+        self.assertEqual(len(bridge.posts), n_posts)
+
+    def test_the_window_closes_after_forty_eight_hours_and_never_for_an_item_without_one(self):
+        item = {"status": "approved", "reply_open_at": OK_AT.isoformat()}
+        self.assertFalse(execute.reply_window_closed(item, OK_AT + timedelta(hours=48)))
+        self.assertTrue(execute.reply_window_closed(item, OK_AT + timedelta(hours=48, seconds=1)))
+        self.assertFalse(execute.reply_window_closed({"status": "approved"}, OK_AT + timedelta(days=30)))
 
 
 class TestFailuresAndWhatIsShown(Base):

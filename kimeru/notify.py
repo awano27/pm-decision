@@ -2109,7 +2109,8 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
                 changes.append({"id": int(num), "status": "closed"})
             continue
         if word == "送る":   # S2: the approved reply goes to its 1 対 1 chat, once (execute.reply_request); the real run only, never by an OK
-            if real and it and it["status"] == "approved":
+            # after REPLY_WINDOW from the OK the word is ignored (nothing sent, nothing answered), even when the chat is read for another reason
+            if real and it and it["status"] == "approved" and not execute.reply_window_closed(it, clock):
                 got = execute.reply_request(out, ap, int(num), it, post, bridge, send)
                 if got:
                     changes.append({"id": int(num), "status": "reply_send", "real": got})

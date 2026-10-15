@@ -264,6 +264,22 @@ class TestRoutesThatNeverExecute(Safety):
         self.assertEqual({k: sorted(set(v)) for k, v in requests.items() if v},
                          {"execute.py": ["redo"], "notify.py": ["_collect"]})
 
+    def test_every_reply_request_in_notify_sits_under_an_if_that_tests_real(self):
+        """S2: notify asks for a reply to be sent only inside an `if` that tests `real` (the daily and approvals paths), so a run
+        without it (the demo, the eval route, run, a run without --send) never reaches execute.reply_request, nor sendto."""
+        import ast
+        tree = ast.parse((ROOT / "kimeru" / "notify.py").read_text(encoding="utf-8"))
+        parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+        guarded = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "reply_request":
+                cur, ok = node, False
+                while cur in parents and not ok:
+                    cur = parents[cur]
+                    ok = isinstance(cur, ast.If) and any(isinstance(n, ast.Name) and n.id == "real" for n in ast.walk(cur.test))
+                guarded.append(ok)
+        self.assertEqual(guarded, [True, True])   # the pending send of a run with --send, and `送る N`
+
     def test_collect_without_real_records_and_writes_nothing(self):
         self.enable()
         bridge = self.decide_and_post()

@@ -506,17 +506,25 @@ def reply_pending(item):
                for a in ((item or {}).get("record") or {}).get("actions", []))
 
 
-def reply_open(item, now):
-    """True while an approved item still has a reply that `送る N` may send (not sent, not closed, not skipped) and its OK is at most
-    REPLY_WINDOW old. Only then is the self chat read for the item. After REPLY_WINDOW a `送る N` is not read and nothing answers it:
-    the PM sends the text by hand from the 送信用 post (the approval stays)."""
+def reply_window_closed(item, now):
+    """True when the OK of an item with a reply was more than REPLY_WINDOW before `now`, or its time cannot be read. A `送る N` on such
+    an item is ignored (nothing is sent and nothing is answered), whatever else made the run read the self chat. An item with no
+    reply_open_at (its switch was off at the OK) is never closed by this: its `送る N` keeps the answer it always had."""
     opened = (item or {}).get("reply_open_at")
-    if (item or {}).get("status") != "approved" or not opened:
+    if not opened:
         return False
     try:
-        if now - datetime.fromisoformat(opened) > REPLY_WINDOW:
-            return False
-    except (TypeError, ValueError):   # a time that cannot be compared: nothing is read for it
+        return now - datetime.fromisoformat(opened) > REPLY_WINDOW
+    except (TypeError, ValueError):   # a time that cannot be compared: the window is treated as closed (nothing is sent)
+        return True
+
+
+def reply_open(item, now):
+    """True while an approved item still has a reply that `送る N` may send (not sent, not closed, not skipped) and its OK is at most
+    REPLY_WINDOW old. Only then is the self chat read for the item for this reason. After REPLY_WINDOW a `送る N` is ignored
+    (reply_window_closed), even when the chat is read for another reason, and nothing answers it: the PM sends the text by hand from
+    the 送信用 post (the approval stays)."""
+    if (item or {}).get("status") != "approved" or not (item or {}).get("reply_open_at") or reply_window_closed(item, now):
         return False
     st = item.get("exec") or {}
     return any(a.get("type") in REPLY_KINDS and (a.get("reply_text") or a.get("reply_skip"))

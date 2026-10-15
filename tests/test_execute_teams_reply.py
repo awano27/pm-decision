@@ -21,6 +21,9 @@ from tests.test_execute import Bridge as SelfBridge
 PEER = "19:abc@unq.gbl.spaces"   # a made-up chat id (the fixtures never hold a real one)
 REPLY_TEXT = "受領しました。本日中に判断して返信します。"
 OK_AT = datetime(2026, 10, 15, 9, 0)   # the clock of a run that approves (the 48 hours of REPLY_WINDOW count from it)
+ROOT = Path(__file__).resolve().parent.parent
+PRE_ATTEMPT = {"ok": False, "error": "another kimeru Teams operation is running; Teams was not touched", "typed": False, "sent": False,
+               "readback": {"matched": False, "message_id": ""}, "result": "failed"}   # the answer of tools/teams-self.ps1's Fail before any attempt
 
 # the texts of an approval of a teams.reply with execute unset, captured at the base commit (the item number 7): they must not change
 GOLDEN_POST = ('[kimeru #7] 山田さん: 明日の件、判断できますか\n→ 本日中に判断が必要: 山田「明日の件、判断できますか」\n'
@@ -166,6 +169,12 @@ class TestDefaultIsUnchanged(Base):
         self.assertEqual(bridge.sent, [])
         self.assertFalse((self.out / "executions.jsonl").exists())
 
+    def test_with_execute_unset_a_teams_chat_event_is_recorded_as_before_without_chat_kind(self):
+        ev = {"kind": "teams.chat", "source": "teams-ui", "id": "c1#1", "chat_id": PEER, "chat_kind": "oneOnOne", "chat_title": "山田",
+              "author": "山田", "ts": "10:42", "mentions_me": False, "unread": True, "text": "明日の件、判断できますか"}
+        self.assertEqual(cli._recorded_event(ev), {"kind": "teams.chat", "id": "c1#1", "chat_id": PEER, "chat_title": "山田",
+                                                   "author": "山田", "mentions_me": False, "text": "明日の件、判断できますか"})
+
 
 class TestSendOnce(Base):
     def test_a_one_to_one_reply_is_sent_once_after_the_send_word_and_never_again(self):
@@ -267,6 +276,36 @@ class TestSendOnce(Base):
         self.reply(bridge, "再実行 1")
         self.assertEqual(len(bridge.sent), 2)
 
+    def test_a_failed_send_is_sent_again_once_by_the_count_redo_word(self):
+        self.enable()
+        self.add_reply()
+        bridge = self.post_it()
+        bridge.result = "failed"
+        self.reply(bridge, "OK 1")
+        self.reply(bridge, "送る 1")
+        self.assertEqual(len(bridge.sent), 1)
+        bridge.result = "done"
+        self.reply(bridge, "再実行 1-1")                   # the count of the failed result post
+        self.assertEqual(len(bridge.sent), 2)
+        self.assertEqual(self.item()["exec"]["0"]["state"], "done")
+        self.reply(bridge, "再実行 1-1")                   # the same reply, on the screen again: nothing
+        self.assertEqual(len(bridge.sent), 2)
+
+    def test_an_unknown_send_is_sent_again_once_by_the_count_redo_word(self):
+        self.enable()
+        self.add_reply()
+        bridge = self.post_it()
+        bridge.result = "unknown"
+        self.reply(bridge, "OK 1")
+        self.reply(bridge, "送る 1")
+        self.assertEqual(len(bridge.sent), 1)
+        bridge.result = "done"
+        self.reply(bridge, "再実行 1-1")                   # the count of the unknown result post (its hint names this word)
+        self.assertEqual(len(bridge.sent), 2)
+        self.assertEqual(self.item()["exec"]["0"]["state"], "done")
+        self.reply(bridge, "再実行 1-1")
+        self.assertEqual(len(bridge.sent), 2)
+
 
 class TestOnlyOneToOne(Base):
     def assert_not_sent(self, **kw):
@@ -298,7 +337,8 @@ class TestOnlyOneToOne(Base):
     def test_a_reply_without_a_chat_id_is_not_a_target(self):
         self.assert_not_sent(chat_id="")
 
-    def test_the_teams_event_record_keeps_the_chat_kind_the_check_reads(self):
+    def test_with_teams_reply_switched_on_the_teams_event_record_keeps_the_chat_kind_the_check_reads(self):
+        self.enable()
         kept = cli._recorded_event({"kind": "teams.chat", "id": "c1#1", "chat_id": PEER, "chat_kind": "oneOnOne", "author": "山田", "text": "a"})
         self.assertEqual(kept["chat_kind"], "oneOnOne")
 
@@ -516,6 +556,90 @@ class TestReplyWord(unittest.TestCase):
         self.assertEqual(notify.parse_reply("送る 12"), ("送る", "12"))
         self.assertEqual(notify.parse_reply("送る#3。"), ("送る", "3"))
         self.assertEqual(notify.parse_reply("送る　２"), ("送る", "2"))
+
+
+class ScriptAnswerBridge(SendBridge):
+    """The real PowerShellBridge.sendto, with the script's answer given as JSON (exit code 0 when done, 2 otherwise)."""
+
+    def __init__(self, answer):
+        super().__init__()
+        self.answer = answer
+
+    def sendto(self, chat_id, text):
+        self.sent.append((chat_id, text))
+        run = subprocess.CompletedProcess([], 0 if self.answer.get("ok") else 2, stdout=json.dumps(self.answer), stderr="")
+        with mock.patch.object(notify.subprocess, "run", return_value=run):
+            return notify.PowerShellBridge(script="teams-self.ps1").sendto(chat_id, text)
+
+
+class TestRedoIsNeverTheFirstSend(Base):
+    """`再実行 N` and `再実行 N-k` send a reply only when its earlier send failed or is unknown. A reply that was never requested with
+    `送る N` is not sent by them, and nothing is recorded for it."""
+
+    def test_a_redo_word_on_a_reply_that_was_never_requested_sends_nothing_and_records_nothing(self):
+        self.enable()
+        self.add_reply()
+        bridge = self.post_it()
+        self.reply(bridge, "OK 1")                        # approved: the reply waits for 送る 1
+        self.reply(bridge, "再実行 1")
+        self.reply(bridge, "再実行 1-1")
+        self.assertEqual(bridge.sent, [])
+        self.assertFalse((self.out / "executions.jsonl").exists())
+        self.assertEqual(self.item().get("exec", {}), {})
+
+    def test_the_redo_call_on_a_frozen_reply_with_no_state_sends_nothing_and_records_nothing(self):
+        self.enable()
+        self.add_reply()
+        bridge = self.post_it()
+        self.reply(bridge, "OK 1")
+        ap = notify.Approvals(self.out)
+        posts = []
+        res = execute.redo(self.out, ap, 1, ap.data["items"]["1"], posts.append, bridge=bridge, send=True)
+        self.assertEqual(res, [])
+        self.assertEqual(bridge.sent, [])
+        self.assertEqual(posts, [])
+        self.assertFalse((self.out / "executions.jsonl").exists())
+        self.assertEqual(ap.data["items"]["1"].get("exec", {}), {})
+
+
+class TestAFailureBeforeAnAttemptIsFailed(Base):
+    """A failure before anything is pasted or sent (the UI lock timed out, no Teams window) is answered with result failed. The reply is
+    failed (the approval stays, `再実行` sends it once) and is never unknown. The answer is the one of tools/teams-self.ps1's Fail."""
+
+    def test_the_script_answer_before_any_attempt_maps_to_failed_and_never_unknown(self):
+        outcome, error, note = execute._sent_outcome(ScriptAnswerBridge(PRE_ATTEMPT), PEER, REPLY_TEXT)
+        self.assertEqual((outcome, note), ("failed", ""))
+        self.assertIn("Teams was not touched", error)
+
+    def test_a_reply_that_fails_before_any_attempt_is_failed_and_the_redo_word_sends_it_once(self):
+        self.enable()
+        self.add_reply()
+        bridge = ScriptAnswerBridge(PRE_ATTEMPT)
+        notify.notify(self.out, bridge, send=True, real=True)
+        self.reply(bridge, "OK 1")
+        self.reply(bridge, "送る 1")
+        self.assertEqual(self.item()["exec"]["0"]["state"], "failed")
+        self.assertTrue(any(p.startswith("[kimeru 実行 #1 1] 送れませんでした") for p in bridge.posts))
+        self.assertFalse(any("送れたか分かりません" in p for p in bridge.posts))
+        bridge.answer = {"ok": True, "result": "done", "restore": "unchanged", "returned": True}
+        self.reply(bridge, "再実行 1")
+        self.assertEqual(len(bridge.sent), 2)
+        self.assertEqual(self.item()["exec"]["0"]["state"], "done")
+
+
+class TestTheScriptsAnswerBeforeAnAttempt(unittest.TestCase):
+    def test_the_real_script_fail_answers_result_failed_for_sendto(self):
+        text = (ROOT / "tools" / "teams-self.ps1").read_text(encoding="utf-8")
+        fail = text[text.index("function Fail($msg) {"):]
+        fail = fail[:fail.index("\n}\n")]
+        self.assertIn("if ($Action -eq 'sendto') { $ev['result'] = 'failed' }", fail)
+
+
+class TestToastLabelOfTheSendWord(unittest.TestCase):
+    def test_the_send_word_change_is_named_in_japanese_on_the_pc_toast(self):
+        body = notify.ack_text([{"id": 1, "status": "reply_send", "real": []}])[1]
+        self.assertEqual(body, "#1 送る（結果は自分とのチャットへ）")
+        self.assertNotIn("reply_send", body)
 
 
 if __name__ == "__main__":

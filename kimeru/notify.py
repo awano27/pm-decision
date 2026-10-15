@@ -1242,7 +1242,7 @@ ACK = {"approved": "承認", "rejected": "却下", "held": "保留", "ask_back":
        "redrafted": "書き直し", "redraft_failed": "書き直せず", "redo": "再実行", "redo_ignored": "再実行（無視: 古い回数）", "redo_ahead": "再実行（回数が大きすぎます。その回数の結果が出たら 1 回だけ効きます）", "redo_malformed": "再実行（形が違います）", "closed": "済（閉じました）", "detail": "詳細を返信",
        "reposted": "文面を確認して OK し直してください",
        "learned": "学習を採用しました（基準を変えました）", "learn_stale": "学習（基準が変わっていたため採用せず）",
-       "sent_confirmed": "送った（催促を止めました）"}
+       "sent_confirmed": "送った（催促を止めました）", "reply_send": "送る（結果は自分とのチャットへ）"}
 
 
 def ack_text(changes):

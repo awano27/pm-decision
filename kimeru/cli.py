@@ -71,7 +71,8 @@ SAVE_FAILED = {"state": "preview_only", "why": "全文を保存できなかっ�
 
 
 EVENT_KEEP = ("kind", "id", "author", "text", "item", "meeting", "title", "description", "work_item_type",
-              "repro_steps", "acceptance_criteria", "test_steps", "area", "type", "created_by", "rule", "severity", "condition", "mentions_me", "context", "date", "chat_id", "chat_kind", "chat_title", "origin")
+              "repro_steps", "acceptance_criteria", "test_steps", "area", "type", "created_by", "rule", "severity", "condition", "mentions_me", "context", "date", "chat_id", "chat_title", "origin")
+EVENT_KEEP_REPLY = ("chat_kind",)   # kept only with execute teams.reply (S2): the check that a reply goes to a 1 対 1 chat reads it; without it the records are unchanged
 
 
 EVENT_TEXT = ("text", "description", "repro_steps", "acceptance_criteria", "test_steps", "item", "title", "meeting", "condition", "context")   # free text: cut in the records
@@ -83,9 +84,10 @@ def _recorded_event(ev):
     """The event as decisions.jsonl keeps it. By default its free text is cut to the length of a summary (SECURITY.md);
     record_event_full=1 keeps up to 2,000 characters, which makes `kimeru review` examples better and the record more sensitive."""
     limit = EVENT_TEXT_FULL if config.value("record_event_full") == "1" else EVENT_TEXT_SUMMARY
+    keep = EVENT_KEEP + (EVENT_KEEP_REPLY if "teams.reply" in execute.requested() else ())
     out = {}
     for k, v in ev.items():
-        if k not in EVENT_KEEP or v in (None, ""):
+        if k not in keep or v in (None, ""):
             continue
         if isinstance(v, str) and k in EVENT_TEXT and len(v) > limit:
             v = v[:limit - 1] + "…" if limit == EVENT_TEXT_SUMMARY else v[:limit]

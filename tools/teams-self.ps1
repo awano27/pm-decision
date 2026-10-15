@@ -142,7 +142,10 @@ function Invoke-SendOnce([bool]$ButtonAvailable, [scriptblock]$InvokeButton, [sc
 }
 function Fail($msg) {
   if ($script:InRead) { throw [System.Exception]::new('KFAIL:' + $msg) }
-  Out-Json (Get-DeliveryFailureEvidence $msg); exit 2
+  $ev = Get-DeliveryFailureEvidence $msg
+  # S2: a failure outside the sendto try (the UI lock, no Teams window, the self chat not found) comes before any paste or send: a sure failure
+  if ($Action -eq 'sendto') { $ev['result'] = 'failed' }
+  Out-Json $ev; exit 2
 }
 
 function Normalize-MeaningfulText([string]$s) {

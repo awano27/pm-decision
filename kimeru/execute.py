@@ -579,6 +579,8 @@ def reply_request(out, ap, num, item, post, bridge, send, retry_only=False):
             continue
         prev = state.get(str(i)) or {}
         cur = prev.get("state")
+        if retry_only and cur not in ("failed", "running", "unknown"):
+            continue                                   # `再実行 N` sends a reply only when its earlier send failed or is unknown: never a first send
         if cur in ("done", "closed") or (cur == "skipped" and prev.get("reason") == NOT_TARGET):
             continue                                   # sent or closed already, or not a target (never to be sent): never again
         # a skip for the switch (not_enabled) or for a text that was not fixed (not_frozen) is answered by each later `送る N` (a new

@@ -90,13 +90,18 @@ switch ($Action) {
   'sendto' {
     # the answer contract of the real script (S2): result done = ok true, exit 0; failed / unknown = ok false, exit 2. KIMERU_FAKE_SENDTO
     # picks the answer (done is the default): failed = the wrong chat, draft = the person's own draft in that chat's box (both paste
-    # nothing); unknown = the send is not seen (the text was pasted). Every attempt is kept in KIMERU_FAKE_SENDLOG (the chat id, the
+    # nothing); prefail = a failure before any attempt (the UI lock timed out: the same answer shape as the real script's Fail, result
+    # failed); unknown = the send is not seen (the text was pasted). Every attempt is kept in KIMERU_FAKE_SENDLOG (the chat id, the
     # text, the mode, and whether the text reached the box), for the test
     $mode = if ($env:KIMERU_FAKE_SENDTO) { $env:KIMERU_FAKE_SENDTO } else { 'done' }
     $sendBody = if ($TextFile -and (Test-Path $TextFile)) { [IO.File]::ReadAllText($TextFile, (New-Object Text.UTF8Encoding $false)) } else { '' }
     $pasted = [bool]($mode -in 'done', 'unknown')
     if ($env:KIMERU_FAKE_SENDLOG) { Add-Content -Path $env:KIMERU_FAKE_SENDLOG -Value (@{ chat = $ChatId; text = $sendBody; mode = $mode; pasted = $pasted } | ConvertTo-Json -Compress) -Encoding UTF8 }
     if ($mode -eq 'done') { Out-Json @{ ok = $true; result = 'done'; restore = 'restored'; returned = $true }; exit 0 }
+    if ($mode -eq 'prefail') {
+      Out-Json @{ ok = $false; error = 'another kimeru Teams operation is running; Teams was not touched'; typed = $false; sent = $false
+                  readback = @{ matched = $false; message_id = '' }; result = 'failed' }; exit 2
+    }
     $result = if ($mode -in 'failed', 'draft') { 'failed' } else { 'unknown' }
     $err = switch ($mode) {
       'failed' { 'wrong chat' }

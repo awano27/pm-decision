@@ -257,6 +257,16 @@ class TestSendWordAndSendTo(unittest.TestCase):
         rows = [json.loads(line) for line in log.read_text(encoding="utf-8-sig").splitlines()]
         self.assertEqual([(r["mode"], r["pasted"]) for r in rows], [("unknown", True)])
 
+    def test_a_failure_before_any_attempt_is_failed_and_never_unknown_and_the_log_shows_nothing_pasted(self):   # S2: the Fail before the attempt
+        log = self.dir / "send.jsonl"
+        with mock.patch.dict(os.environ, {"KIMERU_FAKE_SENDTO": "prefail", "KIMERU_FAKE_SENDLOG": str(log)}):
+            with self.assertRaises(notify.BridgeError) as cm:
+                notify.PowerShellBridge(script=FAKE).sendto("19:abc@unq.gbl.spaces", "本文")
+        self.assertEqual(cm.exception.data["result"], "failed")
+        self.assertIn("Teams was not touched", cm.exception.data["error"])
+        rows = [json.loads(line) for line in log.read_text(encoding="utf-8-sig").splitlines()]
+        self.assertEqual([(r["mode"], r["pasted"]) for r in rows], [("prefail", False)])
+
     def test_the_teams_scripts_parse_without_errors(self):   # S2: the sendto action is valid PowerShell (no Teams window is needed)
         for script in (ROOT / "tools" / "teams-self.ps1", FAKE):
             cmd = ("$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('" + str(script).replace("'", "''")

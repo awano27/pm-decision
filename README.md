@@ -22,7 +22,7 @@
   <img alt="Optional judge: Kev or Jev" src="https://img.shields.io/badge/judge-Kev%20%7C%20Jev-0E1726?style=flat-square&labelColor=0E1726&color=75CFA3">
   <img alt="admin" src="https://img.shields.io/badge/admin%20rights-not%20needed-0E1726?style=flat-square&labelColor=0E1726&color=F2C166">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-0E1726?style=flat-square&labelColor=0E1726&color=D5DEEA">
-  <img alt="status: validation phase" src="https://img.shields.io/badge/status-v1.1%20%C2%B7%20validation%20phase-0E1726?style=flat-square&labelColor=0E1726&color=E89B4B">
+  <img alt="status: validation phase" src="https://img.shields.io/badge/status-v1.2%20%C2%B7%20validation%20phase-0E1726?style=flat-square&labelColor=0E1726&color=E89B4B">
 </p>
 
 <p align="center">

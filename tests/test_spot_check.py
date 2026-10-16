@@ -548,7 +548,7 @@ class TestDocs(unittest.TestCase):
         self.assertEqual(sum(1 for l in ref.splitlines() if l.startswith("| `KIMERU_SPOT_CHECK_PER_DAY`")), 1)
         self.assertIn("`spot.json`", (ROOT / "SECURITY.md").read_text(encoding="utf-8"))
         log = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-        self.assertIn("spot_check_per_day", log.split("## 未リリース", 1)[1].split("\n## ", 1)[0])
+        self.assertIn("spot_check_per_day", log.split("\n## ", 1)[1].split("\n## ", 1)[0])
 
 
 if __name__ == "__main__":

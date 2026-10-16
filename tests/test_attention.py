@@ -479,7 +479,7 @@ class TestDocsAndSecurity(unittest.TestCase):
 
     def test_the_changelog_names_the_change_under_the_unreleased_heading(self):
         log = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-        unreleased = log.split("## 未リリース", 1)[1].split("\n## ", 1)[0]
+        unreleased = log.split("\n## ", 1)[1].split("\n## ", 1)[0]
         self.assertIn("interrupt=sittings", unreleased)
         self.assertIn("sit_hours", unreleased)
 
@@ -803,7 +803,7 @@ class TestQuietDocs(unittest.TestCase):
         self.assertIn("quiet_words", sec)
         self.assertIn("休み", sec)
         log = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-        unreleased = log.split("## 未リリース", 1)[1].split("\n## ", 1)[0]
+        unreleased = log.split("\n## ", 1)[1].split("\n## ", 1)[0]
         self.assertIn("quiet_words", unreleased)
         self.assertIn("休み", unreleased)
 
@@ -1355,7 +1355,7 @@ class TestChaseDocs(unittest.TestCase):
         self.assertIn("attention.json", sec)
         self.assertIn("sitting_waited", sec)
         log = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-        unreleased = log.split("## 未リリース", 1)[1].split("\n## ", 1)[0]
+        unreleased = log.split("\n## ", 1)[1].split("\n## ", 1)[0]
         self.assertIn("kimeru attention", unreleased)
 
     def test_the_chase_adds_no_setting_so_the_default_is_the_interrupt_setting(self):

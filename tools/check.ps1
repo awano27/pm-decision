@@ -231,6 +231,11 @@ if ($uia) {
   if ($selfOk -and (Want 'T5')) {
     Say "T4/T5 貼り付け・送信・iPhone 返信"
     if (YesNo "   自分とのチャットにテストメッセージを1通送信します（宛先は自分だけ）。よろしいですか") {
+      $noWinMsg = 'Teams のウィンドウが表示されていません（起動はしています）。ウィンドウを開いてチャット一覧を表示してから run-check.cmd T5 をやり直してください'
+      $st5 = Self 'status'
+      if ($st5.teams_process -and -not $st5.teams_window) {
+        Rec 'T4' "NG $noWinMsg"; Rec 'T5' "NG $noWinMsg"; $selfOk = $false
+      } else {
       $n = Get-Random -Minimum 100 -Maximum 999
       Write-Host "   数秒間マウス・キーボードに触らないでください"
       $p1 = Self 'post' @('-Text', "[kimeru 試験 #$n] 管理PCテスト\n返信: OK $n")
@@ -244,7 +249,13 @@ if ($uia) {
         $replied = if ($got) { 'y' } else { Read-Host "   iPhone から返信しましたか？ [y/n]" }
         Rec 'T5' ("送信=OK 投稿を画面で確認={0} iPhone通知={1} 返信した={2} 返信読取={3}" -f $(if ($script:PostSeen) { 'あり' } else { 'なし' }), $(if ($push -match '^\s*[yY]') { 'あり' } else { 'なし' }), $(if ($replied -match '^\s*[yY]') { 'はい' } else { 'いいえ' }), $(if ($got) { 'OK' } else { 'NG(タイムアウト)' }))
         $selfOk = $got
-      } else { Rec 'T4' "NG $($p1.error)"; Rec 'T5' "NG $($s1.error)"; $selfOk = $false }
+      } else {
+        $e4 = "$($p1.error)"; $e5 = "$($s1.error)"
+        if ($st5.teams_process -and $e4 -match 'Teams window not found') { $e4 = $noWinMsg }
+        if ($st5.teams_process -and $e5 -match 'Teams window not found') { $e5 = $noWinMsg }
+        Rec 'T4' "NG $e4"; Rec 'T5' "NG $e5"; $selfOk = $false
+      }
+      }
     } else { Rec 'T4' 'SKIP'; Rec 'T5' 'SKIP'; $selfOk = $false }
   }
 }

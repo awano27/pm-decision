@@ -192,6 +192,23 @@ class TestTeamsWithoutAWindow(unittest.TestCase):   # N2: Teams that runs with n
         self.assertIn("teams_window = [bool]$w", status)
 
 
+class TestT5SaysWhenTheWindowIsMissing(unittest.TestCase):   # the tray-only Teams must not end as "window not found"
+    SENTENCE = ("Teams のウィンドウが表示されていません（起動はしています）。"
+                "ウィンドウを開いてチャット一覧を表示してから run-check.cmd T5 をやり直してください")
+
+    def test_the_sentence_is_in_the_check_script(self):
+        self.assertIn(self.SENTENCE, CHECK)
+        self.assertIn("Teams window not found", CHECK)   # the raw error is mapped, not dropped
+
+    def test_status_is_read_before_the_t5_post_and_the_send_is_skipped(self):
+        block = CHECK[CHECK.index('Say "T4/T5 貼り付け・送信・iPhone 返信"'):]
+        status_at = block.index("Self 'status'")
+        post_at = block.index("Self 'post'")
+        self.assertLess(status_at, post_at)
+        self.assertIn("teams_process", block[status_at:post_at])
+        self.assertIn("teams_window", block[status_at:post_at])
+
+
 class TestNoEnvironmentDetails(unittest.TestCase):
 
     def test_public_documents_do_not_name_the_tested_environment(self):

@@ -10,6 +10,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from . import learn, trial
+from .writer import writer_label
 
 KIND = {"match": ("規則", "rule"), "judge": ("判断", "model"), "plan": ("進め方", "plan")}
 SRC = {"teams.chat": "Teams", "monitor.alert": "アラート", "ado.workitem.created": "ADO", "meeting.item": "議事録"}
@@ -38,6 +39,26 @@ main{max-width:980px;margin:0 auto;padding:28px 16px 60px}h1{font-size:22px;marg
 .badge.ok{color:var(--ok);background:var(--ok-bg)}.badge.safe{color:var(--safe);background:var(--safe-bg)}.badge.human{color:var(--human);background:var(--human-bg)}
 .plan{font-size:13px;color:var(--mute);margin:4px 0 0}ol{margin:4px 0 0 18px;padding:0}ul{margin:4px 0 0 18px;padding:0}
 .legend{display:flex;gap:10px;flex-wrap:wrap;margin:-8px 0 18px;font-size:13px;color:var(--mute)}
+h2{font-size:18px;margin:28px 0 10px}h3{font-size:15px;margin:0 0 6px}p,li,blockquote{overflow-wrap:anywhere}
+.lead{margin:0 0 16px;max-width:46em}.notice{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--safe);
+border-radius:10px;padding:12px 16px;margin:0 0 20px;font-size:14px}.notice b{display:block;margin-bottom:2px}
+.case{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-bottom:16px}
+.case>h3{font-size:16px}
+.flow{list-style:none;margin:14px 0 0;padding:0;counter-reset:f}
+.flow>li{position:relative;padding:0 0 18px 28px;margin:0 0 0 13px;border-left:2px solid var(--line)}
+.flow>li:last-child{border-left-color:transparent;padding-bottom:0}
+.flow>li::before{counter-increment:f;content:counter(f);position:absolute;left:-14px;top:-2px;width:26px;height:26px;border-radius:50%;
+background:var(--card);border:2px solid var(--ink);font-weight:700;font-size:13px;line-height:22px;text-align:center}
+.flow h3 span{color:var(--mute);font-weight:400;font-size:13px;margin-left:8px}
+.flow p{margin:6px 0 2px}
+blockquote{margin:4px 0;padding:8px 12px;border-left:3px solid var(--line);background:var(--bg);border-radius:4px}
+.who{font-size:13px;color:var(--mute)}.warn{color:var(--safe);font-size:13px}
+.st{display:inline-block;border:1px solid var(--ink);border-radius:6px;padding:2px 8px;margin:2px 6px 4px 0;font-size:13px;background:var(--card)}
+.st b{font-weight:700;margin-right:2px}.st.wait{border-style:dashed}.note{font-size:13px;color:var(--mute);margin:6px 0 0}
+details{margin:28px 0 0;border-top:1px solid var(--line);padding-top:8px}summary{cursor:pointer;color:var(--mute);font-size:14px;padding:6px 0}
+:focus-visible{outline:3px solid var(--model);outline-offset:2px}
+.empty{background:var(--card);border:1px dashed var(--line);border-radius:10px;padding:18px}
+@media (max-width:560px){main{padding:18px 12px 40px}.tiles{grid-template-columns:repeat(2,1fr)}.flow>li{padding-left:22px}.case{padding:14px 12px}}
 """
 
 
@@ -230,7 +251,186 @@ def _io_note(out, ap, executions):
             "External writes are record-only by default; approval or a posting count does not prove an ADO write.")
 
 
-def build(out, graphs, title="kimeru 判断レポート"):
+DECISION = {"pending": ("⏳", "確認待ち（まだ決めていない）"), "held": ("⏸", "保留"), "approved": ("✔", "承認済み"),
+            "rejected": ("✖", "却下")}
+WORK = {"approved": "未着手", "in_progress": "作業中", "done": "作業完了", "blocked": "停止中"}
+TRY_NOTICE = ("体験モードの記録です。判断はキーワード一致の簡易ルール、返信案と足りない情報は台本の固定文で、AI モデルの推論ではありません。"
+              "経路に出る 0.85・0.90 などの値は簡易ルールの固定値で、確率や正解率ではありません。Teams・ADO・AI モデルには接続しておらず、"
+              "外へは何も送っていません。")
+LOGGED = {"redrafted": "修正を指示 → 返信案を書き直し", "redraft_failed": "修正を指示 → 書き直せず（元の案のまま）",
+          "approved": "承認", "rejected": "却下", "held": "保留", "ask_back": "聞き返しを指示", "detail": "全文（詳細）を確認",
+          "closed": "済（本人が確認して閉じた）", "send": "送信を指示"}
+# how the case flow names the judgment points and answers of the shipped graphs (other ids are shown as they are)
+NODE = {"critical_incident": "重大障害の規則", "ack_only": "お礼・了解だけの規則", "intent": "依頼の種類", "urgency": "急ぎ度",
+        "plan_decision": "進め方の型", "plan_requirements": "進め方の型", "critical_outage": "重大障害の規則",
+        "critical_bug": "重大バグの規則", "ready": "着手できるか", "priority": "優先度", "item_type": "行の種類",
+        "label_decision": "「決定」の印", "label_task": "「タスク」の印", "label_risk": "「リスク」の印", "label_info": "「共有」の印",
+        "has_owner": "担当者がいるか", "has_due": "期限があるか"}
+CHOICE = {"decision": "判断の依頼", "requirements": "要件の検討", "status": "状況の確認", "incident": "障害", "fyi": "共有",
+          "none": "どれでもない", "action": "タスク", "risk": "リスク", "info": "共有"}
+CHOICE_OF = {"item_type": {"decision": "決定", "action": "タスク", "risk": "リスク", "info": "共有"}}   # a value that means something else there
+
+
+def _chip_ja(s, kinds):
+    kind = kinds.get(s["node"], "judge")
+    label, cls = KIND.get(kind, ("判断", "model"))
+    a, edge = s.get("answer") or {}, s["edge"]
+    name = NODE.get(s["node"], s["node"])
+    if kind == "match":
+        v = "該当" if edge == "yes" else "該当なし"
+    elif kind == "plan":
+        v = a.get("playbook") if edge == "ok" else "決めきれない"
+    elif "choice" in a:
+        v = f"{CHOICE_OF.get(s['node'], CHOICE).get(a['choice'], a['choice'])}（{_num(a.get('confidence', 0))}）"
+    elif "noul" in a:
+        v = f"はい {_num(a['noul'])}"
+    elif "score" in a:
+        v = _num(a["score"])
+    else:
+        v = edge
+    if edge == "unsure":
+        v += " → 確信なし・人へ"
+    return f'<span class="chip {cls}" title="{_e(s["node"])}">{_e(label)}・{_e(name)}: {_e(v)}</span>'
+
+
+def _timeline(out, number, item):
+    """The PM's side of case #number, in order: each post of a proposal, and what the PM answered to it."""
+    steps = []
+    for m in [*(item.get("measurement_history") or []), _metadata(item.get("measurement"))]:
+        if isinstance(m, dict) and m.get("posted_at"):
+            gen = _int(m.get("generation"))
+            steps.append(((gen, 0), m["posted_at"], f"確認を依頼（自分とのチャットへ投稿・案 {gen}）"))
+    for row in _rows(Path(out) / "approvals.log.jsonl"):
+        if str(row.get("id")) != str(number):
+            continue
+        gen = _int(_metadata(row.get("measurement")).get("generation"))
+        st = row.get("status")
+        text = LOGGED.get(st, str(st))
+        if st == "redrafted" and row.get("instruction_len"):
+            text += f"（指示は {row['instruction_len']} 文字。指示の本文は記録しない）"
+        steps.append(((gen, -1) if st == "redrafted" else (gen, 1), row.get("at", ""), text))
+    steps.sort(key=lambda s: s[0])   # a rewrite makes proposal N+1, which is posted after it; an answer follows its post
+    return [(at, text) for _, at, text in steps]
+
+
+def _num(value, fmt="{:.2f}"):
+    """A judge's number as text; a broken one is shown as — instead of stopping the page."""
+    try:
+        return fmt.format(float(value))
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _int(value, default=1):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _clock(value):
+    parsed = trial._timestamp(value)
+    return datetime.fromtimestamp(parsed).strftime("%m/%d %H:%M") if parsed is not None else "時刻不明"
+
+
+def _sent_state(item, executions):
+    """What happened to the reply to the sender: an execution record (or the PM's own `送った N`) says it, never the approval."""
+    for index, action in enumerate((item.get("record") or {}).get("actions") or []):
+        if action.get("type") != "teams.reply":
+            continue
+        own = (item.get("exec") or {}).get(str(index)) or {}
+        row = executions.get(str(own.get("key"))) if own.get("key") else None
+        state = (row or own).get("state")
+        if (row or {}).get("conflict") or state in ("running", "unknown"):
+            return ("?", "相手への返信: 送信結果不明（自動では送り直さない）", "")
+        if state == "done":
+            return ("✉", "相手への返信: 送信済み（実行記録あり）", "")
+        if state == "failed":
+            return ("!", "相手への返信: 送信失敗", "")
+        if state == "requested":
+            return ("…", "相手への返信: 送信待ち（次の --send の実行で 1 回送る）", "wait")
+        if state == "closed":
+            return ("✔", "相手への返信: 本人が確認して終了（送信の記録ではない）", "")
+        if state == "skipped":
+            return ("—", "相手への返信: 対象外のため送っていない", "")
+        if item.get("sent_confirmed"):
+            return ("✔", "相手への返信: 本人が「送った」と記録（kimeru は送っていない）", "")
+        return ("—", "相手への返信: 送っていない（記録だけ）", "wait")
+    return None
+
+
+def _post_state(item):
+    if item.get("delivery_unknown"):
+        return ("?", "自分とのチャットへの投稿: 配信結果不明", "")
+    if not item.get("posted"):
+        return ("—", "自分とのチャットへの投稿: まだ", "wait")
+    if _metadata(item.get("measurement")).get("posting_source") == "closed_not_delivered":
+        return ("✖", "自分とのチャットへの投稿: 届いたと確かめられないまま閉じた", "")
+    if _metadata((item.get("record") or {}).get("measurement")).get("source") == "demo":
+        return ("◇", "自分とのチャットへの投稿: 模擬（実際の Teams には書いていない）", "")
+    return ("✔", "自分とのチャットへの投稿: 読み戻しで確認済み", "")
+
+
+def _flow(out, number, item, kinds, executions, mode):
+    """One case on one screen: the request, what kimeru read, the proposal, the PM's check, the record."""
+    record = item.get("record") or {}
+    event = record.get("event") or {}
+    memo = record.get("memo") or {}
+    who = event.get("author") or event.get("created_by") or ""
+    src = SRC.get(record.get("event_kind"), record.get("event_kind") or "")
+    body = event.get("text") or event.get("item") or event.get("title") or record.get("summary") or ""
+    parts = [f"<section class='case'><h3>#{_e(number)} {_e(record.get('summary') or body)}</h3><ol class='flow'>",
+             f"<li><h3>依頼<span>{_e(src)}{' ・ ' + _e(who) if who else ''}</span></h3><blockquote>{_e(body)}</blockquote></li>"]
+    chips = "".join(_chip_ja(s, kinds) for s in record.get("path") or [])
+    missing = "".join(f"<li>{_e(m)}</li>" for m in memo.get("missing") or [])
+    parts.append("<li><h3>根拠<span>kimeru が読み取ったこと</span></h3>"
+                 + (f"<p>{_e(memo['summary'])}</p>" if memo.get("summary") else "")
+                 + f"<div class='path'>{chips}</div>"
+                 + (f"<p><b>足りない情報</b></p><ul>{missing}</ul>" if missing else "")
+                 + ("<p class='note'>経路の値は簡易ルールの固定値です（確率ではありません）。</p>"
+                    if mode == "try" or (record.get("judge") or {}).get("name") == "StubBackend" else
+                    "<p class='note'>経路の値は判断モデルの確信度で、人へ回すかを決めるしきい値に使います（正解の確率ではありません）。</p>"
+                    if chips else "") + "</li>")
+    plan = record.get("plan") or {}
+    steps = "".join(f"<li>{_e(st['title'])}（{_e(st.get('due', ''))}）</li>" for st in plan.get("steps") or [])
+    drafts = []
+    for a in record.get("actions") or []:
+        if a.get("type") == "teams.reply":
+            warn = f"<p class='warn'>⚠ 元の材料に無い日付・数値: {_e('、'.join(a['unverified']))}</p>" if a.get("unverified") else ""
+            by = f"（{_e(writer_label(record))}）" if a.get("drafted_by") else "（定型文）"
+            drafts.append(f"<p><b>返信案</b> <span class='who'>{by}</span></p><blockquote>{_e(a.get('text', ''))}</blockquote>{warn}")
+    later = "".join(f"<li>{_e(_action(a))}</li>" for a in record.get("actions") or [] if a.get("type") != "teams.reply")
+    parts.append("<li><h3>提案<span>承認されるまで何も実行しない</span></h3>"
+                 + (f"<p><b>進め方の案</b>: {_e(plan.get('title', ''))}</p><ol>{steps}</ol>" if steps else "")
+                 + (f"<p><b>メモ</b>: {_e(record['advice'])}</p>" if record.get("advice") and not steps else "")
+                 + "".join(drafts)
+                 + (f"<p><b>承認後の計画</b>（既定は記録だけ。ADO・Teams には書かない）</p><ul>{later}</ul>" if later else "") + "</li>")
+    options = "".join(f"<li>{_e(o)}</li>" for o in memo.get("options") or [])
+    history = "".join(f"<li><span class='who'>{_e(_clock(at))}</span> {_e(text)}</li>" for at, text in _timeline(out, number, item))
+    parts.append("<li><h3>人の確認<span>決めるのはあなた</span></h3>"
+                 + (f"<p><b>人が決めること</b></p><ul>{options}</ul>" if options else "")
+                 + (f"<p><b>確認の履歴</b></p><ul>{history}</ul>" if history else "<p>まだ確認していません。</p>") + "</li>")
+    mark, label = DECISION.get(item.get("status"), ("?", f"状態不明（{item.get('status')}）"))
+    badges = [(mark, f"判断: {label}", "" if item.get("status") in ("approved", "rejected") else "wait")]
+    if item.get("status") == "approved":
+        work = (item.get("work") or {}).get("state") if isinstance(item.get("work"), dict) else None
+        none = "進捗の記録なし" + ("" if mode == "try" else "（work set で記録）")
+        label = WORK.get(work, f"状態不明（{work}）") if work else none
+        badges.append(("✔" if work == "done" else "○", f"作業: {label}",
+                       "" if work == "done" else "wait"))
+    sent = _sent_state(item, executions)
+    if sent:
+        badges.append(sent)
+    badges.append(_post_state(item))
+    status = "".join(f"<span class='st {cls}'><b>{_e(m)}</b>{_e(t)}</span>" for m, t, cls in badges)
+    parts.append(f"<li><h3>記録</h3><div>{status}</div>"
+                 "<p class='note'>判断・作業・相手への送信は別々に記録します。承認しただけでは、送信も作業の完了もしたことになりません。"
+                 "判断の経路は decisions.jsonl、修正と承認の履歴は approvals.log.jsonl にあります。</p></li></ol></section>")
+    return "".join(parts)
+
+
+def build(out, graphs, title="kimeru 判断レポート", mode=None):
+    """The page. mode="try": the page of `kimeru try` (says that the judge is the keyword stub and the texts a script)."""
     out = Path(out)
     decisions = _rows(out / "decisions.jsonl")
     ap = json.loads((out / "approvals.json").read_text(encoding="utf-8")) if (out / "approvals.json").exists() else {"items": {}}
@@ -259,21 +459,35 @@ def build(out, graphs, title="kimeru 判断レポート"):
              (counts["safe"], "確信が低く安全側で決定"), (counts["human"], "人の確認へ")]
     parts = [f"<!doctype html><html lang='ja'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>",
              f"<title>{_e(title)}</title><style>{CSS}</style></head><body><main>",
-             f"<h1>{_e(title)}</h1><p class='sub'>{_e(out)} ・ {_e(_io_note(out, ap, executions))}</p>",
-             "<div class='tiles'>" + "".join(f"<div class='tile'><b>{v}</b><span>{_e(l)}</span></div>" for v, l in tiles) + "</div>",
-             "<div class='legend'><span class='chip rule'>規則</span><span class='chip model'>判断（モデル）</span><span class='chip plan'>進め方</span>"
-             "<span class='badge ok'>自動</span><span class='badge safe'>安全側</span><span class='badge human'>人の確認</span></div>"]
+             f"<h1>{_e(title)}</h1><p class='sub'>記録フォルダ: {_e(out)}</p>",
+             "<p class='lead'>あなたの確認に回った依頼を、<b>依頼 → 根拠 → 提案 → 人の確認 → 記録</b> の順に並べています。"
+             "kimeru は案を用意して記録するだけで、決めるのも相手へ送るのもあなたです。</p>"]
+    if mode == "try":
+        parts.append(f"<div class='notice' role='note'><b>体験モード</b>{_e(TRY_NOTICE)}</div>")
+    if not decisions and not ap["items"]:
+        parts.append("<p class='empty'>まだ判断の記録がありません。<code>python -m kimeru try</code> で、架空の相談 1 件の記録を作れます。</p>")
+    if ap["items"]:
+        parts.append("<h2>あなたの確認に回った件</h2>")
+        parts += [_flow(out, number, item, kinds, executions, mode) for number, item in ap["items"].items()]
+    if decisions:
+        parts += ["<h2>判断したすべての件</h2>",
+                  "<p class='note'>自動で決めた件も含む、判断の全記録です。書き直す前の案も、そのときの記録として残ります。</p>",
+                  "<div class='tiles'>" + "".join(f"<div class='tile'><b>{v}</b><span>{_e(l)}</span></div>" for v, l in tiles) + "</div>",
+                  "<div class='legend'><span class='chip rule'>規則</span><span class='chip model'>判断（モデル）</span><span class='chip plan'>進め方</span>"
+                  "<span class='badge ok'>自動</span><span class='badge safe'>安全側</span><span class='badge human'>人の確認</span></div>"]
     evidence = trial.collect(out)
-    parts.append("<section class='ev'><h2>Measurement coverage</h2><pre style='white-space:pre-wrap'>" +
-                 _e(trial.render(evidence)) + "</pre><p class='plan'>Trace: decisions.jsonl (ready/runtime/provenance), "
-                 "approvals.json and approvals.log.jsonl (proposal posting/accepted OK), trial.json (explicit observations). "
-                 "Unknown is missing evidence; no business efficiency gain is established.</p></section>")
+    details = ["<details><summary>計測の詳細（英語・開発者向け）</summary>",
+               "<p class='plan'>" + _e(_io_note(out, ap, executions)) + "</p>",
+               "<section class='ev'><h2>Measurement coverage</h2><pre style='white-space:pre-wrap'>" +
+               _e(trial.render(evidence)) + "</pre><p class='plan'>Trace: decisions.jsonl (ready/runtime/provenance), "
+               "approvals.json and approvals.log.jsonl (proposal posting/accepted OK), trial.json (explicit observations). "
+               "Unknown is missing evidence; no business efficiency gain is established.</p></section>"]
     for number, item in ap["items"].items():
         timing = _metadata(item.get("measurement"))
         reference = _metadata(item.get("record", {}).get("measurement"))
         posted, approved = _verified_times(item, timing, reference)
         source = "synthetic demo" if timing.get("source") == "demo" else "local/legacy"
-        parts.append("<p class='plan'>" + _e(f"Current proposal #{number}: generation {timing.get('generation', 'Unknown')}; "
+        details.append("<p class='plan'>" + _e(f"Current proposal #{number}: generation {timing.get('generation', 'Unknown')}; "
                      f"{source}; ready {_observed_time(timing.get('ready_at'))}; "
                      f"verified post {posted}; accepted OK observation "
                      f"{approved}. Evidence: approvals.json; "
@@ -310,9 +524,9 @@ def build(out, graphs, title="kimeru 判断レポート"):
         observed = next((m for m in observations if trial.measurement_valid(matched, m, timing)), {})
         posted, approved = _verified_times(matched, observed, timing)
         if generation is not None and generation != _metadata(matched.get("measurement")).get("generation") and matched:
-            parts.append("<p class='plan'>superseded proposal: case status refers to the current proposal, "
-                         "not approval of this older generation.</p>")
-        parts.append("<p class='plan'>" + _e(f"Measurement: {source}; generation {generation if generation is not None else 'Unknown'}; "
+            details.append(f"<p class='plan'>{_e(r.get('summary') or r.get('event_id'))}: superseded proposal: case status "
+                           "refers to the current proposal, not approval of this older generation.</p>")
+        details.append("<p class='plan'>" + _e(f"{r.get('summary') or r.get('event_id')}: Measurement: {source}; generation {generation if generation is not None else 'Unknown'}; "
                      f"ready {_observed_time(timing.get('ready_at'))}; positively observed post "
                      f"{posted}; "
                      f"accepted OK observed {approved} (includes polling).") + "</p>")
@@ -342,5 +556,5 @@ def build(out, graphs, title="kimeru 判断レポート"):
                      + (f"<ul>{''.join('<li>' + _e(verb) + ' — ' + _e(_action(a)) + '</li>' for a in acts)}</ul>" if acts else "")
                      + (f"<ul>{''.join('<li>' + _e(label) + ' — ' + _e(_action(action)) + '</li>' for action, label in exec_rows)}</ul>" if exec_rows else "")
                      + (f"<p class='plan'>メモ: {_e(r['advice'])}</p>" if r.get("advice") else "") + "</div></section>")
-    parts.append("</main></body></html>")
+    parts += details + ["</details></main></body></html>"]
     return "".join(parts)

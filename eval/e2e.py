@@ -174,7 +174,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--backend", choices=["jev", "kev", "clm"], required=True)
     ap.add_argument("--out")
-    ap.add_argument("--fixtures", default="fixtures.jsonl", help="file under eval/ (fixtures_holdout.jsonl: never tuned on)")
+    ap.add_argument("--fixtures", default="fixtures.jsonl", help="file under eval/ (fixtures_holdout.jsonl: the held-out set, already used in development; see eval/README.md)")
     ap.add_argument("--user-thresholds", action="store_true",
                     help="also read the coefficients `kimeru calibrate --apply` wrote (default: not read)")
     a = ap.parse_args()

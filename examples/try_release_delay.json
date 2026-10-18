@@ -1,0 +1,27 @@
+{
+  "title": "リリース延期の相談",
+  "chat": {
+    "id": "19:try-sato@unq.gbl.spaces", "kind": "oneOnOne", "title": "佐藤（QA）",
+    "preview": "リリース日を来週火曜にずらしてよいか判断お願いします。QA 環境が止まっていて、結合テストが半分終わっていません",
+    "time": "8:30", "unread": true, "mention": false
+  },
+  "_comment": "The texts below are a fixed script, not model output: the scripted writer returns them as they are. The judgment comes from the keyword stub. Nothing here reaches Teams, ADO or any model.",
+  "draft": {
+    "teams.reply": "受領しました。QA 環境の復旧見込みを確認し、本日 15 時までに日程の判断をお返しします。",
+    "ado.create": "「{title}」の結果をこの作業項目に書いたら完了とする。"
+  },
+  "memo": {
+    "summary": "QA 環境の停止で、リリース日を来週火曜にずらすかの判断を求められている",
+    "missing": ["QA 環境の復旧見込み（いつ直るか）", "残りの結合テストにかかる日数", "日程を変えた場合に影響するチーム・顧客"],
+    "options": ["来週火曜に延期する（テストを終えてから出す）", "範囲を絞って予定どおり出す（未テストの機能は外す）", "復旧見込みが分かるまで判断を保留する"],
+    "next": "佐藤さんに QA 環境の復旧見込みを聞く"
+  },
+  "redraft": {
+    "teams.reply": "受領しました。QA 環境の復旧見込みを確認してから、日程の判断をお返しします。"
+  },
+  "replies": [
+    {"text": "詳細 1", "label": "全文と足りない情報を見る"},
+    {"text": "修正 1 時刻は約束せず短く", "label": "返信案の修正を指示する"},
+    {"text": "OK 1", "label": "承認する"}
+  ]
+}

@@ -8,6 +8,7 @@
 
 ```bash
 python -m kimeru validate
+python -m kimeru try [--out <フォルダ>]              # 体験モード: 架空の相談 1 件を届く→整理→修正→承認→記録まで。設定・鍵を読まず、プロセスの起動と通信を止め、out/try にだけ書く
 python -m kimeru demo [--pace 1.5] [--fresh]       # 既定の出力先は out/demo。デモ以外の記録があるフォルダでは止まる（--fresh で before-demo-<日時>/ へ移す）
 python -m kimeru run <payload.json>...
 python -m kimeru watch inbox/                     # inbox/*.json と議事録 *.txt を常駐処理（処理済みは inbox/done/）

@@ -640,7 +640,7 @@ class _Parser(argparse.ArgumentParser):
         super().__init__(*a, **k)
 
 
-UNREACHABLE = ("kimeru: 判断モデルに接続できません: {}。Kev を起動する（README の「しくみ」）か、"
+UNREACHABLE = ("kimeru: 判断モデルに接続できません: {}。Kev を起動する（docs/kev-bundle.md）か、"
                "--backend stub（キーワードの簡易判定）で試してください")
 NOT_A_PAYLOAD = "kimeru: {} はイベントの形式ではありません（対応: Teams・監視アラート・ADO・議事録）"
 
@@ -656,9 +656,25 @@ def main(argv=None):
         return 1
 
 
+def _command_word(argv):
+    """The first word that is not a global option or its value."""
+    i = 0
+    while i < len(argv):
+        if argv[i] in ("--graphs", "--playbooks", "--out", "--backend", "--model"):
+            i += 2
+        elif argv[i].startswith("-"):
+            i += 1
+        else:
+            return argv[i]
+    return None
+
+
 def _main(argv=None):
     _safe_streams()
     argv_list = list(sys.argv[1:] if argv is None else argv)
+    if _command_word(argv_list) == "try":   # before any setting is read: the try run reads none of them (tryout.py)
+        from . import tryout
+        return tryout.main(argv_list)
     # Global options remain usable on either side of a pass-through command.
     normalized, out_value = [], None
     i = 0
@@ -721,6 +737,8 @@ def _main(argv=None):
     p_demo.add_argument("--step", action="store_true", help="presenter mode: wait for Enter before each event")
     p_demo.add_argument("--fresh", action="store_true",
                         help="if --out holds real records, move them to before-demo-<time>/ (never deleted) instead of stopping")
+    sub.add_parser("try", help="one fictional case from arrival to the record; reads no setting, starts no process, opens no "
+                               "connection; writes to out/try (handled before this parser: see tryout.py)")
     p_rep = sub.add_parser("report", help="HTML page of the decisions in --out")
     p_rep.add_argument("--html", help="output file (default: <out>/report.html)")
     p_d = sub.add_parser("daily", help="pull -> judge -> self-chat queue -> approvals -> morning brief")
@@ -1282,7 +1300,7 @@ def schedule(a, state_out=None):
         kept = [k for k in ("backend", "ado_org", "ado_project") if config.SOURCES.get(k) == "file"]
         print(f"残るもの: {out / 'run-daily.vbs'}（自動運転の起動用。手で消せます）")
         print(f"保存した設定: {config.path()}" + (f" の {' / '.join(kept)}（python -m kimeru config unset <名前> で戻せます）" if kept else "（install で保存したものはありません）"))
-        print(f"記録: {out}（同僚のメッセージの抜粋と取り込んだ原本を含みます。消し方は README の「止める・消す」）")
+        print(f"記録: {out}（同僚のメッセージの抜粋と取り込んだ原本を含みます。消し方は docs/usage.md の「止める・消す」）")
         return rc
     if a.action == "status":
         rc = subprocess.run(["schtasks", "/Query", "/TN", TASK, "/FO", "LIST"]).returncode

@@ -98,8 +98,8 @@ class TestCounts(unittest.TestCase):
 
 
 class TestTheQuickstart(unittest.TestCase):
-    def test_every_python_command_in_the_quickstart_is_written_in_the_readme_or_the_reference(self):
-        docs = [l for p in (ROOT / "README.md", ROOT / "docs" / "reference.md")
+    def test_every_python_command_in_the_quickstart_is_written_in_the_readme_the_usage_or_the_reference(self):
+        docs = [l for p in (ROOT / "README.md", ROOT / "docs" / "usage.md", ROOT / "docs" / "reference.md")
                 for l in p.read_text(encoding="utf-8").splitlines()]
         cmds = [c for c in code_lines(quickstart()) if c.startswith("python -m kimeru")]
         self.assertGreaterEqual(len(cmds), 3)   # the demo, the daily cycle, the judge with Kev

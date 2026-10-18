@@ -692,7 +692,7 @@ class TestTheNudgeSettingAndDocs(unittest.TestCase):
         sec = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
         for field in ("nudged_at", "sent_confirmed", "nudge_day"):
             self.assertIn(f"`{field}`", sec)
-        self.assertIn("| `送った N` |", (ROOT / "README.md").read_text(encoding="utf-8"))
+        self.assertIn("| `送った N` |", (ROOT / "docs" / "usage.md").read_text(encoding="utf-8"))   # the reply table left README.md
 
 
 if __name__ == "__main__":

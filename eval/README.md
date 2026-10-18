@@ -20,6 +20,15 @@ accuracy: thanks / OK / FYI should not, decisions, requests, incidents must. Kev
 to the PM, 20 of the 33 `auto` ones (Teams `intent` picked `fyi` at 0.2-0.5 confidence, under 0.6); with the `ack_only`
 rule 31 and 6; 0 `pm` events automatic and 0 severe misses both times. `tests/test_preview_prefilter.py` checks the rule on it.
 
+## Where the data was used
+
+"Held-out" below is the name of `fixtures_holdout.jsonl`, not a promise that it was never looked at. All of it has been used
+in development: the first 36 events to pick the Teams question wording and the minutes options (2026-09-26), the 12 alert
+events to design the Sev0/1 guard (2026-09-27). `fixtures_preview_ja.jsonl` designed the `ack_only` rule and
+`fixtures_context.jsonl` decided the `judge_context` gate. Only `fixtures_requirements_holdout.jsonl` is recorded as unused
+(measured once, the day it was made; no result file is kept). **No re-evaluation on data unused in development exists yet.**
+The same table, in Japanese: docs/evaluation.md ("評価データの来歴").
+
 ## Per-backend thresholds
 
 Node thresholds were tuned on Jev. A backend with a different confidence scale gets a profile in
@@ -60,7 +69,8 @@ without the earlier messages 1 correct / 3 human / 0 wrong; with them (`judge_co
 
 Values below were recorded before the C09 scoring change.
 After rule-first nodes and sharper criteria (e2e, final action): 62 correct / 25 human / 12 fallback / 0 wrong
-on the 99 events, 29 / 6 / 0 / 1 on `fixtures_holdout.jsonl` (36 events never tuned on;
+on the 99 events, 29 / 6 / 0 / 1 on `fixtures_holdout.jsonl` (36 events; not untouched: the Teams wording and the
+minutes options were picked on them the day they were added, see "Where the data was used" below;
 `python eval/e2e.py --backend kev --fixtures fixtures_holdout.jsonl`).
 Re-measured 2026-09-27 with stricter e2e scoring (correct = same terminal *and* same actions, including the
 playbook; to-human = actually queued for the PM): unchanged. The 9 playbook disagreements all ended at a
@@ -71,7 +81,7 @@ a Sev1 "availability test failing in 4 of 5 regions, order page returns errors" 
 an outage, and got P1 without paging. Fix: a score-node guard (`guards` in graphs/monitor_alert.json) sends
 a Sev0/Sev1 alert that the model rates below an outage to a person. With the guard: 62 / 25 / 12 / 0 on the
 99 events (unchanged), 35 / 12 / 0 / 1 and 0 severe misses on the 48 held-out events (alerts 6 correct,
-6 to a person). The alert part of the held-out set has now been looked at once, so it is no longer untouched.
+6 to a person). The alert part of the held-out set was used to design the guard, so it is no longer untouched either.
 
 CLM v0.1-8B (Contrastive-LM, Qwen3-8B Q8_0 embeddings via llama.cpp on CPU, ~1-2 s per question) was tried as
 a backend: 26 / 44 / 14 / 15 wrong (2 severe misses) on the 99 events, 9 / 23 / 3 / 1 on the held-out set;
@@ -92,7 +102,7 @@ Japanese PM questions it collapses score answers to the middle. Not used.
 
 ```bash
 python eval/e2e.py --backend kev --fixtures fixtures_requirements.jsonl           # 調整に使った 10 件
-python eval/e2e.py --backend kev --fixtures fixtures_requirements_holdout.jsonl   # 調整に使っていない 10 件
+python eval/e2e.py --backend kev --fixtures fixtures_requirements_holdout.jsonl   # 調整に使っていないと記録した 10 件（作った日に 1 回測っただけ）
 ```
 
 要件の検討 6 件と、「要件」を含むが別の扱いになる 4 件（判断・進捗・共有・障害）です。

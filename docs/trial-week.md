@@ -55,7 +55,7 @@
 
 ```powershell
 python -m kimeru config set backend kev          # 判断モデル（Kev を使うとき）
-python -m kimeru config set writer m365          # 文面の下書き。使えるものを選ぶ（README の「文面の下書き」）
+python -m kimeru config set writer m365          # 文面の下書き。使えるものを選ぶ（docs/usage.md の「下書きを選ぶ」）
 python -m kimeru --out <出力先> config show       # 効いている設定と、その出どころ
 python -m kimeru schedule install                # 5 分ごとの自動運転（設定は設定ファイルで引き継がれる）
 ```

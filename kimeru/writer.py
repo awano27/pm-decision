@@ -65,7 +65,7 @@ PURPOSE = {
     "ado.create": "作業項目の説明（2〜4 行。何を確認・作成すれば完了か。材料の具体名を使う）",
 }
 # how a post names the writer that drafted the memo and the texts
-WRITER_LABEL = {"copilot": "Copilot", "claude": "Claude", "grok": "Grok", "codex": "Codex", "cmd": "文面 CLI",
+WRITER_LABEL = {"script": "台本（AI ではない）", "copilot": "Copilot", "claude": "Claude", "grok": "Grok", "codex": "Codex", "cmd": "文面 CLI",
                 "m365": "Microsoft 365 Copilot", "m365-auto": "Microsoft 365 Copilot"}
 
 

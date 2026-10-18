@@ -1,4 +1,5 @@
-"""The examples README.md shows are the real output: the demo summary and the self-chat post."""
+"""The examples README.md and docs/usage.md show are the real output: the demo summary, the self-chat post of `try`, and the
+self-chat post with a writer (examples/readme_post.py)."""
 try:   # isolation from the real state folder, whichever way the tests are started
     from . import isolate  # noqa: F401
 except ImportError:
@@ -18,12 +19,13 @@ from kimeru import cli
 
 ROOT = Path(__file__).resolve().parent.parent
 README = (ROOT / "README.md").read_text(encoding="utf-8")
+USAGE = (ROOT / "docs" / "usage.md").read_text(encoding="utf-8")
 
 
-def block_after(marker):
-    start = README.index(marker)
-    s = README.index("```text\n", start) + len("```text\n")
-    return README[s:README.index("```", s)].rstrip("\n")
+def block_after(marker, doc=README):
+    start = doc.index(marker)
+    s = doc.index("```text\n", start) + len("```text\n")
+    return doc[s:doc.index("```", s)].rstrip("\n")
 
 
 class TestReadmeSamples(unittest.TestCase):
@@ -56,7 +58,25 @@ class TestReadmeSamples(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if not k.startswith("KIMERU_")}
         with mock.patch.dict(os.environ, env, clear=True):
             post = mod.post()
-        self.assertEqual(post.rstrip("\n"), block_after("迷った件は、自分とのチャットに **1 通の短い投稿**（5 行ほど）として届きます。"))
+        self.assertEqual(post.rstrip("\n"), block_after("迷った件は、自分とのチャットに **1 通の短い投稿**（5 行ほど）として届きます。", USAGE))
+
+    def test_the_try_post_is_what_try_prints(self):
+        with tempfile.TemporaryDirectory() as d:
+            cwd = os.getcwd()
+            os.chdir(d)
+            try:
+                buf = io.StringIO()
+                env = {k: v for k, v in os.environ.items() if not k.startswith("KIMERU_")}
+                with mock.patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(buf):
+                    rc = cli.main(["try"])
+            finally:
+                os.chdir(cwd)
+                cli.config.ARGS.clear()
+        self.assertEqual(rc, 0)
+        out = buf.getvalue()
+        step = out[out.index("③"):out.index("④")]
+        post = [line[len("      | "):] for line in step.splitlines() if line.startswith("      | ")]
+        self.assertEqual(post, block_after("自分とのチャットには、次の短い投稿として届きます").splitlines())
 
 
 if __name__ == "__main__":

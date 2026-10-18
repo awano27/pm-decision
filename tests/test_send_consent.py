@@ -115,8 +115,8 @@ class TestTheDocsListWhatLeavesThePc(unittest.TestCase):
     def test_security_and_readme_say_the_schedule_always_sends(self):
         sec = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
         self.assertIn("`schedule install` で登録する自動運転は常に `--send` で投稿する", sec)
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        line = next(l for l in readme.splitlines() if l.startswith("python -m kimeru schedule install"))
+        usage = (ROOT / "docs" / "usage.md").read_text(encoding="utf-8")   # moved there from README.md with the daily use
+        line = next(l for l in usage.splitlines() if l.startswith("python -m kimeru schedule install"))
         self.assertIn("daily --once --send", line)
 
 

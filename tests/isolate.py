@@ -23,6 +23,14 @@ if os.environ.get("KIMERU_TEST_STATE_PID") != str(os.getpid()):   # once per pro
     os.environ["KIMERU_STATE_DIR"] = _state
     os.environ["KIMERU_TEST_STATE_PID"] = str(os.getpid())
     atexit.register(shutil.rmtree, _state, ignore_errors=True)
+    # a console that cannot show Japanese (cp1252 on some Windows runners) would turn a message printed by the code under test into
+    # a UnicodeEncodeError of the test; the tests read the records, so a character the console lacks is written as an escape
+    import sys as _sys
+    for _stream in (_sys.stdout, _sys.stderr):
+        try:
+            _stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError):   # a replaced stream (an IDE, a capture) keeps its own handling
+            pass
 
 
 def detail_of(out, n=1):

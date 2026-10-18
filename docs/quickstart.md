@@ -8,6 +8,7 @@
 
 - **所要時間**: 5 分（`--pace 0` で待ちを省く）
 - **準備**: [まず動かす](../README.md#-まず動かす) のとおり clone するか ZIP を展開し、PowerShell で `python --version` が 3.10 以上であることを確かめる。1 件の流れ（届く → 整理 → 修正 → 承認 → 記録）だけなら、先に `python -m kimeru try` を実行すると 1 秒ほどで見られます（この PC の設定を読まず、外へ何も送りません）。
+- **注意**: `demo` は `try` と違い、この PC の writer の設定を使います。writer を設定した PC では、返信案の材料がその writer の提供元へ送られます。
 - **コマンド**:
 
 ```powershell
@@ -20,7 +21,7 @@ python -m kimeru --backend stub --out out/demo demo --pace 0
 ## 2. 5 分: 自分の Teams を読めるか見る
 
 - **所要時間**: 5 分（数分かかる。読み取りだけで、何も入力・送信しない）
-- **準備**: Teams を開き、チャット一覧を表示しておく。kimeru は Teams を自動では起動・表示しません。
+- **準備**: Teams の画面の自動操作（UI Automation による読み取り）が、組織で認められているかを先に確かめる。Teams を開き、チャット一覧を表示しておく。kimeru は Teams を自動では起動・表示しません。
 - **コマンド**: `run-auto-check.cmd` をダブルクリック
 - **できたと分かる印**: `kimeru-auto-check-result.txt`（クリップボードにも入る）で、T1 と T3 が OK。
 - **失敗したとき**: 「Teams が起動していません」や「Teams のウィンドウが表示されていません（起動はしています）」と出たら、Teams のウィンドウを開いてから、もう一度実行する（[困ったとき](usage.md#困ったとき)、[自動の確認](managed-pc-check.md#自動の確認ダブルクリック-1-回何も送らない質問しない)）。

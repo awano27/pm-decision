@@ -91,7 +91,7 @@ class TestTryReachesNothing(unittest.TestCase):
             self.assertFalse((self.root / "writer-was-called.txt").exists())
             # the user's state folder is neither read into the run nor written
             self.assertEqual({p.name: p.read_bytes() for p in state.iterdir()}, before)
-            self.assertIn("読みません", out)
+            self.assertIn("この体験では使いません（終わると元に戻します）", out)
             self.assertNotIn("not-a-key", out + err)
 
     def test_the_records_go_to_out_try_only(self):
@@ -112,6 +112,9 @@ class TestTryReachesNothing(unittest.TestCase):
         reply = next(a for a in item["record"]["actions"] if a["type"] == "teams.reply")
         self.assertEqual(reply["text"], json.loads((ROOT / "examples" / "try_release_delay.json").read_text(encoding="utf-8"))["redraft"]["teams.reply"])
         log = [json.loads(l) for l in (out / "approvals.log.jsonl").read_text(encoding="utf-8").splitlines()]
+        from kimeru import fulltext, notify
+        item = notify.Approvals(out).data["items"]["1"]
+        self.assertIn("返信の下書き（台本（AI ではない））", notify.format_detail(1, item["record"], fulltext.load(out, item["key"])))
         self.assertEqual([r["status"] for r in log], ["detail", "redrafted", "approved"])
         self.assertTrue(all(e["status"] == "planned" for e in log[-1]["executed"]))
         self.assertEqual(log[-1]["real"], [])
@@ -123,7 +126,8 @@ class TestTryReachesNothing(unittest.TestCase):
         marks = ["<h3>依頼", "<h3>根拠", "<h3>提案", "<h3>人の確認", "<h3>記録"]
         self.assertEqual([page.index(m) for m in marks], sorted(page.index(m) for m in marks))
         for text in ("体験モード", "確率や正解率ではありません", "足りない情報", "人が決めること", "判断: 承認済み",
-                     "作業: 進捗の記録なし", "相手への返信: 送っていない（記録だけ）", "模擬（実際の Teams には書いていない）"):
+                     "作業: 進捗の記録なし", "相手への返信: 送っていない（記録だけ）", "模擬（実際の Teams には書いていない）",
+                     "書き直し前の案（承認の対象ではない）", "判断（簡易ルール）"):
             self.assertIn(text, page)
         self.assertLess(page.index("あなたの確認に回った件"), page.index("<summary>計測の詳細"))
         self.assertLess(page.index("<summary>計測の詳細"), page.index("Measurement coverage"))
@@ -158,13 +162,100 @@ class TestTryReachesNothing(unittest.TestCase):
 
     def test_the_environment_and_the_settings_come_back_after_the_run(self):
         with a_machine_with_everything_on(self.root) as (state, _):
-            before = dict(os.environ)
+            cli.config.ARGS["writer"] = "claude"   # whatever the settings module held before stays exactly so
+            before = (dict(os.environ), dict(cli.config.ARGS), dict(cli.config._FILLED), dict(cli.config.SOURCES),
+                      list(cli.config.WARNINGS))
             self.assertEqual(run("--out=out/try", "try")[0], 0)
-            # apply() fills the settings of the user's file in again (config._FILLED), as at any start of kimeru
-            self.assertEqual({k: v for k, v in os.environ.items() if k not in cli.config._FILLED}, before)
-            self.assertEqual(os.environ.get("KIMERU_LEARN"), "1")
-            self.assertEqual(cli.config.value("writer"), "copilot")
+            after = (dict(os.environ), dict(cli.config.ARGS), dict(cli.config._FILLED), dict(cli.config.SOURCES),
+                     list(cli.config.WARNINGS))
+            self.assertEqual(after, before)
             self.assertEqual(cli.config.state_dir(), state)
+
+    def test_the_folders_of_real_records_are_refused_even_when_empty(self):
+        with a_machine_with_everything_on(self.root) as (state, _):
+            for out in ("out", ".", str(state), str(state / "sub")):
+                rc, _, err = run("try", "--out", out)
+                self.assertEqual(rc, 2, out)
+                self.assertIn("混ざらない", err)
+            (self.root / "a-file").write_text("x", encoding="utf-8")
+            for argv in (["try", "--out", str(self.root / "a-file")], ["try", "--out"], ["try", "--out="]):
+                rc, out, err = run(*argv)
+                self.assertEqual(rc, 2, argv)
+                self.assertNotIn("Traceback", err)
+        self.assertFalse((self.root / "out").exists())
+        self.assertEqual(sorted(p.name for p in state.iterdir()), ["config.json"])
+
+    def test_other_commands_refuse_to_write_into_the_try_folder(self):
+        with a_machine_with_everything_on(self.root):
+            self.assertEqual(run("try")[0], 0)
+            before = sorted(p.name for p in (self.root / "out" / "try").iterdir())
+            for argv in (["--backend", "stub", "--out", "out/try", "run", str(ROOT / "examples" / "teams_chat.json")],
+                         ["--out", "out/try", "work", "set", "1", "done"]):
+                rc, _, err = run(*argv)
+                self.assertEqual(rc, 2, argv)
+                self.assertIn("体験", err)
+            self.assertEqual(sorted(p.name for p in (self.root / "out" / "try").iterdir()), before)
+            rc, _, _ = run("--out", "out/try", "report")   # reading it is fine
+            self.assertEqual(rc, 0)
+
+    def test_listing_and_reading_the_try_folder_still_work_and_report_keeps_the_try_page(self):
+        with a_machine_with_everything_on(self.root):
+            self.assertEqual(run("try")[0], 0)
+            for argv in (["--out", "out/try", "work", "list"], ["--out", "out/try", "delivery", "list"],
+                         ["--out", "out/try", "learn", "list"]):
+                self.assertEqual(run(*argv)[0], 0, argv)
+            self.assertEqual(run("--out", "out/try", "report")[0], 0)
+            page = (self.root / "out" / "try" / "report.html").read_text(encoding="utf-8")
+            self.assertIn("体験モード", page)
+            self.assertIn("判断（簡易ルール）", page)
+            rc, _, err = run("report")   # out holds only the try run's folder: say where it is
+            self.assertEqual(rc, 2)
+            self.assertIn("out" + os.sep + "try", err)
+
+    def test_an_inbox_in_the_try_folder_and_a_loop_that_meets_it_stop(self):
+        with a_machine_with_everything_on(self.root):
+            self.assertEqual(run("try")[0], 0)
+            rc, _, err = run("--backend", "stub", "--out", "real", "watch", "out/try", "--once")
+            self.assertEqual(rc, 2)
+            self.assertTrue((self.root / "out" / "try" / "approvals.json").exists())   # nothing was moved to done/
+            (self.root / "inbox").mkdir()
+            real = self.root / "real2"
+
+            def try_run_meanwhile(_seconds):   # the loop sleeps; a try run takes the folder in the meantime
+                real.mkdir(exist_ok=True)
+                (real / ".kimeru-try").write_text("", encoding="utf-8")
+            with mock.patch("time.sleep", try_run_meanwhile):
+                rc, _, err = run("--backend", "stub", "--out", "real2", "watch", "inbox", "--interval", "0")
+            self.assertEqual(rc, 2)
+            self.assertIn("体験", err)
+
+    def test_other_spellings_of_the_records_folder_are_refused_too(self):
+        with a_machine_with_everything_on(self.root):
+            (self.root / "out").mkdir()
+            (self.root / "a-file").write_text("x", encoding="utf-8")
+            for out in ("out.", "./out/../out", str(self.root / "out"), "OUT" if os.name == "nt" else "out"):
+                rc, _, err = run("try", "--out", out)
+                self.assertEqual(rc, 2, out)
+            rc, _, err = run("try", "--out", "a-file/sub")   # through a file: one line, no traceback
+            self.assertEqual(rc, 2)
+            self.assertNotIn("Traceback", err)
+            self.assertEqual(len(err.strip().splitlines()), 1)
+        self.assertEqual(list((self.root / "out").iterdir()), [])
+
+    def test_a_demo_in_the_try_folder_makes_it_a_demo_folder_again(self):
+        from kimeru import tryout as t
+        with a_machine_with_everything_on(self.root):
+            self.assertEqual(run("try")[0], 0)
+            self.assertEqual(run("--backend", "stub", "--out", "out/try", "demo", "--pace", "0")[0], 0)
+        self.assertFalse((self.root / "out" / "try" / t.TRY_MARK).exists())
+
+    def test_without_the_data_folders_it_says_where_to_run_in_one_line(self):
+        from kimeru import tryout as t
+        with a_machine_with_everything_on(self.root), mock.patch.object(t, "SCENARIO", self.root / "missing.json"):
+            rc, _, err = run("try")
+        self.assertEqual(rc, 2)
+        self.assertIn("clone したフォルダ", err)
+        self.assertNotIn("Traceback", err)
 
     def test_an_attempt_that_is_caught_and_passed_over_still_fails_the_run(self):
         from kimeru import notify
@@ -283,6 +374,103 @@ class TestThePageWithoutTheHappyPath(unittest.TestCase):
         self.assertIn("判断の依頼（—）", page)   # a broken number is shown as —, the page still renders
         self.assertIn("作業: 状態不明（odd）", page)
         self.assertIn("長い依頼。" * 200, page)
+
+    def test_the_card_and_the_list_below_say_the_same_about_the_reply(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            env = {k: v for k, v in os.environ.items() if not k.startswith("KIMERU_")}
+            cwd = os.getcwd()
+            os.chdir(root)
+            try:
+                with mock.patch.dict(os.environ, env, clear=True):
+                    self.assertEqual(run("try")[0], 0)
+            finally:
+                os.chdir(cwd)
+                cli.config.ARGS.clear()
+            out = root / "out" / "try"
+            ap = json.loads((out / "approvals.json").read_text(encoding="utf-8"))
+            it = ap["items"]["1"]
+            reply = next(i for i, x in enumerate(it["record"]["actions"]) if x["type"] == "teams.reply")
+            cases = [({"exec": {str(reply): {"state": "requested"}}}, "送信待ち（次の --send の実行で 1 回送る）"),
+                     ({"sent_confirmed": "2026-10-17T10:00:00"}, "本人が「送った」と記録（kimeru は送っていない）"),
+                     ({"status": "pending"}, "承認待ちのため送っていない"),
+                     ({"status": "rejected"}, "却下したため送っていない")]
+            for change, words in cases:
+                ap["items"]["1"] = dict(it, **change)
+                (out / "approvals.json").write_text(json.dumps(ap, ensure_ascii=False), encoding="utf-8")
+                page = report.build(out, {})
+                card, lower = page[:page.index("判断したすべての件")], page[page.index("判断したすべての件"):]
+                self.assertIn("相手への返信: " + words, card, change)
+                self.assertIn(words + " — Teams に返信", lower, change)
+                if change.get("status") == "pending":
+                    self.assertIn("承認待ちのため未実行 — ADO に起票", lower)
+                if change.get("status") == "rejected":
+                    self.assertIn("却下したため実行しない — ADO に起票", lower)
+
+    def test_a_case_posted_again_without_a_rewrite_is_not_called_an_earlier_draft(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            env = {k: v for k, v in os.environ.items() if not k.startswith("KIMERU_")}
+            cwd = os.getcwd()
+            os.chdir(root)
+            try:
+                with mock.patch.dict(os.environ, env, clear=True):
+                    self.assertEqual(run("try")[0], 0)
+            finally:
+                os.chdir(cwd)
+                cli.config.ARGS.clear()
+            out = root / "out" / "try"
+            rows = [json.loads(l) for l in (out / "decisions.jsonl").read_text(encoding="utf-8").splitlines()]
+            ap = json.loads((out / "approvals.json").read_text(encoding="utf-8"))
+            rows[0]["actions"] = ap["items"]["1"]["record"]["actions"]   # the same texts as the current proposal, an older generation
+            (out / "decisions.jsonl").write_text(json.dumps(rows[0], ensure_ascii=False) + "\n", encoding="utf-8")
+            page = report.build(out, {})
+        self.assertNotIn("書き直し前の案", page)
+
+    def test_records_of_the_wrong_shape_are_skipped_and_named(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            (out / "decisions.jsonl").write_text('{"no": "path"}\n{"path": [1]}\n', encoding="utf-8")
+            (out / "approvals.json").write_text('{"items": {"1": "not a case", "2": {"record": []}}}', encoding="utf-8")
+            (out / "approvals.log.jsonl").write_text("{broken\n", encoding="utf-8")
+            page = report.build(out, {})
+        self.assertIn("decisions.jsonl の 2 件", page)
+        self.assertIn("approvals.json の 2 件", page)
+        self.assertIn("approvals.log.jsonl の 1 件", page)
+
+
+class TestTheOtherFirstSteps(unittest.TestCase):
+    """What a first-time user may type besides `try`: nothing at all, `report` before any record, an old Python."""
+
+    def test_no_command_says_where_to_start_in_one_line(self):
+        rc, out, err = run()
+        self.assertEqual(rc, 2)
+        self.assertEqual(len(err.strip().splitlines()), 1)
+        self.assertIn("python -m kimeru try", err)
+
+    def test_report_without_a_records_folder_is_one_line(self):
+        with tempfile.TemporaryDirectory() as d:
+            rc, _, err = run("--out", str(Path(d) / "nothing-here"), "report")
+        self.assertEqual(rc, 2)
+        self.assertIn("記録フォルダ", err)
+        self.assertNotIn("Traceback", err)
+
+    def test_broken_records_are_skipped_and_named_at_the_top(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            (out / "decisions.jsonl").write_text('{"half": \n[1, 2]\n', encoding="utf-8")
+            (out / "approvals.json").write_text("{not json", encoding="utf-8")
+            page = report.build(out, {})
+        self.assertIn("読めない記録がありました", page)
+        self.assertIn("decisions.jsonl の 2 件", page)
+        self.assertIn("approvals.json の 1 件", page)
+
+    def test_an_old_python_gets_one_line_in_japanese(self):
+        import runpy
+        import sys
+        with mock.patch.object(sys, "version_info", (3, 9, 18)), self.assertRaises(SystemExit) as stop:
+            runpy.run_module("kimeru.__main__", run_name="__main__")
+        self.assertIn("Python 3.10 以上が必要です", str(stop.exception.code))
 
 
 if __name__ == "__main__":

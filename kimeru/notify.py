@@ -639,7 +639,8 @@ def format_detail(n, rec, full=None, precedent=None, promise=None):
             continue
         label = (writer_mod.LABEL.get(a["type"], a["type"]) + ("（聞き返し）" if a.get("variant") == "ask_back" else "")
                  + (f"「{a['title']}」" if a.get("title") else ""))
-        lines.append(f"{label}の下書き（{a['drafted_by']}）:\n{a[writer_mod.FIELD[a['type']]]}")
+        by = writer_mod.WRITER_LABEL.get(a["drafted_by"], a["drafted_by"])   # copilot -> Copilot, script -> 台本（AI ではない）
+        lines.append(f"{label}の下書き（{by}）:\n{a[writer_mod.FIELD[a['type']]]}")
         if a.get("unverified"):
             lines.append("⚠ 元の材料に無い日付・数値・人名: " + ", ".join(a["unverified"])
                          + ("（メール・会議由来なら、元の内容を確認してください）" if str(a.get("drafted_by", "")).startswith("m365") else ""))

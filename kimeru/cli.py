@@ -639,6 +639,11 @@ class _Parser(argparse.ArgumentParser):
         k["allow_abbrev"] = False
         super().__init__(*a, **k)
 
+    def error(self, message):
+        if self.prog == "kimeru" and "required: cmd" in message:   # only global options, no command
+            message += "\n初めてなら: python -m kimeru try（設定なしで、架空の相談 1 件を最後まで見られます）"
+        super().error(message)
+
 
 UNREACHABLE = ("kimeru: 判断モデルに接続できません: {}。Kev を起動する（docs/kev-bundle.md）か、"
                "--backend stub（キーワードの簡易判定）で試してください")
@@ -672,6 +677,10 @@ def _command_word(argv):
 def _main(argv=None):
     _safe_streams()
     argv_list = list(sys.argv[1:] if argv is None else argv)
+    if not argv_list:   # nothing at all: where a first-time user starts (argparse would print 28 commands in English)
+        print("kimeru: コマンドがありません。初めてなら python -m kimeru try（設定なしで、架空の相談 1 件を最後まで見られます）。"
+              "コマンドの一覧は python -m kimeru -h", file=sys.stderr)
+        return 2
     if _command_word(argv_list) == "try":   # before any setting is read: the try run reads none of them (tryout.py)
         from . import tryout
         return tryout.main(argv_list)
@@ -834,9 +843,17 @@ def _main(argv=None):
     if a.out is None:   # the demo gets a folder of its own, so it never meets the records of run / daily / schedule
         a.out = str(Path("out") / "demo") if a.cmd == "demo" else "out"
     out = Path(a.out)
+    lists_only = ((a.cmd == "attention" and a.attention_action == "list") or (a.cmd == "work" and a.work_action == "list")
+                  or (a.cmd == "delivery" and a.delivery_action in ("list", "show"))
+                  or (a.cmd == "learn" and a.args in ([], ["list"])) or (a.cmd == "trial" and a.args[:1] == ["report"]))
     if a.cmd not in READ_ONLY and not (a.cmd == "schedule" and a.action in ("remove", "status", "report")) \
-            and not (a.cmd == "attention" and a.attention_action == "list"):   # R37: the list writes nothing
-        from . import demo as _demo
+            and not lists_only:   # R37: a list writes nothing
+        from . import demo as _demo, tryout as _tryout
+        used = [f for f in (out, Path(getattr(a, "inbox", None) or "")) if str(f) not in ("", ".") and _tryout.is_try_folder(f)]
+        if used:   # the try run's fictional records (an approved case #1) never become real ones
+            print(f"kimeru: {used[0]} は体験（python -m kimeru try）の記録フォルダです。架空の記録に本物の記録を混ぜないよう、"
+                  "止めました。別の --out を指定するか、このフォルダを消してから実行してください", file=sys.stderr)
+            return 2
         try:   # a command that writes real records here: this folder is no longer the demo's to clear
             (out / _demo.MARK).unlink(missing_ok=True)
         except OSError:
@@ -1069,9 +1086,30 @@ def _main(argv=None):
         return 0
 
     if a.cmd == "report":
-        from . import report
+        from . import report, tryout
+        tried = out / "try"
+        if out.is_dir() and not any((out / f).exists() for f in ("decisions.jsonl", "approvals.json")) \
+                and tryout.is_try_folder(tried):
+            print(f"kimeru: {out} には判断の記録がありません。体験の記録は {tried} にあります: "
+                  f"python -m kimeru --out {tried} report", file=sys.stderr)
+            return 2
+        if not out.is_dir():
+            print(f"kimeru: 記録フォルダ {out} がありません。--out で記録のあるフォルダを指定してください"
+                  f"（体験の記録は python -m kimeru try で {tryout.DEFAULT_OUT} にできます）", file=sys.stderr)
+            return 2
         page = Path(a.html) if a.html else out / "report.html"
-        page.write_text(report.build(out, graph.load_dir(a.graphs, pbs)), encoding="utf-8")
+        if not page.parent.is_dir():
+            print(f"kimeru: {page.parent} がありません（--html の書き出し先）", file=sys.stderr)
+            return 2
+        mode = "try" if tryout.is_try_folder(out) else None
+        try:
+            html = report.build(out, graph.load_dir(a.graphs, pbs), tryout.TITLE if mode else "kimeru 判断レポート", mode=mode)
+        except (ValueError, TypeError, KeyError, AttributeError, UnicodeError) as e:
+            print(f"kimeru: {out} の記録を読めませんでした（{type(e).__name__}）。KIMERU_DEBUG=1 で詳しく出ます", file=sys.stderr)
+            if os.environ.get("KIMERU_DEBUG") == "1":
+                raise
+            return 1
+        page.write_text(html, encoding="utf-8")
         print(page)
         return 0
 
@@ -1126,7 +1164,11 @@ def _main(argv=None):
     if a.cmd == "daily":
         from . import daily
         ado = (a.ado_org, a.ado_project) if a.ado_org and a.ado_project else None
+        from . import tryout
         while True:
+            if tryout.is_try_folder(out) or tryout.is_try_folder(Path(a.inbox)):   # a try run wrote here while the loop ran
+                print(f"kimeru: 体験（try）の記録フォルダになったので止めました（{out}）", file=sys.stderr)
+                return 2
             r = daily.cycle(out, a.inbox, gs, be, pbs, process, send=a.send, ado=ado,
                             subscription=a.subscription, brief_hour=a.brief_hour, budget=a.interval, real=True)
             print(datetime.now().strftime("%H:%M"), json.dumps(r, ensure_ascii=False), flush=True)
@@ -1150,7 +1192,11 @@ def _main(argv=None):
     inbox = Path(a.inbox)
     done = inbox / "done"
     done.mkdir(parents=True, exist_ok=True)
+    from . import tryout
     while True:
+        if tryout.is_try_folder(out) or tryout.is_try_folder(inbox):   # a try run wrote here while the loop ran
+            print(f"kimeru: 体験（try）の記録フォルダになったので止めました（{out}）", file=sys.stderr)
+            return 2
         for f in events.inbox_files(inbox):
             try:
                 for r in process(events.read_inbox_file(f), gs, be, out, pbs, dedup=True):

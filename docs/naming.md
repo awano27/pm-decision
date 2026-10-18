@@ -23,4 +23,4 @@ gh search repos kimeru --limit 30 --json fullName --jq ".[].fullName"
 
 ## 共有カードの画像（Social preview）
 
-`assets/readme/social-preview.png`（1280×640、先頭画像から作成）を、GitHub のリポジトリの Settings → General → Social preview → Edit → Upload an image で設定します。設定画面からしか登録できないため、作者が手で行います。
+`assets/readme/social-preview.png`（1280×640。`assets/readme/hero.svg` から `python tools/readme_assets.py` で作る）を、GitHub のリポジトリの Settings → General → Social preview → Edit → Upload an image で設定します。設定画面からしか登録できないため、作者が手で行います。

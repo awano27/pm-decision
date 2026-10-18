@@ -53,6 +53,15 @@ class TestTheFirstScreen(unittest.TestCase):
     def test_the_hero_image_does_not_promise_a_phone(self):
         svg = (ROOT / "assets" / "readme" / "hero.svg").read_text(encoding="utf-8")
         self.assertNotIn("iPhone", svg)
+        self.assertNotIn("先回りして決める", svg)   # kimeru prepares; the PM decides (the share card is made from this picture)
+        self.assertNotIn("「決定」か「助言」", svg)
+
+    def test_what_moved_out_of_the_readme_is_still_written_in_the_usage_doc(self):
+        usage = (ROOT / "docs" / "usage.md").read_text(encoding="utf-8")
+        for text in ("run examples/teams_chat.json", "http://127.0.0.1:8009/v1", "TYPESAFE_API_KEY", "| 向いている | 向かない |",
+                     "コミット済みのファイルを使う", "**リリース延期の相談**", "**障害の通知**", "**情報不足のチケット**",
+                     "**会議後の宿題**", "判断そのものを LLM に任せたい"):
+            self.assertIn(text, usage, text)
 
     def test_the_default_judge_is_described_as_the_code_has_it(self):
         self.assertEqual(config.SETTINGS["backend"][1], "stub")

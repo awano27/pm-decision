@@ -9,11 +9,13 @@ Safe whatever the machine is set up for:
   folder is a fresh temporary one, so the user's config file, writer, judge, execute and push settings are never read;
 - the judge is always the keyword stub and the writer always the script (no --backend, no --writer);
 - while the case runs, the usual ways to start a process (subprocess, os.system / popen / spawn* / exec* / startfile, and
-  _winapi.CreateProcess on Windows) and to open a connection (socket connect / sendto, getaddrinfo) raise `Sealed`; nothing here
-  needs them, and a run that tried one ends with exit code 1. The safety rests first on the fixed parts (in-memory Teams, stub,
-  script); the seal is the second line;
-- the records go to --out (out/try by default), never to out/ or out/demo; a folder that holds anything the try run did not
-  write is left alone. The environment is put back when the run ends.
+  _winapi.CreateProcess on Windows) and to open a connection (socket connect / sendto / sendmsg, getaddrinfo, gethostby*)
+  raise `Sealed`; a direct ctypes call is not covered. Nothing here needs them, and a run that tried one ends with exit code 1.
+  The safety rests first on the fixed parts (in-memory Teams, stub, script); the seal is the second line;
+- the records go to --out (out/try by default). The folder of run and daily (out), the current folder, the state folder and a
+  folder holding anything the try run did not write are refused; the try folder carries TRY_MARK, and the other commands that
+  write records refuse it, so the fictional case #1 never mixes with real records;
+- the environment and the settings module are put back as they were when the run ends.
 """
 import json
 import os
@@ -31,6 +33,8 @@ from .backends import StubBackend
 HERE = Path(__file__).resolve().parent.parent
 SCENARIO = HERE / "examples" / "try_release_delay.json"
 DEFAULT_OUT = Path("out") / "try"
+TRY_MARK = ".kimeru-try"   # the try run's folder: other commands that write records refuse it (cli._main), the demo clears it
+TITLE = "kimeru 体験: リリース延期の相談"
 # the keys the writer CLIs read for themselves (as in tests/isolate.py); kimeru's own are config.SECRET_ENV
 WRITER_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "COPILOT_GITHUB_TOKEN")
 USAGE = "usage: python -m kimeru try [--out DIR]"
@@ -66,7 +70,10 @@ def sealed(attempts=None):
         return call
 
     saved = [(subprocess, "Popen"), (os, "system"), (os, "popen"), (socket, "create_connection"), (socket, "getaddrinfo"),
+             (socket, "gethostbyname"), (socket, "gethostbyname_ex"), (socket, "gethostbyaddr"),
              (socket.socket, "connect"), (socket.socket, "connect_ex"), (socket.socket, "sendto")]
+    if hasattr(socket.socket, "sendmsg"):   # not on Windows
+        saved.append((socket.socket, "sendmsg"))
     saved += [(os, name) for name in dir(os) if name.startswith(("spawn", "exec", "posix_spawn")) or name == "startfile"]
     try:
         import _winapi
@@ -152,6 +159,68 @@ def _not_ours(out):
     return sorted(p.name for p in out.iterdir())
 
 
+def is_try_folder(folder):
+    """True for a folder the try run wrote (it carries TRY_MARK)."""
+    try:
+        return (Path(folder) / TRY_MARK).is_file()
+    except OSError:
+        return False
+
+
+def _norm(path):
+    """One spelling per place, as far as it can be known without the place existing: the extended-length prefix (two
+    backslashes, a question mark, a backslash) dropped and the path made absolute (on Windows GetFullPathName also drops
+    trailing dots and spaces), case folded where the file system ignores case."""
+    text = str(path)
+    if text.startswith("\\\\?\\"):
+        text = text[4:]
+    return os.path.normcase(os.path.abspath(text))
+
+
+def _same(a, b):
+    """The same place: by the file system when both exist (an alias such as the administrative share of the local drive, or a
+    junction, is the same folder), else by the normalised spelling."""
+    try:
+        if os.path.exists(a) and os.path.exists(b):
+            return os.path.samefile(a, b)
+    except OSError:
+        pass
+    return _norm(a) == _norm(b)
+
+
+def _out_problem(out):
+    """Why `out` cannot hold the try run's records, or None. The folders that hold (or will hold) real records are refused even
+    when they are empty: the try run's approved case #1 would otherwise sit among them (`out` of run / daily, this folder, the
+    state folder and anything inside it)."""
+    out = Path(out)
+    if out.exists() and not out.is_dir():
+        return f"{out} はフォルダではありません"
+    normal = [(Path("out"), "run・daily の既定の記録フォルダ"), (Path.cwd(), "今のフォルダ")]
+    state = config.state_dir()
+    for place, name in normal:
+        if _same(out, place):
+            return f"{out} は {name}です。体験の記録が本物の記録に混ざらないよう、ここには書きません" if name[0].isascii() else \
+                f"{out} は{name}です。体験の記録が本物の記録に混ざらないよう、ここには書きません"
+    ancestors = [Path(_norm(out)), *Path(_norm(out)).parents]
+    if any(_same(folder, state) for folder in ancestors):
+        return f"{out} は kimeru の状態フォルダ（またはその中）です。体験の記録が本物の記録に混ざらないよう、ここには書きません"
+    other = _not_ours(out)
+    if other:
+        return f"{out} には体験以外のファイルがあります（{', '.join(other[:5])}）。触らずに止めました"
+    try:   # a name Windows cannot make (a:b, a|b, a trailing space) or a path through a file: one line here, not a traceback later
+        created = not out.exists()
+        out.mkdir(parents=True, exist_ok=True)
+        probe = out / TRY_MARK
+        if not probe.exists():
+            probe.write_text("", encoding="utf-8")
+            probe.unlink()
+        if created and not any(out.iterdir()):
+            out.rmdir()
+    except OSError as e:
+        return f"{out} にフォルダを作れません（{e.strerror or type(e).__name__}）"
+    return None
+
+
 def run(out, scenario=SCENARIO, attempts=None):
     """The case, step by step. Returns the mark of the next step (the caller writes the report)."""
     from .cli import DEFAULT_PLAYBOOKS, process   # cli imports this module lazily: no cycle
@@ -160,9 +229,12 @@ def run(out, scenario=SCENARIO, attempts=None):
     pbs = plan.load_playbooks(DEFAULT_PLAYBOOKS)
     gs = graph.load_dir(HERE / "graphs", pbs)
     demo.prepare(out)
+    (Path(out) / TRY_MARK).write_text("kimeru try output: fictional records. Other kimeru commands refuse to write here.\n",
+                                      encoding="utf-8")
     teams, writer = TryTeams(), ScriptWriter(sc)
     _w(f"=== kimeru を試す: {sc['title']}（体験モード）")
-    _w("    判断はキーワード一致の簡易ルール、返信案と足りない情報は台本の固定文です。AI モデルの推論ではありません。")
+    _w("    判断はキーワード一致の簡易ルールです。返信案・足りない情報・選択肢・次の一手と、あなたの返信は台本の固定文です。"
+       "AI モデルの推論ではありません。")
     _w("    AI モデル・外部 CLI・Teams・ADO には接続せず、外へは何も送りません。")
     with sealed(attempts):
         _w("")
@@ -197,7 +269,7 @@ def run(out, scenario=SCENARIO, attempts=None):
         _quote(teams.posts[-1])
         for step, rep in zip(MARKS, sc["replies"]):
             _w("")
-            _w(f"{step} あなたの返信: 「{rep['text']}」（{rep['label']}）")
+            _w(f"{step} あなたの返信（台本が代わりに入力）: 「{rep['text']}」（{rep['label']}）")
             before = len(teams.posts)
             teams.timeline.append("R:" + rep["text"])
             changes = notify.collect(out, teams, writer=writer, real=False, send=True)
@@ -217,10 +289,12 @@ def main(argv):
     rest.remove("try")
     while rest:
         a = rest.pop(0)
-        if a == "--out" and rest:
-            out = Path(rest.pop(0))
-        elif a.startswith("--out="):
-            out = Path(a.split("=", 1)[1])
+        if a == "--out" or a.startswith("--out="):
+            value = a.split("=", 1)[1] if "=" in a else (rest.pop(0) if rest else "")
+            if not value.strip():
+                print("kimeru: --out の後にフォルダを書いてください（例: python -m kimeru try --out out/try2）", file=sys.stderr)
+                return 2
+            out = Path(value)
         elif a in ("-h", "--help"):
             print(USAGE)
             print("体験モード: 架空の相談 1 件を、届く → 整理 → 修正 → 承認 → 記録まで、外部に接続せずに見せます。")
@@ -228,22 +302,29 @@ def main(argv):
         else:
             print(f"kimeru: try では {a} を使えません（体験モードは簡易ルールと台本だけで動きます）\n{USAGE}", file=sys.stderr)
             return 2
-    other = _not_ours(out)
-    if other:
-        print(f"kimeru: {out} には体験以外のファイルがあります（{', '.join(other[:5])}）。触らずに止めました。"
-              f"体験は空のフォルダか、既定の {DEFAULT_OUT} で実行してください", file=sys.stderr)
+    if not (HERE / "graphs").is_dir() or not SCENARIO.is_file():   # e.g. installed with pip: the data folders are not in the package
+        print("kimeru: 判断グラフか体験の台本が見つかりません。clone したフォルダ（または展開した ZIP）で python -m kimeru try を"
+              "実行してください（pip での導入には対応していません）", file=sys.stderr)
+        return 2
+    problem = _out_problem(out)
+    if problem:
+        print(f"kimeru: {problem}。体験は既定の {DEFAULT_OUT} か、空のフォルダで実行してください", file=sys.stderr)
         return 2
     saved_env = dict(os.environ)
+    saved_config = (dict(config.ARGS), dict(config._FILLED), dict(config.SOURCES), list(config.WARNINGS))
     attempts = []
     try:
         with tempfile.TemporaryDirectory(prefix="kimeru-try-state-") as state:
             dropped = isolate(state)
-            _w("    この PC の kimeru の設定ファイルは読みません" +
-               (f"。環境変数の設定・鍵（{len(dropped)} 件）も使いません" if dropped else ""))
+            _w("    この PC の kimeru の設定ファイル" + (f"と、環境変数の設定・鍵（{len(dropped)} 件）" if dropped else "") +
+               "は、この体験では使いません（終わると元に戻します）")
             try:
                 last = run(out, attempts=attempts)
             except Sealed as e:   # a regression: say it plainly instead of a traceback
                 print(f"kimeru: 体験を止めました: {e}", file=sys.stderr)
+                return 1
+            except OSError as e:   # the folder went away or filled up while the run wrote to it
+                print(f"kimeru: {out} に書けませんでした（{e.strerror or type(e).__name__}）", file=sys.stderr)
                 return 1
             if attempts:   # an attempt that something caught and went on from: still a failure of the try run
                 print(f"kimeru: 体験の途中で外部への接続・起動が試みられました（{', '.join(attempts)}）。止めて記録しました", file=sys.stderr)
@@ -252,15 +333,13 @@ def main(argv):
             from .cli import DEFAULT_PLAYBOOKS
             gs = graph.load_dir(HERE / "graphs", plan.load_playbooks(DEFAULT_PLAYBOOKS))
             page = Path(out) / "report.html"
-            page.write_text(report.build(out, gs, "kimeru 体験: リリース延期の相談", mode="try"), encoding="utf-8")
-    finally:   # the process may go on (a test, a library use): its own settings come back
+            page.write_text(report.build(out, gs, TITLE, mode="try"), encoding="utf-8")
+    finally:   # the process may go on (a test, a library use): the environment and the settings are put back as they were
         os.environ.clear()
         os.environ.update(saved_env)
-        config.ARGS.clear()
-        try:
-            config.apply([])
-        except config.ConfigError:   # the user's own file is broken: that is theirs to fix, and the try run is over
-            pass
+        for live, kept in zip((config.ARGS, config._FILLED, config.SOURCES, config.WARNINGS), saved_config):
+            live.clear()
+            live.update(kept) if isinstance(live, dict) else live.extend(kept)
     _w("")
     _w(f"{last} 判断の記録を見る")
     _w(f"    レポート: {page}  ← ブラウザで開くと、依頼・根拠・提案・あなたの確認・記録を 1 画面で追えます")

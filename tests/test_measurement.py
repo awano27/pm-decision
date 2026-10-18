@@ -30,6 +30,10 @@ def record(source="local"):
             "judge": {"name": "Kev"}, "at": READY}
 
 
+def _quiet(*_a, **_k):
+    """trial.dispatch prints Japanese; these tests read the records, not the console (cp1252 on some CI runners)."""
+
+
 class MeasurementTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -119,8 +123,8 @@ class MeasurementTests(unittest.TestCase):
         data = trial.collect(self.out)
         self.assertEqual(data.get("measurement", {}).get("adoption_observed_cases"), 0)
         self.assertEqual(data["measurement"]["eligible_draft_cases"], 1)
-        trial.dispatch(["record", "--case", "1", "--after-minutes", "4", "--draft", "unused", "--outcome", "unknown"], self.out)
-        trial.dispatch(["record", "--case", "1", "--before-minutes", "8", "--after-minutes", "3", "--draft", "edited", "--outcome", "unknown"], self.out)
+        trial.dispatch(["record", "--case", "1", "--after-minutes", "4", "--draft", "unused", "--outcome", "unknown"], self.out, print_fn=_quiet)
+        trial.dispatch(["record", "--case", "1", "--before-minutes", "8", "--after-minutes", "3", "--draft", "edited", "--outcome", "unknown"], self.out, print_fn=_quiet)
         data = trial.collect(self.out)
         self.assertEqual(data["measurement"]["adoption_observed_cases"], 1)
         self.assertEqual(data["measurement"]["adoption_rate"], 1)
@@ -236,7 +240,7 @@ class MeasurementTests(unittest.TestCase):
 
     def test_trial_observation_for_previous_proposal_is_not_current_adoption(self):
         self.post()
-        trial.dispatch(["record", "--case", "1", "--after-minutes", "3", "--draft", "unchanged", "--outcome", "unknown"], self.out)
+        trial.dispatch(["record", "--case", "1", "--after-minutes", "3", "--draft", "unchanged", "--outcome", "unknown"], self.out, print_fn=_quiet)
         notify.collect(self.out, FakeBridge(["下書き 1 確認のうえ回答します。"]), send=False)
         self.assertEqual(trial.collect(self.out)["measurement"]["adoption_observed_cases"], 0)
         html = report.build(self.out, {})
@@ -279,7 +283,7 @@ class MeasurementTests(unittest.TestCase):
         ap = notify.Approvals(self.out)
         ap.data["items"]["1"]["measurement"]["generation"] = 2
         ap.save()
-        trial.dispatch(["record", "--case", "1", "--after-minutes", "3", "--draft", "unchanged", "--outcome", "unknown"], self.out)
+        trial.dispatch(["record", "--case", "1", "--after-minutes", "3", "--draft", "unchanged", "--outcome", "unknown"], self.out, print_fn=_quiet)
         metrics = trial.collect(self.out)["measurement"]
         self.assertEqual(metrics["eligible_draft_cases"], 1)
         self.assertEqual(metrics["adoption_unknown_cases"], 1)
@@ -318,7 +322,7 @@ class MeasurementTests(unittest.TestCase):
         ap = notify.Approvals(self.out)
         ap.data["items"]["1"] = item
         ap.save()
-        self.assertEqual(trial.dispatch(["record", "--case", "1", "--after-minutes", "3", "--draft", "unchanged", "--outcome", "unknown"], self.out), 0)
+        self.assertEqual(trial.dispatch(["record", "--case", "1", "--after-minutes", "3", "--draft", "unchanged", "--outcome", "unknown"], self.out, print_fn=_quiet), 0)
         self.assertIsNone(trial.collect(self.out)["measurement"]["adoption_rate"])
 
     def test_missing_observation_generation_stays_unknown_for_generation_one(self):

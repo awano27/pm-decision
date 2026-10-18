@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from . import learn, trial
-from .writer import writer_label
+from .writer import FIELD, writer_label
 
 KIND = {"match": ("規則", "rule"), "judge": ("判断", "model"), "plan": ("進め方", "plan")}
 SRC = {"teams.chat": "Teams", "monitor.alert": "アラート", "ado.workitem.created": "ADO", "meeting.item": "議事録"}
@@ -19,8 +19,8 @@ ACTION = {"teams.reply": "Teams に返信", "teams.post": "Teams に投稿", "ad
 
 CSS = """
 :root{--bg:#f7f7f5;--card:#fff;--ink:#1d1d1b;--mute:#6b6b66;--line:#e4e3de;
---rule:#b42318;--rule-bg:#fdecea;--model:#1f4e8c;--model-bg:#e8f0fb;--plan:#6b4bb8;--plan-bg:#efeafb;
---ok:#1a7f4b;--ok-bg:#e6f4ec;--safe:#9a6700;--safe-bg:#fdf3dc;--human:#b42318;--human-bg:#fdecea}
+--rule:#b42318;--rule-bg:#fdecea;--model:#1f4e8c;--model-bg:#e8f0fb;--plan:#6342ad;--plan-bg:#efeafb;
+--ok:#16703f;--ok-bg:#e6f4ec;--safe:#7f5500;--safe-bg:#fdf3dc;--human:#b42318;--human-bg:#fdecea}
 @media (prefers-color-scheme:dark){:root{--bg:#161615;--card:#1f1f1d;--ink:#ecebe6;--mute:#a09f98;--line:#33322e;
 --rule:#ff8a80;--rule-bg:#3a1f1c;--model:#8ab4f8;--model-bg:#1c2a3d;--plan:#c3b0f5;--plan-bg:#2a2340;
 --ok:#6fd49c;--ok-bg:#16301f;--safe:#f0c35a;--safe-bg:#342a12;--human:#ff8a80;--human-bg:#3a1f1c}}
@@ -58,13 +58,32 @@ blockquote{margin:4px 0;padding:8px 12px;border-left:3px solid var(--line);backg
 details{margin:28px 0 0;border-top:1px solid var(--line);padding-top:8px}summary{cursor:pointer;color:var(--mute);font-size:14px;padding:6px 0}
 :focus-visible{outline:3px solid var(--model);outline-offset:2px}
 .empty{background:var(--card);border:1px dashed var(--line);border-radius:10px;padding:18px}
-@media (max-width:560px){main{padding:18px 12px 40px}.tiles{grid-template-columns:repeat(2,1fr)}.flow>li{padding-left:22px}.case{padding:14px 12px}}
+@media (max-width:560px){main{padding:18px 12px 40px}.tiles{grid-template-columns:repeat(2,1fr)}.flow>li{padding-left:22px}.case{padding:14px 12px}.chip{white-space:normal}.st{display:block;width:fit-content;max-width:100%}}
+h1,h3,.sum,.head,.tile span{overflow-wrap:anywhere}
 """
 
 
+SKIPPED = {}   # file name -> lines that could not be read in the last build (shown at the top of the page)
+
+
 def _rows(p):
+    """The JSON lines of a record file; a line that cannot be read is skipped and counted (a half-written last line, a hand edit)."""
     p = Path(p)
-    return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()] if p.exists() else []
+    if not p.exists():
+        return []
+    rows = []
+    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            row = None
+        if isinstance(row, dict):
+            rows.append(row)
+        else:
+            SKIPPED[p.name] = SKIPPED.get(p.name, 0) + 1
+    return rows
 
 
 def _e(s):
@@ -227,7 +246,7 @@ def _execution_label(row):
     state = row.get("state")
     labels = {"done": "実行確認済み", "closed": "本人が確認して終了（API実行の確認ではない）",
               "skipped": "実行対象外・未実行", "failed": "実行失敗", "running": "結果不明（実行中記録）",
-              "unknown": "結果不明"}
+              "unknown": "結果不明", "requested": "送信待ち（次の --send の実行で 1 回送る）"}
     label = labels.get(state, "結果不明")
     result = row.get("result") or {}
     if state == "done" and result.get("comment_id") is not None:
@@ -254,7 +273,8 @@ def _io_note(out, ap, executions):
 DECISION = {"pending": ("⏳", "確認待ち（まだ決めていない）"), "held": ("⏸", "保留"), "approved": ("✔", "承認済み"),
             "rejected": ("✖", "却下")}
 WORK = {"approved": "未着手", "in_progress": "作業中", "done": "作業完了", "blocked": "停止中"}
-TRY_NOTICE = ("体験モードの記録です。判断はキーワード一致の簡易ルール、返信案と足りない情報は台本の固定文で、AI モデルの推論ではありません。"
+TRY_NOTICE = ("体験モードの記録です。判断はキーワード一致の簡易ルールです。要点・足りない情報・選択肢・返信案と、確認の返信（詳細・修正・OK）は"
+              "台本の固定文で、AI モデルの推論でも、あなたの操作でもありません。"
               "経路に出る 0.85・0.90 などの値は簡易ルールの固定値で、確率や正解率ではありません。Teams・ADO・AI モデルには接続しておらず、"
               "外へは何も送っていません。")
 LOGGED = {"redrafted": "修正を指示 → 返信案を書き直し", "redraft_failed": "修正を指示 → 書き直せず（元の案のまま）",
@@ -290,17 +310,19 @@ def _chip_ja(s, kinds):
         v = edge
     if edge == "unsure":
         v += " → 確信なし・人へ"
-    return f'<span class="chip {cls}" title="{_e(s["node"])}">{_e(label)}・{_e(name)}: {_e(v)}</span>'
+    head = f"{label}・{name}" if s["node"] in NODE else label
+    return f'<span class="chip {cls}" title="{_e(s["node"])}">{_e(head)}: {_e(v)}</span>'
 
 
-def _timeline(out, number, item):
-    """The PM's side of case #number, in order: each post of a proposal, and what the PM answered to it."""
+def _timeline(log, number, item):
+    """The PM's side of case #number, in order: each post of a proposal, and what the PM answered to it (`log`: the rows of
+    approvals.log.jsonl, read once for the page)."""
     steps = []
     for m in [*(item.get("measurement_history") or []), _metadata(item.get("measurement"))]:
         if isinstance(m, dict) and m.get("posted_at"):
             gen = _int(m.get("generation"))
             steps.append(((gen, 0), m["posted_at"], f"確認を依頼（自分とのチャットへ投稿・案 {gen}）"))
-    for row in _rows(Path(out) / "approvals.log.jsonl"):
+    for row in log:
         if str(row.get("id")) != str(number):
             continue
         gen = _int(_metadata(row.get("measurement")).get("generation"))
@@ -333,30 +355,43 @@ def _clock(value):
     return datetime.fromtimestamp(parsed).strftime("%m/%d %H:%M") if parsed is not None else "時刻不明"
 
 
+NOT_RUN = {"pending": "承認待ちのため", "held": "保留中のため", "rejected": "却下したため"}
+
+
+def _reply_state(item, index, executions):
+    """(mark, words, css class) for the reply to the sender at `index` of the case: an execution record, else the case's status,
+    else the PM's own `送った N`; never the approval alone. The words have no "相手への返信:" in front."""
+    own = (item.get("exec") or {}).get(str(index)) or {}
+    row = executions.get(str(own.get("key"))) if own.get("key") else None
+    state = (row or own).get("state")
+    if (row or {}).get("conflict") or state in ("running", "unknown"):
+        return ("?", "送信結果不明（自動では送り直さない）", "")
+    known = {"done": ("✉", "送信済み（実行記録あり）", ""), "failed": ("!", "送信失敗", ""),
+             "requested": ("…", "送信待ち（次の --send の実行で 1 回送る）", "wait"),
+             "closed": ("✔", "本人が確認して終了（送信の記録ではない）", ""), "skipped": ("—", "対象外のため送っていない", "")}
+    if state in known:
+        return known[state]
+    status = item.get("status")
+    if status in NOT_RUN:
+        return ("—", NOT_RUN[status] + "送っていない", "" if status == "rejected" else "wait")
+    if status != "approved":
+        return ("?", "判断の状態が不明のため送っていない", "")
+    if item.get("sent_confirmed"):
+        return ("✔", "本人が「送った」と記録（kimeru は送っていない）", "")
+    return ("—", "送っていない（記録だけ）", "wait")
+
+
 def _sent_state(item, executions):
-    """What happened to the reply to the sender: an execution record (or the PM's own `送った N`) says it, never the approval."""
     for index, action in enumerate((item.get("record") or {}).get("actions") or []):
-        if action.get("type") != "teams.reply":
-            continue
-        own = (item.get("exec") or {}).get(str(index)) or {}
-        row = executions.get(str(own.get("key"))) if own.get("key") else None
-        state = (row or own).get("state")
-        if (row or {}).get("conflict") or state in ("running", "unknown"):
-            return ("?", "相手への返信: 送信結果不明（自動では送り直さない）", "")
-        if state == "done":
-            return ("✉", "相手への返信: 送信済み（実行記録あり）", "")
-        if state == "failed":
-            return ("!", "相手への返信: 送信失敗", "")
-        if state == "requested":
-            return ("…", "相手への返信: 送信待ち（次の --send の実行で 1 回送る）", "wait")
-        if state == "closed":
-            return ("✔", "相手への返信: 本人が確認して終了（送信の記録ではない）", "")
-        if state == "skipped":
-            return ("—", "相手への返信: 対象外のため送っていない", "")
-        if item.get("sent_confirmed"):
-            return ("✔", "相手への返信: 本人が「送った」と記録（kimeru は送っていない）", "")
-        return ("—", "相手への返信: 送っていない（記録だけ）", "wait")
+        if action.get("type") == "teams.reply":
+            mark, words, cls = _reply_state(item, index, executions)
+            return (mark, "相手への返信: " + words, cls)
     return None
+
+
+def _drafted_texts(actions):
+    """The texts a rewrite (修正 N, 聞き返し N) can change, in order: what tells a rewritten case from one that was only posted again."""
+    return [(a.get("type"), a.get(FIELD[a["type"]])) for a in actions or [] if isinstance(a, dict) and a.get("type") in FIELD]
 
 
 def _post_state(item):
@@ -371,7 +406,7 @@ def _post_state(item):
     return ("✔", "自分とのチャットへの投稿: 読み戻しで確認済み", "")
 
 
-def _flow(out, number, item, kinds, executions, mode):
+def _flow(log, number, item, kinds, executions, mode):
     """One case on one screen: the request, what kimeru read, the proposal, the PM's check, the record."""
     record = item.get("record") or {}
     event = record.get("event") or {}
@@ -381,9 +416,9 @@ def _flow(out, number, item, kinds, executions, mode):
     body = event.get("text") or event.get("item") or event.get("title") or record.get("summary") or ""
     parts = [f"<section class='case'><h3>#{_e(number)} {_e(record.get('summary') or body)}</h3><ol class='flow'>",
              f"<li><h3>依頼<span>{_e(src)}{' ・ ' + _e(who) if who else ''}</span></h3><blockquote>{_e(body)}</blockquote></li>"]
-    chips = "".join(_chip_ja(s, kinds) for s in record.get("path") or [])
+    chips = "".join(_chip_ja(s, kinds) for s in record.get("path") or [] if isinstance(s, dict) and "node" in s and "edge" in s)
     missing = "".join(f"<li>{_e(m)}</li>" for m in memo.get("missing") or [])
-    parts.append("<li><h3>根拠<span>kimeru が読み取ったこと</span></h3>"
+    parts.append(f"<li><h3>根拠<span>{'台本の要点と簡易ルールの経路（AI ではない）' if mode == 'try' else 'kimeru が読み取ったこと'}</span></h3>"
                  + (f"<p>{_e(memo['summary'])}</p>" if memo.get("summary") else "")
                  + f"<div class='path'>{chips}</div>"
                  + (f"<p><b>足りない情報</b></p><ul>{missing}</ul>" if missing else "")
@@ -406,7 +441,7 @@ def _flow(out, number, item, kinds, executions, mode):
                  + "".join(drafts)
                  + (f"<p><b>承認後の計画</b>（既定は記録だけ。ADO・Teams には書かない）</p><ul>{later}</ul>" if later else "") + "</li>")
     options = "".join(f"<li>{_e(o)}</li>" for o in memo.get("options") or [])
-    history = "".join(f"<li><span class='who'>{_e(_clock(at))}</span> {_e(text)}</li>" for at, text in _timeline(out, number, item))
+    history = "".join(f"<li><span class='who'>{_e(_clock(at))}</span> {_e(text)}</li>" for at, text in _timeline(log, number, item))
     parts.append("<li><h3>人の確認<span>決めるのはあなた</span></h3>"
                  + (f"<p><b>人が決めること</b></p><ul>{options}</ul>" if options else "")
                  + (f"<p><b>確認の履歴</b></p><ul>{history}</ul>" if history else "<p>まだ確認していません。</p>") + "</li>")
@@ -429,11 +464,39 @@ def _flow(out, number, item, kinds, executions, mode):
     return "".join(parts)
 
 
+def _approvals(out):
+    """approvals.json, else its .bak (as notify reads it), else nothing; a broken file is named at the top of the page."""
+    for name in ("approvals.json", "approvals.json.bak"):
+        p = Path(out) / name
+        if not p.exists():
+            continue
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except ValueError:
+            SKIPPED[name] = SKIPPED.get(name, 0) + 1
+            continue
+        if isinstance(data, dict) and isinstance(data.get("items", {}), dict):
+            items = {k: v for k, v in data.get("items", {}).items()
+                     if isinstance(v, dict) and isinstance(v.get("record", {}), dict)}
+            if len(items) < len(data.get("items", {})):
+                SKIPPED[name] = SKIPPED.get(name, 0) + len(data["items"]) - len(items)
+            return {**data, "items": items}
+        SKIPPED[name] = SKIPPED.get(name, 0) + 1
+    return {"items": {}}
+
+
 def build(out, graphs, title="kimeru 判断レポート", mode=None):
     """The page. mode="try": the page of `kimeru try` (says that the judge is the keyword stub and the texts a script)."""
     out = Path(out)
-    decisions = _rows(out / "decisions.jsonl")
-    ap = json.loads((out / "approvals.json").read_text(encoding="utf-8")) if (out / "approvals.json").exists() else {"items": {}}
+    SKIPPED.clear()
+    decisions = []
+    for r in _rows(out / "decisions.jsonl"):
+        if isinstance(r.get("path"), list) and all(isinstance(x, dict) and "node" in x and "edge" in x for x in r["path"]):
+            decisions.append(r)
+        else:
+            SKIPPED["decisions.jsonl"] = SKIPPED.get("decisions.jsonl", 0) + 1
+    log = _rows(out / "approvals.log.jsonl")
+    ap = _approvals(out)
     ap = {**ap, "items": learn.cases(ap.get("items", {}))}   # R21: the cards are no case of the report
     by_key, by_event = _case_indexes(out, ap.get("items", {}))
     executions = _execution_states(out, ap.get("items", {}))
@@ -464,22 +527,29 @@ def build(out, graphs, title="kimeru 判断レポート", mode=None):
              "kimeru は案を用意して記録するだけで、決めるのも相手へ送るのもあなたです。</p>"]
     if mode == "try":
         parts.append(f"<div class='notice' role='note'><b>体験モード</b>{_e(TRY_NOTICE)}</div>")
+    notice_at = len(parts)   # the note on unreadable records goes here once every file has been read (see the end)
     if not decisions and not ap["items"]:
         parts.append("<p class='empty'>まだ判断の記録がありません。<code>python -m kimeru try</code> で、架空の相談 1 件の記録を作れます。</p>")
     if ap["items"]:
         parts.append("<h2>あなたの確認に回った件</h2>")
-        parts += [_flow(out, number, item, kinds, executions, mode) for number, item in ap["items"].items()]
+        parts += [_flow(log, number, item, kinds, executions, mode) for number, item in ap["items"].items()]
     if decisions:
         parts += ["<h2>判断したすべての件</h2>",
                   "<p class='note'>自動で決めた件も含む、判断の全記録です。書き直す前の案も、そのときの記録として残ります。</p>",
                   "<div class='tiles'>" + "".join(f"<div class='tile'><b>{v}</b><span>{_e(l)}</span></div>" for v, l in tiles) + "</div>",
-                  "<div class='legend'><span class='chip rule'>規則</span><span class='chip model'>判断（モデル）</span><span class='chip plan'>進め方</span>"
+                  "<div class='legend'><span class='chip rule'>規則</span><span class='chip model'>"
+                  + ("判断（簡易ルール）" if mode == "try" or all((r.get("judge") or {}).get("name") == "StubBackend" for r in decisions)
+                     else "判断（モデル）") + "</span><span class='chip plan'>進め方</span>"
                   "<span class='badge ok'>自動</span><span class='badge safe'>安全側</span><span class='badge human'>人の確認</span></div>"]
-    evidence = trial.collect(out)
+    try:
+        coverage = trial.render(trial.collect(out))
+    except (ValueError, TypeError, KeyError, AttributeError):   # trial reads the records again; one of the wrong shape ends here
+        coverage = "Unknown: the records could not be read for the measurement summary"
+        SKIPPED["approvals.json"] = SKIPPED.get("approvals.json", 0)
     details = ["<details><summary>計測の詳細（英語・開発者向け）</summary>",
                "<p class='plan'>" + _e(_io_note(out, ap, executions)) + "</p>",
                "<section class='ev'><h2>Measurement coverage</h2><pre style='white-space:pre-wrap'>" +
-               _e(trial.render(evidence)) + "</pre><p class='plan'>Trace: decisions.jsonl (ready/runtime/provenance), "
+               _e(coverage) + "</pre><p class='plan'>Trace: decisions.jsonl (ready/runtime/provenance), "
                "approvals.json and approvals.log.jsonl (proposal posting/accepted OK), trial.json (explicit observations). "
                "Unknown is missing evidence; no business efficiency gain is established.</p></section>"]
     for number, item in ap["items"].items():
@@ -510,11 +580,11 @@ def build(out, graphs, title="kimeru 判断レポート", mode=None):
                            f"{_e({'approved': '承認', 'rejected': '却下', 'held': '保留', 'pending': '返信待ち'}.get(st, st))}")
                 if st == "approved":
                     progress = item.get("work") if isinstance(item.get("work"), dict) else {}
-                    state = progress.get("state") or "Unknown"
-                    ap_note += f" ・ 作業進捗: {_e(state)}"
+                    state = progress.get("state")
+                    ap_note += f" ・ 作業進捗: {_e(WORK.get(state, f'状態不明（{state}）') if state else '記録なし')}"
         parts.append(f"<section class='ev {c}'><div class='head'><span class='src'>{_e(SRC.get(r.get('event_kind'), r.get('event_kind')))}</span>"
                      f"<span class='sum'>{_e(r.get('summary') or r.get('event_id'))}</span></div>")
-        parts.append("<div class='path'>" + "".join(_chip(s, kinds) for s in r["path"]) + "</div>")
+        parts.append("<div class='path'>" + "".join(_chip_ja(s, kinds) for s in r["path"]) + "</div>")
         generation = timing.get("generation")
         source = "synthetic demo" if timing.get("source") == "demo" else "local/legacy (not business-effect evidence)"
         matched = found[1] if found else {}
@@ -523,7 +593,10 @@ def build(out, graphs, title="kimeru 判断レポート", mode=None):
         observations = [_metadata(matched.get("measurement")), *history]
         observed = next((m for m in observations if trial.measurement_valid(matched, m, timing)), {})
         posted, approved = _verified_times(matched, observed, timing)
-        if generation is not None and generation != _metadata(matched.get("measurement")).get("generation") and matched:
+        newer = bool(matched) and generation is not None and generation != _metadata(matched.get("measurement")).get("generation")
+        # a newer proposal is a rewrite only when a drafted text changed (a held case shown again, or a post made again, is not)
+        superseded = newer and _drafted_texts(r.get("actions")) != _drafted_texts((matched.get("record") or {}).get("actions"))
+        if newer:
             details.append(f"<p class='plan'>{_e(r.get('summary') or r.get('event_id'))}: superseded proposal: case status "
                            "refers to the current proposal, not approval of this older generation.</p>")
         details.append("<p class='plan'>" + _e(f"{r.get('summary') or r.get('event_id')}: Measurement: {source}; generation {generation if generation is not None else 'Unknown'}; "
@@ -535,6 +608,7 @@ def build(out, graphs, title="kimeru 判断レポート", mode=None):
             parts.append(f"<div class='plan'>進め方: {_e(r['plan']['title'])}<ol>{steps}</ol></div>")
         acts = r.get("actions") or []
         exec_rows = []
+        status = (current_item or {}).get("status")
         if current_item:
             current_record = current_item.get("record") or {}
             for index, action in enumerate(current_record.get("actions") or []):
@@ -544,17 +618,34 @@ def build(out, graphs, title="kimeru 判断レポート", mode=None):
                     from . import execute
                     exec_key = execute.idem_key(current_item["key"], index, action)
                 evidence = executions.get(str(exec_key)) if exec_key else None
-                if evidence:
+                if action.get("type") == "teams.reply":   # the same words as the case card above
+                    exec_rows.append((action, _reply_state(current_item, index, executions)[1]))
+                elif evidence:
                     exec_rows.append((action, _execution_label(evidence)))
                 elif action:
-                    label = "実行対象外・未実行" if action.get("exec_skip") else "予定（dry-run／実行記録との対応は未確認）"
+                    if action.get("exec_skip"):
+                        label = "実行対象外・未実行"
+                    elif status in NOT_RUN:
+                        label = NOT_RUN[status] + ("実行しない" if status == "rejected" else "未実行")
+                    elif status == "approved":
+                        label = "予定（記録だけ。実行の記録とは対応づいていない）"
+                    else:
+                        label = "判断の状態が不明のため未実行"
                     exec_rows.append((action, label))
         elif acts and found and not current:
             acts = []  # a superseded decision does not inherit its successor's execution state
-        verb = "承認後の計画（外部書き込みは既定で記録のみ）" if c == "human" else "記録された計画"
+        if superseded:   # an earlier draft of a case that was rewritten: the approval (if any) is of the current one
+            verb = "書き直し前の案（承認の対象ではない）"
+            ap_note += f" ・ 書き直し前の案（今の案は {_e(_int(_metadata(matched.get('measurement')).get('generation')))}）"
+        else:
+            verb = "承認後の計画（外部書き込みは既定で記録のみ）" if c == "human" else "記録された計画"
         parts.append(f"<div class='out'><span class='badge {c}'>{badge}</span>{ap_note}"
                      + (f"<ul>{''.join('<li>' + _e(verb) + ' — ' + _e(_action(a)) + '</li>' for a in acts)}</ul>" if acts else "")
                      + (f"<ul>{''.join('<li>' + _e(label) + ' — ' + _e(_action(action)) + '</li>' for action, label in exec_rows)}</ul>" if exec_rows else "")
                      + (f"<p class='plan'>メモ: {_e(r['advice'])}</p>" if r.get("advice") else "") + "</div></section>")
+    if SKIPPED:   # every record has been read by now (the case cards and the measurement summary included)
+        broken = "、".join(f"{name} の {n} 件" for name, n in SKIPPED.items() if n) or "記録の一部"
+        parts.insert(notice_at, f"<div class='notice' role='alert'><b>読めない記録がありました</b>{_e(broken)}を飛ばして表示しています。"
+                                "ファイルが書き込み途中だったか、壊れています。</div>")
     parts += details + ["</details></main></body></html>"]
     return "".join(parts)

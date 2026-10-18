@@ -178,7 +178,7 @@ class TestReportStateViews(unittest.TestCase):
                  "result": {"comment_id": 100}},
             ]})
             self.assertIn("実行確認済み: 1", text)  # historical evidence remains visible globally
-            self.assertIn("予定（dry-run／実行記録との対応は未確認）", text)
+            self.assertIn("予定（記録だけ。実行の記録とは対応づいていない）", text)
             self.assertEqual(text.count("ADO コメント 100"), 1)  # summary only; no current-action attribution
 
     def test_conflicting_and_legacy_unknown_delivery_states_do_not_expose_body(self):
@@ -233,7 +233,7 @@ class TestReportStateViews(unittest.TestCase):
             self.assertIn("改訂 2 で置換済み", text)
             self.assertIn("現計画", text)
             self.assertIn("別グラフの計画", text)
-            self.assertIn("作業進捗: in_progress", text)
+            self.assertIn("作業進捗: 作業中", text)
             self.assertEqual(text.count("ADO コメント 100"), 2)  # one summary, one current-case detail
 
     def test_reused_event_key_without_revision_is_history_only(self):

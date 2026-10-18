@@ -138,12 +138,12 @@ def show_result(r, graphs, pace):
         elif "choice" in a:
             note = f"{a['choice']}（確信度 {a.get('confidence', 0):.2f}）"
         elif "noul" in a:
-            note = f"はい の確率 {a['noul']:.2f}"
+            note = f"「はい」の値 {a['noul']:.2f}"
         elif "score" in a:
             note = f"{a['score']:.2f}（確信度 {a.get('confidence', 0):.2f}）"
         else:
             note = ""
-        edge = "確信なし → 安全側へ" if s["edge"] == "unsure" else s["edge"]
+        edge = "確信なし（迷ったときの経路へ）" if s["edge"] == "unsure" else s["edge"]
         _w(f"      [{KIND_LABEL.get(kind, kind)}] {s['node']}: {note}  → {edge}", pace / 3)
     if r.get("plan"):
         _w(f"      進め方: {r['plan']['title']}", pace / 3)
@@ -208,6 +208,7 @@ def prepare(out, fresh=False):
     else:
         for f in present:   # the previous demo's own files, .bak included, so its approvals start from #1
             (out / f).unlink()
+        (out / ".kimeru-try").unlink(missing_ok=True)   # a try run's folder (tryout.TRY_MARK) becomes a demo folder again
     out.mkdir(parents=True, exist_ok=True)
     (out / MARK).write_text("kimeru demo output: this folder is cleared by the next demo\n", encoding="utf-8")
 
@@ -227,6 +228,7 @@ def run(scenario, graphs, backend, playbooks, process, out, pace=1.5, step=False
     if name == "StubBackend":
         name += "（キーワードの簡易判定）"
     _w(f"=== {sc['title']}  （判断: {name}、Teams はデモ用の模擬）", pace)
+    _w("    確信度などの数字は、簡易判定では固定値、判断モデルでは人へ回すかを決めるための値で、正解の確率ではありません", pace / 3)
     for st in sc["steps"]:
         _w("")
         _wait()

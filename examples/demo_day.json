@@ -116,12 +116,8 @@
     {
       "time": "11:08",
       "source": "reply",
-      "label": "iPhone から返信（2 件 OK、1 件は保留）",
-      "replies": [
-        "OK",
-        "保留",
-        "OK"
-      ]
+      "label": "iPhone から返信（確認待ちの件すべてに OK）",
+      "reply": "OK"
     },
     {
       "time": "翌 08:00",

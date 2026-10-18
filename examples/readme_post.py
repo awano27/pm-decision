@@ -1,8 +1,8 @@
-"""Print the self-chat post that README.md shows under 「実際には、こう見える」.
+"""Print the self-chat post that docs/usage.md shows under 「Teams では、こう使う」.
 
 The judgment is the offline keyword judge; the memo and the drafts come from a scripted writer that stands in for
 Copilot, so the example is reproducible without any account: the texts are illustrative, the layout is the real
-one (`kimeru.notify.format_post`). tests/test_readme_samples.py checks that README.md shows exactly this.
+one (`kimeru.notify.format_post`). tests/test_readme_samples.py checks that docs/usage.md shows exactly this.
 
     python examples/readme_post.py
 """

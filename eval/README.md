@@ -47,7 +47,15 @@ rule-first nodes): 124 decided correctly, 70 sent to a human, 3 confidently wron
 (the rest are decided by match nodes): 121 correct / 51 to a human / 3 confidently wrong with the `kev`
 profile, top-1 89%, median 3.9 s per request (CPU, 2026-09-27).
 Lesson: a profile tuned on the first 39 events (0.8 / 0.75) looked better there but added confidently-wrong
-decisions on 60 held-out events (3 -> 7). Always check a tuned profile on events it was not tuned on.
+decisions on 60 held-out events (3 -> 7; the other 60 of fixtures.jsonl, not fixtures_holdout.jsonl). Always check a tuned
+profile on events it was not tuned on. The `kev` profile in use (1.0 / 0.95) was chosen on all 99 events of fixtures.jsonl
+(before fixtures_holdout.jsonl existed) and has not been checked on events unused in development (the 48 held-out events
+were used for the question wording and the guard).
+
+How e2e.py scores: the expected path of an event answers each labeled judgment with its label and every other question with the
+model's own answer, so an unlabeled question is never scored. "Correct" means the labeled judgments did not change the final
+action, not that every question was answered right. An event with no labeled judgment on its path is always "correct", and
+"to-human" counts only the events that differ from the expected path and went to a person (e2e.py does not count the former yet).
 
 Current scoring (2026-10-06, commit cb13df1, Kev-4B, CPU bf16): 65 correct / 22 human / 10 fallback / 2 wrong / 0 severe on
 the 99 events; 37 / 10 / 0 / 1 / 0 on the 48 held-out events. Details: docs/evaluation.md.
@@ -70,7 +78,7 @@ without the earlier messages 1 correct / 3 human / 0 wrong; with them (`judge_co
 Values below were recorded before the C09 scoring change.
 After rule-first nodes and sharper criteria (e2e, final action): 62 correct / 25 human / 12 fallback / 0 wrong
 on the 99 events, 29 / 6 / 0 / 1 on `fixtures_holdout.jsonl` (36 events; not untouched: the Teams wording and the
-minutes options were picked on them the day they were added, see "Where the data was used" below;
+minutes options were picked on them the day they were added, see "Where the data was used" above;
 `python eval/e2e.py --backend kev --fixtures fixtures_holdout.jsonl`).
 Re-measured 2026-09-27 with stricter e2e scoring (correct = same terminal *and* same actions, including the
 playbook; to-human = actually queued for the PM): unchanged. The 9 playbook disagreements all ended at a
@@ -85,7 +93,8 @@ a Sev0/Sev1 alert that the model rates below an outage to a person. With the gua
 
 CLM v0.1-8B (Contrastive-LM, Qwen3-8B Q8_0 embeddings via llama.cpp on CPU, ~1-2 s per question) was tried as
 a backend: 26 / 44 / 14 / 15 wrong (2 severe misses) on the 99 events, 9 / 23 / 3 / 1 on the held-out set;
-top-1 per question 49% vs Kev 85%. Its reference head is trained on coding-agent trajectories, and on these
+top-1 per question 49% vs Kev 85% in that comparison run (the 89% above is the 2026-09-27 run of the
+175 labeled questions). Its reference head is trained on coding-agent trajectories, and on these
 Japanese PM questions it collapses score answers to the middle. Not used.
 
 ## Question-writing rules learned from this eval

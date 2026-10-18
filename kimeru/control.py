@@ -7,7 +7,7 @@ that line moves the mode: a line that is already on the screen at the first sigh
 does a line that stays. Setting control_words=0 makes both words mean nothing.
 
 Stopping is in one direction only: it reduces what kimeru does. While it is stopped, the notices that would reach the PM (Sev0/1
-included) do not come; the README and SECURITY.md say so.
+included) do not come; docs/usage.md (止める・消す) and SECURITY.md say so.
 
 R27 (quiet_words=1, read only with control_words=1): the line 休み <いつ> (for example 休み 15時 or 休み 明日; the time words are those
 of hold.parse_when) sets mode quiet until that time. While it lasts, the PC notification and the push hold what is not urgent

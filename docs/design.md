@@ -10,7 +10,8 @@ flowchart TD
     M -- "重大事象など" --> DEC["決定（記録・通知の対象）"]
     M -- "該当なし" --> J{"判断モデル（judge・plan ノード）<br/>型付きの答えと確信度だけ"}
     J -- "しきい値を超えた" --> DEC
-    J -- "迷い・壊れた答え（unsure 辺）" --> ASK["人の確認へ"]
+    J -- "迷い・壊れた答え（unsure 辺。多くの質問）" --> ASK["人の確認へ"]
+    J -. "迷い・壊れた答え（質問によっては人に聞かず、次の判断か、決めておいた行動へ。下の表）" .-> DEC
     DEC -- "文面のある行動" --> W["文章生成（writer・任意）<br/>返信案・メモを埋めるだけ"]
     DEC -. "承認の要る行動が無い件（writer 未設定など）" .-> LOG[("計画を記録するだけ")]
     W --> ASK
@@ -34,7 +35,24 @@ flowchart TD
 - **壊れた答え**: 型違い・選択肢外・範囲外の確率は `BackendAnswerError` として扱い、`unsure` 辺へ進みます。試験: [test_severe_guards.py](../tests/test_severe_guards.py) の `test_malformed_answer_takes_the_unsure_route`。
 - **重大事象と答えの食い違い**: Sev0/1 のアラートや優先度 1 の作業項目で、モデルが軽く評価したときは人へ回します（`guards`）。重大事象は、どの経路でも通知の対象に引き上げます（`severe`）。試験: [test_match_rules.py](../tests/test_match_rules.py) の `test_sev1_rated_low_goes_to_a_person`、[test_severe_guards.py](../tests/test_severe_guards.py)。
 - **情報不足**: ADO の作業項目は「着手できるか」で「いいえ」なら、再現手順や受け入れ条件を聞くコメント案を承認待ちにします（[graphs/ado_workitem.json](../graphs/ado_workitem.json) の `request_info`）。議事録の行で種類を決めきれないものは確認待ちにします（[graphs/meeting_item.json](../graphs/meeting_item.json) の `check_line`）。試験: [test_judgment_gaps.py](../tests/test_judgment_gaps.py)、[test_judge_rules.py](../tests/test_judge_rules.py)。
-- **制約**: ADO で「着手できるか」に迷った（`unsure`）ときは、人へ回さず優先度の判断へ進みます。その件は朝のまとめに「迷って決めた件」として出ます（`via_unsure`）。
+- **迷っても人に聞かずに進む経路**: `unsure` 辺の行き先は質問ごとに決めてあり、すべてが人の確認ではありません。同梱のグラフでは次のとおりです（`graphs/*.json` の `routes.unsure`）。確認も通知も出さずに決めた件は、朝のまとめに「迷って自動で決めた件（確かめてください）」として出ます（`via_unsure`）。
+
+| グラフ | 迷った質問 | 迷ったときの行き先 |
+|---|---|---|
+| ADO（`workitem-intake`） | 着手できるか（`ready`） | 優先度の判断へ進む（人へは回さない） |
+| ADO | 優先度（`priority`） | 人の確認 |
+| 議事録（`minutes-followup`） | 行の種類（`item_type`） | 人の確認 |
+| 議事録 | 担当者がいるか・期限があるか（`has_owner`・`has_due`） | 担当か期限が未定のタスク（`needs-owner` の札）として記録する（人には聞かない） |
+| 議事録 | リスクの進め方の型（`plan_risk`） | リスクの記録だけにする |
+| アラート（`alert-triage`） | 影響（`impact`）・将来のリスクの期限（`horizon`） | 人の確認 |
+| アラート | 出たり消えたりのノイズか（`noise_check`） | 社内のタスクにする |
+| アラート | 障害対応の型（`plan_incident`） | 当番の呼び出しを計画し、通知の対象にする |
+| アラート | 将来のリスクか（`future_risk`） | 影響の判断へ進む |
+| Teams（`teams-chat-triage`） | 依頼の種類（`intent`）・要件の進め方（`plan_requirements`） | 人の確認 |
+| Teams | 急ぎ度（`urgency`） | 「今日中に判断」として計画し、通知の対象にする |
+| Teams | 判断の進め方の型（`plan_decision`） | 急ぎ度の判断へ進む |
+
+  どの行き先でも、文面のある行動（返信・コメント）は writer を設定していれば承認を待ち、外部への実行は設定で有効にした種類だけです。
 
 **確信度の扱い**: 判断モデルの確信度は、人へ回すかを決めるしきい値に使う値です。正解の確率としては扱いません。判断モデルごとに確信度の出方が違うため、係数（[profiles.py](../kimeru/profiles.py) の `conf_scale`・`noul_scale`）で揃え、利用者が正誤を付けた記録があれば `kimeru calibrate` で、データを半分に分けて確かめたうえで、慎重な向きの変更だけを提案します（[calibrate.py](../kimeru/calibrate.py)、試験: [test_review_stats.py](../tests/test_review_stats.py) の `TestCalibrate`）。確信度が実際の正解率とどれだけ合うかは、まだ測っていません。
 
@@ -104,8 +122,9 @@ flowchart LR
 
 1. `KIMERU_*` の環境変数と、kimeru・writer の鍵（`TYPESAFE_API_KEY` など）をこのプロセスから外し、状態フォルダを空の一時フォルダにする（利用者の `config.json` を読まない・書かない）
 2. 判断は簡易判定（stub）、文面は台本（`ScriptWriter`）に固定する（`--backend` などの指定は受け付けない）
-3. 処理中は、Python からのプロセスの起動（`subprocess`・`os.system`・`os.popen`・`os.spawn*`・`os.exec*`・`os.startfile`、Windows の `_winapi.CreateProcess`）とネットワーク接続（`socket` の `connect`・`sendto`・`getaddrinfo`）を止める。試みが途中で握りつぶされても、終了コード 1 にする
-4. 出力は `out\try` だけ。体験が書いたもの以外があるフォルダには書かない。終わると環境変数と設定を元に戻す
+3. 処理中は、Python からのプロセスの起動（`subprocess`・`os.system`・`os.popen`・`os.spawn*`・`os.exec*`・`os.startfile`、Windows の `_winapi.CreateProcess`）とネットワーク接続（`socket` の `connect`・`sendto`・`sendmsg`・`getaddrinfo`・`gethostbyname` など）を止める。試みが途中で握りつぶされても、終了コード 1 にする。`ctypes` で OS を直接呼ぶ経路は対象外
+4. 出力は `out\try` と、終わると消す一時フォルダだけ。run・daily の記録フォルダ（`out`）・今のフォルダ・状態フォルダ（とその中）は、空でも断る。体験が書いたもの以外があるフォルダも断る。同じ場所の別の書き方（`out.`、`\\?\` 付き、大文字と小文字の違い、すでにある場所への別名）も、正規化と実体の比較で同じ場所とみなす。`out\try` には印（`.kimeru-try`）を置き、記録を書くほかのコマンドは、その印のあるフォルダを記録先にも受信箱にもしない。動き続けている `watch`・`daily` も、サイクルごとに印を確かめて止まる（架空の承認済み #1 が本物の記録に混ざらない）。一覧を見るだけのコマンド（`work list`・`delivery list` など）と `report` は使える。`demo` を同じフォルダで動かすと、印を外してデモのフォルダに戻す
+5. 終わると、環境変数と設定のモジュールの状態（`config.ARGS` など）を、始める前と同じに戻す
 
 安全は、まず固定した部品（模擬の Teams・簡易判定・台本）で成り立ち、3 の封じは二重目の守りです。COM や画面操作のように、プロセスの起動でも通信でもない経路は 3 では止めません（体験はそれらを使う部品を呼びません）。
 

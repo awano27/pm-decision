@@ -24,8 +24,8 @@ body:
   - type: textarea
     id: stumbles
     attributes:
-      label: つまずいた README の見出し名（任意）
-      description: 例「しくみ」「止める・消す」。内容ではなく、見出しの名前だけ
+      label: つまずいた文書と見出し名（任意）
+      description: 例「README の まず動かす」「使い方の詳細の 止める・消す」。内容ではなく、文書と見出しの名前だけ
   - type: textarea
     id: trial_share
     attributes:

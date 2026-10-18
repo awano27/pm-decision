@@ -68,6 +68,11 @@ def home():
     return _REPO
 
 
+def is_clone():
+    """True when the data folders sit next to the package (a clone / unpacked ZIP); False for an install (data in <prefix>/share/kimeru)."""
+    return _has_data(_REPO)
+
+
 def reset():
     """Forget the kept result (tests)."""
     global _cache

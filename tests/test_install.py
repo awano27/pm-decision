@@ -31,7 +31,9 @@ class TestPipInstall(unittest.TestCase):
             tmp = Path(tmp)
             venv = tmp / "venv"
             # --system-site-packages: the build needs the setuptools of this Python (no network, no build isolation)
-            subprocess.run([sys.executable, "-m", "venv", "--system-site-packages", str(venv)], check=True, capture_output=True)
+            made = subprocess.run([sys.executable, "-m", "venv", "--system-site-packages", str(venv)], capture_output=True, text=True)
+            if made.returncode != 0:   # e.g. Debian without python3-venv: ensurepip is cut out
+                self.skipTest("a venv cannot be made here: " + (made.stderr or made.stdout)[-200:])
             exe_dir = venv / ("Scripts" if os.name == "nt" else "bin")
             py = exe_dir / ("python.exe" if os.name == "nt" else "python")
             work = tmp / "work"
@@ -40,6 +42,8 @@ class TestPipInstall(unittest.TestCase):
             shutil.copytree(REPO, src, ignore=shutil.ignore_patterns(".git", "out", "__pycache__", "build", "*.egg-info", "tests"))
             install = subprocess.run([str(py), "-m", "pip", "install", "--no-build-isolation", "--no-deps", "--no-index",
                                       "--disable-pip-version-check", str(src)], capture_output=True, text=True, cwd=work)
+            if install.returncode != 0 and "bdist_wheel" in install.stderr:   # an old setuptools without the wheel package
+                self.skipTest("this setuptools cannot build a wheel without the network")
             self.assertEqual(install.returncode, 0, install.stdout + install.stderr)
             prefix = Path(subprocess.run([str(py), "-c", "import sys;print(sys.prefix)"], capture_output=True, text=True,
                                          check=True).stdout.strip())

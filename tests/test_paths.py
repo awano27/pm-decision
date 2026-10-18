@@ -68,6 +68,30 @@ class TestFind(unittest.TestCase):
         self.assertIsInstance(paths.base(), Path)
 
 
+class TestScheduledWorkFolder(unittest.TestCase):
+    """`schedule install` writes the task line: a clone runs from its own folder; an install must not work inside <prefix>/share/kimeru."""
+    def line(self, clone):
+        import io
+        import os
+        from contextlib import redirect_stdout
+        from types import SimpleNamespace
+        from unittest import mock
+        from kimeru import cli
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"KIMERU_STATE_DIR": str(Path(d) / "state")}),                 mock.patch("subprocess.run", return_value=SimpleNamespace(returncode=0)),                 mock.patch.object(paths, "is_clone", return_value=clone),                 mock.patch.object(cli, "HERE", Path(d) / "share" / "kimeru"), redirect_stdout(io.StringIO()):
+            out = Path(d) / "o"
+            self.assertEqual(cli.schedule(SimpleNamespace(action="install", minutes=5, extra="", out=str(out), backend="stub")), 0)
+            return (out / "run-daily.vbs").read_text(encoding="utf-16"), Path(d)
+
+    def test_a_clone_works_in_its_own_folder(self):
+        vbs, d = self.line(True)
+        self.assertIn(f'cd /d ""{d / "share" / "kimeru"}""', vbs)
+
+    def test_an_install_works_in_the_state_folder_not_the_share_folder(self):
+        vbs, d = self.line(False)
+        self.assertIn(f'cd /d ""{d / "state"}""', vbs)
+        self.assertNotIn(str(d / "share"), vbs)
+
+
 class TestNoStrayRepoPaths(unittest.TestCase):
     def test_the_package_does_not_build_repo_paths_itself(self):
         src_dir = Path(paths.__file__).resolve().parent

@@ -1368,7 +1368,12 @@ def schedule(a, state_out=None):
     # the state folder is carried over (the task has no shell profile, and the config file lives there); the other
     # machine-specific variables (KIMERU_WRITER_CMD, KIMERU_*_EXE) are not: set them as user environment variables
     state = f'set "KIMERU_STATE_DIR={os.environ["KIMERU_STATE_DIR"]}" && ' if os.environ.get("KIMERU_STATE_DIR") else ""
-    line = (f'cmd /c {state}cd /d "{HERE}" && "{runner}" -m kimeru --out "{out}" {backend} daily --once --send '
+    # a clone runs from its own folder; an install (pip / uv tool) has no folder of its own to write in (its share folder can be
+    # read-only and goes away on uninstall): the task works in the state folder, where setup-managed keeps its files
+    workdir = HERE if paths.is_clone() else config.state_dir()
+    if workdir != HERE:
+        workdir.mkdir(parents=True, exist_ok=True)
+    line = (f'cmd /c {state}cd /d "{workdir}" && "{runner}" -m kimeru --out "{out}" {backend} daily --once --send '
             f'--inbox "{out / "inbox"}" {extra}').strip()
     vbs = out / "run-daily.vbs"
     # VBS string literal: double every quote; window style 0 = hidden, wait for completion
@@ -1379,6 +1384,8 @@ def schedule(a, state_out=None):
                         "/TR", tr, "/F", "/RL", "LIMITED"])
     print(("installed: " if r.returncode == 0 else "failed: ") + tr)
     print("runs: " + line)
+    if workdir != HERE:
+        print(f"note: pip / uv tool install で入れているため、自動運転の作業フォルダは状態フォルダ {workdir} です（記録は {out}）")
     print(f"settings kept in {config.path()}: {', '.join(saved) or '(none)'}")
     # the task always runs with --send (unlike a manual daily, which only pastes): say so where the user sees it
     print(SCHEDULE_SENDS_NOTE)

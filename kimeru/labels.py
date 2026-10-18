@@ -10,9 +10,9 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import config, review
+from . import config, paths, review
 
-HERE = Path(__file__).resolve().parent.parent
+HERE = paths.base()
 LOG = "labels.log.jsonl"
 MAX_OPTIONS = 8       # two to a line, at most four lines under the header: the section is at most five lines
 OPTION_CHARS = 40     # characters of an option's text that the section shows

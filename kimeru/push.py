@@ -29,9 +29,9 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import config, fsutil
+from . import config, fsutil, paths
 
-HERE = Path(__file__).resolve().parent.parent
+HERE = paths.base()
 ROUTES = ("teams_webhook", "webhook", "outlook")
 URL_ENV = {"teams_webhook": "KIMERU_PUSH_TEAMS_URL", "webhook": "KIMERU_PUSH_WEBHOOK_URL"}
 FAILS_BEFORE_REST = 3

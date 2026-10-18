@@ -12,10 +12,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
 
-from . import __version__, attention, autorun, calibrate, config, learn, profiles, review
+from . import __version__, attention, autorun, calibrate, config, learn, paths, profiles, review
 from .backends import JevBackend
 
-HERE = Path(__file__).resolve().parent.parent
+HERE = paths.base()
 
 
 def _parse(ts):
@@ -133,7 +133,7 @@ def _judge_of_review(rev, judge_of_key):
 def bundled_graph_names():
     """The names of the graphs that ship with kimeru: the only graph names --share may show."""
     names = set()
-    for p in (Path(__file__).resolve().parent.parent / "graphs").glob("*.json"):
+    for p in (paths.base() / "graphs").glob("*.json"):
         try:
             names.add(json.loads(p.read_text(encoding="utf-8"))["name"])
         except (OSError, ValueError, KeyError):
@@ -590,7 +590,7 @@ def build_id(root=None):
     """The short commit this copy was made from, so a shared report can be tied to the code: read from the git files
     (no git command needed; a worktree's `.git` file is followed), else from the VERSION line a bring-in zip carries
     ("kimeru <commit> built ..."), else "unknown"."""
-    root = Path(root) if root else Path(__file__).resolve().parent.parent
+    root = Path(root) if root else paths.home()
     try:
         git = root / ".git"
         if git.is_file():   # a worktree: "gitdir: <path>"

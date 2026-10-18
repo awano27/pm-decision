@@ -16,3 +16,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["kimeru"]
+
+# what kimeru reads at run time goes to <prefix>/share/kimeru (kimeru/paths.py finds it)
+[tool.setuptools.data-files]
+"share/kimeru/graphs" = ["graphs/*.json"]
+"share/kimeru/playbooks" = ["playbooks/*.json"]
+"share/kimeru/examples" = ["examples/*.json"]
+"share/kimeru/tools" = ["tools/teams-self.ps1", "tools/teams-copilot.ps1", "tools/toast.ps1", "tools/outlook-mail.ps1"]

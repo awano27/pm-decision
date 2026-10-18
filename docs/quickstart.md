@@ -15,6 +15,8 @@
 python -m kimeru --backend stub --out out/demo demo --pace 0
 ```
 
+  clone せず `pip install git+https://github.com/awano27/pm-decision`（または `uv tool install git+https://github.com/awano27/pm-decision`）で入れた場合は、先頭の `python -m kimeru` を `kimeru` に読み替えます。
+
 - **できたと分かる印**: 最後に `=== まとめ` が出て、`out/demo/report.html` をブラウザで開ける。
 - **失敗したとき**: [困ったとき](usage.md#困ったとき)。デモは `out\demo` にだけ書き、Teams や ADO には書き込みません。
 

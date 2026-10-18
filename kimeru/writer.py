@@ -33,7 +33,7 @@ import subprocess
 import tempfile
 import time
 
-from . import config, fsutil
+from . import config, fsutil, paths
 
 SYSTEM = (
     "あなたはプロジェクトマネージャーの下書き係です。与えられた材料だけを使い、"
@@ -499,7 +499,7 @@ class M365AutoWriter(M365PromptWriter):
     def __init__(self, timeout=280, script=None):
         from pathlib import Path
         self.timeout = timeout
-        self.script = script or str(Path(__file__).resolve().parent.parent / "tools" / "teams-copilot.ps1")
+        self.script = script or str(paths.base() / "tools" / "teams-copilot.ps1")
 
     def _state_file(self):
         return os.path.join(str(config.state_dir()), "m365-auto.json")

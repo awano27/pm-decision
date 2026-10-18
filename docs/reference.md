@@ -1,6 +1,6 @@
 # リファレンス
 
-コマンド・設定・環境変数・出力ファイル・入力形式・判断グラフの書き方・評価の実行方法です。概要は [README](../README.md) を見てください。ここの `kimeru …` は、clone したフォルダで実行する `python -m kimeru …` の略です（pip での導入は対応していません）。
+コマンド・設定・環境変数・出力ファイル・入力形式・判断グラフの書き方・評価の実行方法です。概要は [README](../README.md) を見てください。ここの `kimeru …` は、clone したフォルダで実行する `python -m kimeru …` の略です（`pip install git+https://github.com/awano27/pm-decision` または `uv tool install` で入れたときは、そのまま `kimeru …` です）。
 
 ### コマンド
 

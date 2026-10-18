@@ -21,10 +21,10 @@ from datetime import datetime, timezone
 import unicodedata
 from pathlib import Path
 
-from . import actions, config, explain, fsutil, hold, labels, learn
+from . import actions, config, explain, fsutil, hold, labels, learn, paths
 from . import writer as writer_mod
 
-HERE = Path(__file__).resolve().parent.parent
+HERE = paths.base()
 REPLY = re.compile(r"^(OK|NG|保留|聞き返し|詳細|再実行|済|送る)\s*#?(\d+)\s*[.。!！]*$", re.IGNORECASE)
 REDRAFT = re.compile(r"^修正\s*#?(\d+)\s*[:：]?\s*(\S.*)$")
 REDO_K = re.compile(r"^再実行\s*#?(\d+)\s*-\s*(\d+)\s*[.。!！]*$")   # `再実行 N-k`: run again, k = the result count the PM saw (stated in the result post)

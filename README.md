@@ -73,7 +73,7 @@ cd kimeru
 python -m kimeru try
 ```
 
-Git が無ければ [Code → Download ZIP](https://github.com/awano27/pm-decision) で取得して展開し、`README.md` と `kimeru` フォルダが並ぶ場所で `python -m kimeru try` を実行します。Windows では `try.cmd` をダブルクリックしても同じで、終わるとレポートをブラウザで開く作りです（Python が無いときは入れ方を表示します。ダブルクリックそのものの確認はまだで、中身を PowerShell から実行して確かめています）。`pip install` での導入には対応していません。
+Git が無ければ [Code → Download ZIP](https://github.com/awano27/pm-decision) で取得して展開し、`README.md` と `kimeru` フォルダが並ぶ場所で `python -m kimeru try` を実行します。Windows では `try.cmd` をダブルクリックしても同じで、終わるとレポートをブラウザで開く作りです（Python が無いときは入れ方を表示します。ダブルクリックそのものの確認はまだで、中身を PowerShell から実行して確かめています）。clone しない入れ方もあります: `pip install git+https://github.com/awano27/pm-decision` または `uv tool install git+https://github.com/awano27/pm-decision` で入れると、`kimeru demo` と `kimeru try` がそのまま動きます（判断グラフ・進め方の型・デモの台本・Teams 用の PowerShell は同梱され、インストール先の `share/kimeru` から探します）。
 
 > ルートにあるほかの .cmd ファイルは体験用ではありません。START.cmd と run-check.cmd は管理された PC での実機確認用で、Teams の起動や、確認を尋ねたうえでの自分とのチャットへの投稿・Azure のサインインを行います。run-auto-check.cmd は送信もサインインもしませんが、動いている Teams の画面を読みます。build-kev-bundle.cmd は開発 PC で Kev の持ち込み用フォルダを作ります（約 10GB を取得する前に確認します）。体験に使うのは try.cmd だけです。
 

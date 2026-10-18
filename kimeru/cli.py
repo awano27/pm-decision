@@ -24,12 +24,12 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import actions, attention, config, events, execute, fsutil, graph, learn, memory, promises, pull
+from . import actions, paths, attention, config, events, execute, fsutil, graph, learn, memory, promises, pull
 from . import writer as writer_mod
 from . import plan as planner
 from .backends import BackendUnavailable, ClmBackend, JevBackend, KevBackend, StubBackend, is_local_judge, judge_name
 
-HERE = Path(__file__).resolve().parent.parent
+HERE = paths.base()
 DEFAULT_PLAYBOOKS = HERE / "playbooks"
 
 
@@ -1042,9 +1042,10 @@ def _main(argv=None):
         return 0
 
     missing = [p for p in (a.graphs, a.playbooks) if not Path(p).is_dir()]
-    if missing:   # e.g. installed with pip: the data folders are not in the package (README: clone and use python -m kimeru)
+    if missing:   # neither a clone nor an install with the shared data (paths.py), and no --graphs / --playbooks given
         print(f"kimeru: 判断グラフ／進め方の型のフォルダが見つかりません（{', '.join(missing)}）。"
-              "clone したフォルダで python -m kimeru を実行するか、--graphs と --playbooks を指定してください", file=sys.stderr)
+              "clone したフォルダで python -m kimeru を実行するか、pip / uv tool install で入れ直すか、--graphs と --playbooks を指定してください",
+              file=sys.stderr)
         return 2
     pbs = planner.load_playbooks(a.playbooks)
     if a.cmd == "validate":

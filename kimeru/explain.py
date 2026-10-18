@@ -9,9 +9,9 @@ for the top of the detail when post_reason is 1. It runs the same rule again (gr
 record's version, and gives nothing unless every rule step of the path agrees with that run."""
 from pathlib import Path
 
-from . import graph, plan
+from . import graph, paths, plan
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = paths.base()
 WORD_MAX = 20    # the longest word a rule line quotes; a longer one is cut with an ellipsis
 RULE_MAX = 3     # the most rule lines a detail gets
 _BUNDLED = None  # {(graph name, version): graph} of the bundled graphs, read once (see _bundled)

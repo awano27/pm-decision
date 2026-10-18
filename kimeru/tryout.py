@@ -26,11 +26,11 @@ import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import config, demo, notify, pull, report
+from . import config, demo, notify, paths, pull, report
 from . import writer as writer_mod
 from .backends import StubBackend
 
-HERE = Path(__file__).resolve().parent.parent
+HERE = paths.base()
 SCENARIO = HERE / "examples" / "try_release_delay.json"
 DEFAULT_OUT = Path("out") / "try"
 TRY_MARK = ".kimeru-try"   # the try run's folder: other commands that write records refuse it (cli._main), the demo clears it
@@ -302,9 +302,9 @@ def main(argv):
         else:
             print(f"kimeru: try では {a} を使えません（体験モードは簡易ルールと台本だけで動きます）\n{USAGE}", file=sys.stderr)
             return 2
-    if not (HERE / "graphs").is_dir() or not SCENARIO.is_file():   # e.g. installed with pip: the data folders are not in the package
+    if not (HERE / "graphs").is_dir() or not SCENARIO.is_file():   # neither a clone nor an install with the shared data (paths.py)
         print("kimeru: 判断グラフか体験の台本が見つかりません。clone したフォルダ（または展開した ZIP）で python -m kimeru try を"
-              "実行してください（pip での導入には対応していません）", file=sys.stderr)
+              "実行するか、pip / uv tool install で入れ直してください", file=sys.stderr)
         return 2
     problem = _out_problem(out)
     if problem:

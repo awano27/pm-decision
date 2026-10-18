@@ -210,7 +210,7 @@ python -m kimeru config unset backend   # install のときに保存した判断
 |---|---|
 | 「判断モデルに接続できません」 | Kev を起動する（[判断モデルの準備](#-判断モデルの準備)・[Kev の持ち込み用フォルダ](kev-bundle.md)）か、`--backend stub` で試す |
 | 「TYPESAFE_API_KEY is not set」 | Jev の鍵を取得して設定する（[判断モデルの準備](#-判断モデルの準備)）。鍵が無ければ `--backend stub` か `kev` |
-| 「判断グラフ／進め方の型のフォルダが見つかりません」 | clone したフォルダで `python -m kimeru` を実行する（pip での導入は未対応） |
+| 「判断グラフ／進め方の型のフォルダが見つかりません」 | clone したフォルダで `python -m kimeru` を実行するか、`pip install git+https://github.com/awano27/pm-decision`（または `uv tool install git+https://github.com/awano27/pm-decision`）で入れ直す |
 | 「デモ以外の記録があります…消さずに止めました」 | デモは別の `--out` で動かす（既定は `out\demo`）。その記録を移してよければ `--fresh` |
 | 取り込みに失敗した件（`inbox\done\*.error`） | 原因を直してから `python -m kimeru retry` |
 | 自分とのチャットへ投稿できたか分からない件 | `run-fix-deliveries.cmd` をダブルクリック（質問しない。自分とのチャットを 1 回読み、届いていた件は確認済みに、見当たらない件は次のサイクルで送り直し、24 時間より古い件は送り直さず閉じる。結果は件数と番号だけで `kimeru-fix-deliveries-result.txt` に出る）。1 件ずつ見るなら `python -m kimeru delivery list`、確かめてから `delivery retry` か `delivery confirm` |

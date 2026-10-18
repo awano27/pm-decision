@@ -66,6 +66,7 @@ GOLDEN = {'format_post': '[kimeru #3] ADO #4812\n→ 優先度を判定できな
                  'approvals.json.bak',
                  'approvals.log.jsonl',
                  'brief_history.jsonl',
+                 'control.json',   # the self chat's own timeline had entries and no control line: the baseline of the stop word is saved
                  'daily.log.jsonl',
                  'daily_state.json',
                  'decisions.jsonl',

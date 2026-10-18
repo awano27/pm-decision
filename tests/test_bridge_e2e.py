@@ -138,6 +138,17 @@ class TestTheLabelReply(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "nt" and shutil.which("powershell"), "needs Windows PowerShell")
+class TestTheControlWordsAreOnTheTimeline(TestTheLabelReply):
+    """R20: a line that is exactly 停止 / 再開 (full-width and spaced variants too) is a control entry; it is neither a reply nor a boundary."""
+
+    def test_the_words_are_control_entries_and_a_word_in_a_sentence_is_not(self):
+        read = self.read(["[kimeru #12] x\nOK 12 / NG 12", "停止", "ＯＫ　１２", "再　開", "　再開　", "停止 ご確認ください", "ECS停止の件", "休み 15時", "休み　明日"])
+        self.assertEqual(read["timeline"], ["P:12", "C:停止", "R:OK 12", "C:再開", "C:休み 15時", "C:休み 明日"])
+        self.assertEqual(notify.fresh_entries(read), [("OK 12", 0)])
+        self.assertEqual(notify.fresh_replies(read), ["OK 12"])
+
+
+@unittest.skipUnless(os.name == "nt" and shutil.which("powershell"), "needs Windows PowerShell")
 class TestSelfOpenFromTheReader(unittest.TestCase):   # N5: status says whether the self chat is open, for the automatic check
     def status(self, teams):
         with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"KIMERU_FAKE_TEAMS": teams,

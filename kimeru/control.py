@@ -6,6 +6,12 @@ list is still read once a cycle, so that 再開 is seen. 再開 takes the work u
 that line moves the mode: a line that is already on the screen at the first sighting (no out/control.json yet) only records, and so
 does a line that stays. Setting control_words=0 makes both words mean nothing.
 
+Where the line is read from: the chat list row of the self chat first (line_of). When the list has no self row (the list shows only
+what is on screen, and the self chat can be missing from it), the self chat's own timeline is read instead: the reader hands back a
+line that is exactly 停止 / 再開 / 休み <いつ> as a control entry (C:停止, C:再開, C:休み <いつ>), and the LAST one is my line
+(line_of_timeline). A timeline that has entries but no control entry is a line that says nothing (so that a later 停止 is a change
+and not a first sighting); an empty or unreadable timeline decides nothing. Stopped, the cycle still makes this one read-only read.
+
 Stopping is in one direction only: it reduces what kimeru does. While it is stopped, the notices that would reach the PM (Sev0/1
 included) do not come; docs/usage.md (止める・消す) and SECURITY.md say so.
 
@@ -70,6 +76,20 @@ def line_of(chats):
             word = body if body in (STOP, RESUME) or QUIET_LINE.match(body) else None
             return hashlib.sha1(body.encode("utf-8")).hexdigest(), word
     return None
+
+
+def line_of_timeline(timeline):
+    """(sig, word) of my last control entry in the self chat timeline (the reader's `C:停止`, `C:再開`, `C:休み <いつ>`), the same shape
+    as line_of: sig is the sha1 of the line, word is the line. A timeline with entries but no control entry gives the sig of an empty
+    line and no word. None when the timeline is empty or not a list (nothing was read: nothing is decided)."""
+    if not isinstance(timeline, list) or not timeline:
+        return None
+    body = ""
+    for e in timeline:
+        if isinstance(e, str) and e.startswith("C:"):
+            body = unicodedata.normalize("NFKC", e[2:]).strip()
+    word = body if body in (STOP, RESUME) or QUIET_LINE.match(body) else None
+    return hashlib.sha1(body.encode("utf-8")).hexdigest(), word
 
 
 def _path(out):
@@ -194,11 +214,13 @@ def _write(out, st):
     fsutil.write_atomic(_path(out), json.dumps({k: st.get(k) for k in KEYS}, ensure_ascii=False, indent=1) + "\n")
 
 
-def step(out, bridge, chats, now, send=False, toaster=None):
+def step(out, bridge, chats, now, send=False, toaster=None, timeline=None):
     """The control step of one daily cycle. `chats` is the list read in this cycle (None when it could not be read). Returns 'run'
     (the cycle goes on, a quiet included: attention.plan holds what is not urgent), 'stop' (it takes nothing more) or 'busy' (the
     state is in use by another run: nothing is decided, and the cycle takes nothing more). `toaster` (title, body) shows the stop
-    once; the acks and the reminder go to the self chat only in a cycle that posts (send). Nothing else is posted or run here."""
+    once; the acks and the reminder go to the self chat only in a cycle that posts (send). `timeline` is the self chat timeline of this
+    cycle, read by the caller only when the list has no self row (None when it was not read or could not be); the list row is
+    preferred. Nothing else is posted or run here."""
     out = Path(out)
     with fsutil.exclusive(out / "control.lock") as got:
         if not got:
@@ -208,6 +230,8 @@ def step(out, bridge, chats, now, send=False, toaster=None):
         if st is not None and st.pop("recovered", False):
             st.update(set_at=_iso(now), reminded_on=_day(now))
         line = line_of(chats) if chats is not None else None
+        if line is None and timeline is not None:
+            line = line_of_timeline(timeline)
         event = None
         if line is not None:
             st, event = observe(st, line, now)

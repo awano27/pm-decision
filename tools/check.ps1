@@ -176,11 +176,13 @@ function WaitReply($id, $word, [int]$limitSec = $WaitSec) {
 }
 
 # N4 (T25 to T27): Python judges with kimeru's own functions and prints only a count, a state or a fixed word as JSON; a row's text is never printed or kept
-function Control-Word($rows) {
-  # control.line_of: my own line of the self chat as 停止, 再開 or none (the daily cycle's judgment)
+function Control-Word($rows, $timeline = $null) {
+  # control.line_of: my own line of the self chat as 停止, 再開 or none (the daily cycle's judgment). With $timeline (the self chat's own
+  # timeline, used when the list has no self row) control.line_of_timeline: the last control entry of the timeline
   $tf = Join-Path $tmp ('ctl-' + (Get-Random) + '.json')
-  [IO.File]::WriteAllText($tf, (ConvertTo-Json -InputObject @($rows) -Compress), (New-Object Text.UTF8Encoding $false))
-  $j = Py @('-c', 'import json, sys; from kimeru import control; d = json.load(open(sys.argv[1], encoding=''utf-8'')); r = control.line_of(d); print(json.dumps({''row'': r is not None, ''word'': r[1] if r else None}))', $tf)
+  $payload = if ($null -ne $timeline) { [ordered]@{ timeline = @($timeline) } } else { @($rows) }
+  [IO.File]::WriteAllText($tf, (ConvertTo-Json -InputObject $payload -Compress), (New-Object Text.UTF8Encoding $false))
+  $j = Py @('-c', 'import json, sys; from kimeru import control; d = json.load(open(sys.argv[1], encoding=''utf-8'')); r = control.line_of_timeline(d[''timeline'']) if isinstance(d, dict) else control.line_of(d); print(json.dumps({''row'': r is not None, ''word'': r[1] if r else None}))', $tf)
   Remove-Item $tf -ErrorAction SilentlyContinue
   try { return (($j -split "`n") | Where-Object { $_.Trim().StartsWith('{') } | Select-Object -Last 1 | ConvertFrom-Json) } catch { return $null }
 }
@@ -607,16 +609,17 @@ if ($selfOk -and (Want 'T20')) {
 }
 
 # ---- T25 停止・再開の語（自分とのチャットの自分の行を読むだけ。打つのは人）----
-# N4: my own line of the list is judged by control.line_of (the daily cycle's own judgment). No chat is opened and nothing is sent by the script.
+# N4: my own line of the list is judged by control.line_of (the daily cycle's own judgment); when the list has no self row, the self chat's own
+# timeline is read and judged by control.line_of_timeline, as kimeru does. Nothing is sent by the script.
 if (Want 'T25') {
-  Say "T25 停止・再開の語（自分とのチャットの一覧の、自分の行だけを読みます）"
+  Say "T25 停止・再開の語（一覧の自分の行を読み、一覧に無ければ自分とのチャットの中を読みます）"
   if ($Auto) { Rec 'T25' 'SKIP（自動: 自分とのチャットに人が打つ必要がある。run-check.cmd T25 で行う）' }
   elseif (-not $uia) { Rec 'T25' 'SKIP（組織ポリシーで画面操作不可）' }
   elseif (-not $py) { Rec 'T25' 'SKIP（Python なし）' }
   elseif ($SelfReply -and -not $selfOk) { Rec 'T25' 'SKIP（自分とのチャットが開けていないため。先に T3 を通してください）' }
   elseif (-not (Consent "   自分とのチャットに「停止」と「再開」を、あなたが 1 行ずつ打ちます（宛先は自分だけ。スクリプトは送りません）。よろしいですか")) { Rec 'T25' 'SKIP' }
   else {
-    $ctlWait = 30; $found = @{}; $waited = @{}; $row = 'なし'; $readErr = $null
+    $ctlWait = 30; $found = @{}; $waited = @{}; $via = @{}; $row = 'なし'; $readErr = $null
     $n25 = Get-Random -Minimum 100 -Maximum 999
     if ($SelfReply) {   # the replies go under a test post of this run; 停止 is always followed by 再開
       $p25 = Self 'post' @('-Text', "[kimeru 試験 #$n25] 停止・再開の試験です")
@@ -636,13 +639,18 @@ if (Want 'T25') {
         $selfRows = @($c.chats | Where-Object { $_.kind -eq 'self' } | ForEach-Object { [ordered]@{ kind = 'self'; preview = [string]$_.preview } })
         $row = if ($selfRows.Count) { 'あり' } else { 'なし' }
         $hit = (Control-Word $selfRows).word -eq $word
+        if ($hit) { $via[$word] = '一覧' }
+        elseif (-not $selfRows.Count) {   # no self row in the list: the self chat's own timeline
+          $t25 = Self 'read'
+          if ($t25.ok) { $hit = (Control-Word $null @($t25.timeline)).word -eq $word; if ($hit) { $via[$word] = '自分とのチャット' } }
+        }
         if (-not $hit) { Start-Sleep -Seconds 5 }
       }
       $found[$word] = $hit
       $waited[$word] = [int]((Get-Date) - $began).TotalSeconds
     }
     if ($readErr) { Rec 'T25' ('NG ' + $readErr) }
-    else { $ok = [bool]($found['停止'] -and $found['再開']); Rec 'T25' ("{0} 停止={1}（待った{2}秒） 再開={3}（待った{4}秒） 自分の行={5}" -f $(if ($ok) { 'OK' } else { 'NG' }), $(if ($found['停止']) { '認識' } else { '未認識' }), $waited['停止'], $(if ($found['再開']) { '認識' } else { '未認識' }), $waited['再開'], $row); AutoTag 'T25' }
+    else { $ok = [bool]($found['停止'] -and $found['再開']); Rec 'T25' ("{0} 停止={1}（待った{2}秒） 再開={3}（待った{4}秒） 自分の行={5} 読んだ所={6}" -f $(if ($ok) { 'OK' } else { 'NG' }), $(if ($found['停止']) { '認識' } else { '未認識' }), $waited['停止'], $(if ($found['再開']) { '認識' } else { '未認識' }), $waited['再開'], $row, $(if ($via['停止']) { $via['停止'] } elseif ($via['再開']) { $via['再開'] } else { 'なし' })); AutoTag 'T25' }
   }
 }
 

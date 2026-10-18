@@ -19,7 +19,7 @@ MANUAL = (ROOT / "docs" / "managed-pc-check.md").read_text(encoding="utf-8")
 SELF_READER = (ROOT / "tools" / "teams-self.ps1").read_text(encoding="utf-8-sig")
 ITEMS = ("T25", "T26", "T27")
 # the variables a result row of these items may use: counts, states, seconds and fixed words, never a message or a row of the list
-ROW_VARIABLES = {"ok", "readErr", "found", "waited", "row", "tot", "asIs", "edited", "other", "posted", "hits", "want", "missTxt"}
+ROW_VARIABLES = {"ok", "readErr", "found", "waited", "row", "tot", "asIs", "edited", "other", "posted", "hits", "want", "missTxt", "via"}
 
 
 def _block(item):

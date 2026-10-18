@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
-from kimeru import brief, config, daily, execute, fsutil, hold, notify, pull, push, sent
+from kimeru import brief, config, control, daily, execute, fsutil, hold, notify, pull, push, sent
 from kimeru.backends import StubBackend
 from kimeru.cli import process
 from tests.test_daily import GRAPHS, PBS, FakeTeams, one_on_one
@@ -260,6 +260,107 @@ class TestTheLineStopsAndResumes(CycleCase):
         self.cycle(datetime(2026, 9, 29, 7, 20), [self_row("あなた: 停止")])
         self.assertEqual(len(self.t.acks("[kimeru 停止中 ")), 1)
         self.assertEqual(len(self.toasts), 1)
+
+
+class TestTheLineIsReadFromTheSelfChatTimelineWhenTheListHasNoSelfRow(CycleCase):
+    """The list may not show the self chat at all (on a real PC it showed only meetings); the self chat's own timeline then carries the
+    line: the reader hands 停止 / 再開 back as C: entries, and the last one is my line."""
+
+    def rows(self, preview="おはようございます"):
+        return [one_on_one(preview, "6:58")]   # no self row
+
+    def cycle_tl(self, now, timeline, send=True):
+        self.t.timeline = list(timeline)
+        return self.cycle(now, self.rows(), send=send)
+
+    def test_line_of_timeline_takes_the_last_control_entry_and_the_same_sig_as_the_list_row(self):
+        self.assertEqual(control.line_of_timeline(["P:1", "C:停止", "R:OK 1", "C:再開", "P:2"])[1], "再開")
+        self.assertEqual(control.line_of_timeline(["C:再開", "C:停止"])[1], "停止")
+        self.assertEqual(control.line_of_timeline(["C:停止"]), control.line_of([self_row("あなた: 停止")]))
+        self.assertEqual(control.line_of_timeline(["C:休み 15時"]), control.line_of([self_row("休み 15時")]))
+        self.assertEqual(control.line_of_timeline(["P:1", "R:OK 1"])[1], None)   # entries but no control entry: a line that says nothing
+        self.assertIsNone(control.line_of_timeline([]))
+        self.assertIsNone(control.line_of_timeline(None))
+
+    def test_the_last_entry_wins_so_a_stop_then_a_resume_in_one_look_is_a_resume(self):
+        self.cycle_tl(T0, ["P:1"])
+        r = self.cycle_tl(T0 + timedelta(minutes=5), ["P:1", "C:停止", "C:再開"])
+        self.assertNotIn("mode", r)
+        self.assertEqual(self.control()["mode"], "run")
+        self.assertEqual(self.t.acks("[kimeru 停止中]"), [])
+
+    def test_a_stop_in_the_timeline_stops_and_a_resume_there_resumes_with_the_stopped_cycle_reading_only_the_timeline(self):
+        self.cycle_tl(T0, ["P:1"])
+        self.assertEqual(self.control()["mode"], "run")
+        r = self.cycle_tl(T0 + timedelta(minutes=5), ["P:1", "C:停止"])
+        self.assertEqual(r["mode"], "stop")
+        self.assertEqual(self.t.posts[-1:], [(ACK, True)])
+        self.assertEqual(len(self.toasts), 1)
+        # stopped: one list read and one timeline read, nothing else
+        spies = self.spies()
+        lists, reads, posted = self.t.list_calls, self.t.read_calls, len(self.t.posts)
+        r = self.cycle_tl(T0 + timedelta(minutes=10), ["P:1", "C:停止", "R:OK 1"])
+        self.assertEqual(r["mode"], "stop")
+        self.assertEqual((self.t.list_calls - lists, self.t.read_calls - reads), (1, 1))
+        self.assertEqual(len(self.t.posts), posted)
+        self.assertEqual(self.judged, [])
+        for name, spy in spies.items():
+            self.assertEqual(spy.call_count, 0, name)
+        mock.patch.stopall()
+        r = self.cycle_tl(T0 + timedelta(minutes=20), ["P:1", "C:停止", "R:OK 1", "C:再開"])
+        self.assertNotIn("mode", r)
+        self.assertEqual(self.control()["mode"], "run")
+        self.assertEqual(self.t.acks("[kimeru 再開]"), [RESUME_ACK])
+
+    def test_a_stop_that_was_already_in_the_timeline_at_the_first_sighting_stays_harmless(self):
+        for k in range(3):
+            r = self.cycle_tl(T0 + timedelta(minutes=5 * k), ["P:1", "C:停止"])
+            self.assertNotIn("mode", r)
+        self.assertEqual(self.control()["mode"], "run")
+        self.assertEqual(self.t.acks("[kimeru 停止中]"), [])
+
+    def test_a_timeline_that_could_not_be_read_or_is_empty_decides_nothing_as_before(self):
+        self.t.read = lambda: (_ for _ in ()).throw(RuntimeError("self chat not found"))
+        r = self.cycle(T0, self.rows())
+        self.assertNotIn("mode", r)
+        self.assertFalse((self.out / "control.json").exists())
+        self.assertFalse([k for k, v in r.items() if isinstance(v, str) and v.startswith("error")])
+
+    def test_a_stopped_state_stays_when_the_timeline_cannot_be_read(self):
+        self.cycle_tl(T0, ["P:1"])
+        self.cycle_tl(T0 + timedelta(minutes=5), ["P:1", "C:停止"])
+        self.t.read = lambda: (_ for _ in ()).throw(RuntimeError("self chat not found"))
+        r = self.cycle(T0 + timedelta(minutes=10), self.rows())
+        self.assertEqual(r["mode"], "stop")
+
+    def test_the_list_row_is_preferred_and_the_timeline_is_not_read(self):
+        self.t.timeline = ["P:1", "C:停止"]
+        self.cycle(T0, [self_row("あなた: 別の話"), one_on_one("おはようございます", "6:58")])
+        self.assertEqual(self.control()["mode"], "run")
+        r = self.cycle(T0 + timedelta(minutes=5), [self_row("あなた: 別の話"), one_on_one("おはようございます", "6:58")])
+        self.assertNotIn("mode", r)   # a 停止 in the timeline does not stop while the list row says something else
+        self.assertEqual(self.t.acks("[kimeru 停止中]"), [])
+
+    def test_the_stopped_cycle_with_a_list_row_does_not_read_the_timeline(self):
+        self.cycle(T0, [self_row("あなた: 別の話")])
+        self.cycle(T0 + timedelta(minutes=5), [self_row("あなた: 停止")])
+        reads = self.t.read_calls
+        self.cycle(T0 + timedelta(minutes=10), [self_row("あなた: 停止")])
+        self.assertEqual(self.t.read_calls, reads)
+
+    def test_a_quiet_line_in_the_timeline_is_read_like_the_one_in_the_list_row(self):
+        with mock.patch.dict(os.environ, {"KIMERU_QUIET_WORDS": "1"}):
+            self.cycle_tl(T0, ["P:1"])
+            self.cycle_tl(T0 + timedelta(minutes=5), ["P:1", "C:休み 15時"])
+            self.assertEqual(self.control()["mode"], "quiet")
+            self.assertEqual(self.control()["until"], "2026-09-28T15:00")
+
+    def test_with_control_words_zero_the_timeline_is_not_read_for_the_words(self):
+        with mock.patch.dict(os.environ, {"KIMERU_CONTROL_WORDS": "0"}):
+            self.cycle_tl(T0, ["P:1", "C:停止"])
+            r = self.cycle_tl(T0 + timedelta(minutes=5), ["P:1", "C:停止", "C:再開", "C:停止"])
+        self.assertNotIn("mode", r)
+        self.assertFalse((self.out / "control.json").exists())
 
 
 class TestControlWordsZeroAndTheDefault(CycleCase):

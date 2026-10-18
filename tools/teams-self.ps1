@@ -1327,6 +1327,14 @@ if ($Action -eq 'read') {
         # replies to #N before it were answered (notify.fresh_entries). The count keeps two result posts from being folded into one line.
         $entry = 'X:{0}:{1}' -f $Matches[1], $(if ($Matches[2]) { [int]$Matches[2] } else { 0 })
       }
+      elseif ($l.Normalize([Text.NormalizationForm]::FormKC).Trim() -match '^(停止|再開)$') {
+        # R20 (control.py): the control word of my own line, as the list shows it. It is neither a reply nor a boundary: kimeru reads the last one
+        $entry = 'C:' + $Matches[1]
+      }
+      elseif ($l.Normalize([Text.NormalizationForm]::FormKC).Trim() -match '^休み\s+(\S+)$') {
+        # R27: `休み <いつ>` (quiet_words): the whole line, normalized, is handed back as a control entry
+        $entry = 'C:休み ' + $Matches[1]
+      }
       elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留|聞き返し|詳細|再実行|済|不要)\s*#?(\d+)\s*[.。!！]*$') {
         # phones often send full-width or re-cased text ("ＯＫ　６７５", "Ok 675"): canonicalize
         $c = '{0} {1}' -f $Matches[1].ToUpper(), $Matches[2]

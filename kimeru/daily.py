@@ -331,14 +331,20 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
         _log(out, {"step": "brief_history", "error": f"{type(e).__name__}: {str(e)[:120]}"})
     # R20: my own line 停止 / 再開 (control.py). It is read before anything takes from Teams, and the list read here is the one the
     # pull uses. Stopped, this cycle takes nothing more (the purges above did run); a Teams that cannot be read is no error here
-    chats, mode = None, "run"
+    chats, mode, own_timeline = None, "run", None
     if control.enabled():
         try:
             chats = bridge.chats()
         except Exception as e:
             _log(out, {"step": "control", "error": f"{type(e).__name__}: {str(e)[:120]}"})
+        if chats is not None and control.line_of(chats) is None:   # the list has no self row: my line is read from the self chat itself
+            try:   # one read-only read, stopped or not (so that 再開 is seen); a self chat that cannot be read decides nothing
+                own_timeline = bridge.read().get("timeline")
+            except Exception as e:
+                _log(out, {"step": "control", "error": f"{type(e).__name__}: {str(e)[:120]}"})
         try:
-            mode = control.step(out, bridge, chats, now, send=send, toaster=toaster if toaster and notify.toast_enabled() else None)
+            mode = control.step(out, bridge, chats, now, send=send, toaster=toaster if toaster and notify.toast_enabled() else None,
+                                timeline=own_timeline)
         except Exception as e:
             _log(out, {"step": "control", "error": f"{type(e).__name__}: {str(e)[:120]}"})
             mode = control.current(out)

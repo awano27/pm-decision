@@ -209,6 +209,50 @@ class TestT5SaysWhenTheWindowIsMissing(unittest.TestCase):   # the tray-only Tea
         self.assertIn("teams_window", block[status_at:post_at])
 
 
+class TestT5WaitsForAReplyFromThePcOrThePhone(unittest.TestCase):   # a reply typed on the PC, and one that comes after the window
+    BLOCK_FROM = 'Say "T4/T5 貼り付け・送信・iPhone 返信"'
+
+    def _block(self):
+        return CHECK[CHECK.index(self.BLOCK_FROM):]
+
+    def test_the_prompt_and_the_question_name_the_pc_as_well(self):
+        block = self._block()
+        self.assertIn("PC か iPhone の Teams で、自分とのチャットに「OK $n」と返信してください（全角でも可。最大 $t5Wait 秒待ちます）", block)
+        self.assertIn("返信しましたか（PC でも iPhone でも）？ [y/n]", block)
+        self.assertNotIn("iPhone から返信しましたか", CHECK)   # the old question made a PC user answer n
+        self.assertIn("iPhone に通知は届きましたか？ [y/n]", block)   # the notification question stays
+
+    def test_the_wait_is_300_seconds_unless_the_variable_says_otherwise(self):
+        block = self._block()
+        self.assertIn("$t5Wait = 300", block)
+        self.assertIn("KIMERU_T5_WAIT_SEC", block)
+        env_at = block.index("KIMERU_T5_WAIT_SEC")
+        self.assertIn("-ge 30", block[env_at:env_at + 400])
+        self.assertIn("-le 900", block[env_at:env_at + 400])
+        self.assertIn("WaitReply $n 'OK' $t5Wait", block)
+        self.assertIn("[int]$WaitSec = 180", CHECK)   # the other steps keep -WaitSec
+
+    def test_the_wait_says_it_is_waiting_and_says_when_the_reply_is_read(self):
+        wait = CHECK[CHECK.index("function WaitReply"):]
+        wait = wait[:wait.index("\n}\n")]
+        self.assertIn("返信を待っています… 残り", wait)
+        self.assertIn("AddSeconds(30)", wait)
+        self.assertIn("返信を読み取りました", wait)
+        self.assertLess(wait.index("ReplySeen $id $word"), wait.index("返信を読み取りました"))
+
+    def test_a_reply_that_comes_after_the_window_is_read_once_more_and_recorded(self):
+        block = self._block()
+        wait_at = block.index("WaitReply $n 'OK' $t5Wait")
+        late_at = block.index("ReplySeen $n 'OK'")
+        self.assertLess(wait_at, late_at)
+        self.assertIn("OK(遅れて届いた)", block)
+        self.assertIn("NG(タイムアウト)", block)   # still the record when nothing is there
+        rec_at = block.index("Rec 'T5' (\"送信=OK")   # the record of a sent post, not the window-missing one
+        self.assertLess(late_at, rec_at)
+        self.assertIn("返信読取={3}", block)   # the other fields of the record keep their form
+        self.assertIn("送信=OK 投稿を画面で確認={0} iPhone通知={1} 返信した={2} 返信読取={3}", block)
+
+
 class TestNoEnvironmentDetails(unittest.TestCase):
 
     def test_public_documents_do_not_name_the_tested_environment(self):

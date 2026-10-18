@@ -117,14 +117,24 @@ function Probe($label, $keepAs = $null) {
   return @{ ok = ($n -ge 100); elements = $n; labels = $labels; types = (Short $types) }
 }
 $script:PostSeen = $false
-function WaitReply($id, $word) {
-  $deadline = (Get-Date).AddSeconds($WaitSec)
+function ReplySeen($id, $word) {   # one read of the self chat: is my post T:id there, with R:word id below it?
+  $r = Self 'read'
+  if ($r.ok -and $r.timeline) {
+    $tl = @($r.timeline); $last = -1
+    for ($i = 0; $i -lt $tl.Count; $i++) { if ($tl[$i] -eq "T:$id") { $last = $i; $script:PostSeen = $true } }
+    for ($i = $last + 1; $last -ge 0 -and $i -lt $tl.Count; $i++) { if ($tl[$i] -eq "R:$word $id") { return $true } }
+  }
+  return $false
+}
+function WaitReply($id, $word, [int]$limitSec = $WaitSec) {
+  # reads every 10 s, says "still waiting" every 30 s, and says so as soon as the reply is read
+  $deadline = (Get-Date).AddSeconds($limitSec); $nextNote = (Get-Date).AddSeconds(30)
   while ((Get-Date) -lt $deadline) {
-    $r = Self 'read'
-    if ($r.ok -and $r.timeline) {
-      $tl = @($r.timeline); $last = -1
-      for ($i = 0; $i -lt $tl.Count; $i++) { if ($tl[$i] -eq "T:$id") { $last = $i; $script:PostSeen = $true } }
-      for ($i = $last + 1; $last -ge 0 -and $i -lt $tl.Count; $i++) { if ($tl[$i] -eq "R:$word $id") { return $true } }
+    if (ReplySeen $id $word) { Write-Host "   返信を読み取りました" -ForegroundColor Green; return $true }
+    if ((Get-Date) -ge $nextNote) {
+      $left = [Math]::Max(0, [int][Math]::Ceiling(($deadline - (Get-Date)).TotalSeconds))
+      Write-Host ("   返信を待っています… 残り {0} 秒" -f $left) -ForegroundColor DarkGray
+      $nextNote = $nextNote.AddSeconds(30); if ($nextNote -le (Get-Date)) { $nextNote = (Get-Date).AddSeconds(30) }
     }
     Start-Sleep -Seconds 10
   }
@@ -241,14 +251,22 @@ if ($uia) {
       $p1 = Self 'post' @('-Text', "[kimeru 試験 #$n] 管理PCテスト\n返信: OK $n")
       $s1 = if ($p1.ok -and $p1.typed) { Self 'send' } else { $p1 }
       if ($s1.ok) {
-        Write-Host "   iPhone の Teams で、自分とのチャットに「OK $n」と返信してください（全角でも可。最大 $WaitSec 秒待ちます）" -ForegroundColor Green
+        # the reply may be typed on the PC or the iPhone and has been slower than 180 s: 300 s by default; KIMERU_T5_WAIT_SEC (30-900, otherwise ignored) changes it
+        $t5Wait = 300
+        if ($env:KIMERU_T5_WAIT_SEC -match '^\s*\d{1,4}\s*$') { $t5Env = [int]$env:KIMERU_T5_WAIT_SEC; if ($t5Env -ge 30 -and $t5Env -le 900) { $t5Wait = $t5Env } }
+        Write-Host "   PC か iPhone の Teams で、自分とのチャットに「OK $n」と返信してください（全角でも可。最大 $t5Wait 秒待ちます）" -ForegroundColor Green
         Write-Host "   ※ 自分宛てのメッセージなので、スマホには通知されません。Teams アプリで自分とのチャットを開いてください" 
-        $got = WaitReply $n 'OK'
+        $got = WaitReply $n 'OK' $t5Wait
+        $late = $false
+        if (-not $got) {   # the reply may have arrived just after the window: read the self chat once more before calling it a failure
+          $late = ReplySeen $n 'OK'
+          if ($late) { Write-Host "   返信を読み取りました（待ち時間のあとに届いていました）" -ForegroundColor Green }
+        }
         $push = Read-Host "   iPhone に通知は届きましたか？ [y/n]"
         Rec 'T4' ("OK 送信方法=" + $s1.via)
-        $replied = if ($got) { 'y' } else { Read-Host "   iPhone から返信しましたか？ [y/n]" }
-        Rec 'T5' ("送信=OK 投稿を画面で確認={0} iPhone通知={1} 返信した={2} 返信読取={3}" -f $(if ($script:PostSeen) { 'あり' } else { 'なし' }), $(if ($push -match '^\s*[yY]') { 'あり' } else { 'なし' }), $(if ($replied -match '^\s*[yY]') { 'はい' } else { 'いいえ' }), $(if ($got) { 'OK' } else { 'NG(タイムアウト)' }))
-        $selfOk = $got
+        $replied = if ($got -or $late) { 'y' } else { Read-Host "   返信しましたか（PC でも iPhone でも）？ [y/n]" }
+        Rec 'T5' ("送信=OK 投稿を画面で確認={0} iPhone通知={1} 返信した={2} 返信読取={3}" -f $(if ($script:PostSeen) { 'あり' } else { 'なし' }), $(if ($push -match '^\s*[yY]') { 'あり' } else { 'なし' }), $(if ($replied -match '^\s*[yY]') { 'はい' } else { 'いいえ' }), $(if ($got) { 'OK' } elseif ($late) { 'OK(遅れて届いた)' } else { 'NG(タイムアウト)' }))
+        $selfOk = [bool]($got -or $late)
       } else {
         $e4 = "$($p1.error)"; $e5 = "$($s1.error)"
         if ($st5.teams_process -and $e4 -match 'Teams window not found') { $e4 = $noWinMsg }

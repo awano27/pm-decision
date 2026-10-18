@@ -243,7 +243,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\teams-self.ps1 -Acti
 ```
 
 2. **iPhone** の Teams に通知が来るか確認（来なくても自分とのチャットに表示されていれば記録して続行）
-3. iPhone の Teams で自分とのチャットを開き、`OK 0` と返信する
+3. **PC か iPhone の** Teams で自分とのチャットを開き、`OK 0` と返信する（全角でも可）。`tools\check.ps1`（run-check）は 300 秒まで 10 秒ごとに読み、30 秒ごとに「返信を待っています… 残り N 秒」と表示する。待ち時間は環境変数 `KIMERU_T5_WAIT_SEC`（30〜900 の秒数。範囲外や数字でない値は 300 秒）で変えられる。時間切れの直後にもう一度だけ読み、返信があれば `返信読取=OK(遅れて届いた)` と記録する（なければ `NG(タイムアウト)`）
 4. PC で読み取り:
 
 ```powershell

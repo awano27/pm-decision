@@ -450,9 +450,9 @@ class TestScriptGuards(unittest.TestCase):
         self.assertIn("SetForegroundWindow($script:PrevFg)", self.funcs["Restore-Foreground"])
 
     def test_it_takes_the_lock_and_waits_for_a_quiet_keyboard(self):
-        lock = next(l for l in self.text.splitlines() if l.startswith("if ($Action -in 'open', 'post', 'send', 'read', 'readchat')"))
+        lock = next(l for l in self.text.splitlines() if l.startswith("if ($Action -in 'open', 'post', 'send', 'testreply', 'read', 'readchat')"))
         self.assertIn("Enter-UiLock", lock)
-        idle = next(l for l in self.text.splitlines() if l.startswith("if ($Action -in 'post', 'send')"))
+        idle = next(l for l in self.text.splitlines() if l.startswith("if ($Action -in 'post', 'send', 'testreply')"))
         self.assertIn("Wait-UserIdle", idle)
         self.assertNotIn("Wait-UserIdle", self.block)             # readchat does not wait for the person: it checks and postpones
 

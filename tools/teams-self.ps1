@@ -21,6 +21,11 @@
   read                 -> JSON {posts:[...], replies:[...]} extracted from the self chat only:
                           posts   = ids N of "[kimeru #N]" posts (no other text)
                           replies = "OK 3" / "NG 3" / "保留 3" style lines
+  testreply -Text <s> -Numbers <n[,n]>
+                       -> a check run's short reply ("OK 529", "停止"...) typed into the SELF chat only. The same self-chat
+                          checks as post + send (48:notes, an empty compose box, the idle wait, the readback), but the text
+                          must match the fixed whitelist ($ReplyWhitelist) and its number must be one of -Numbers (the
+                          numbers the check just posted). Anything else fails before Teams is touched.
   Nothing else from the chat is output.
 
   Safety: every write re-checks that the window title is the self chat
@@ -28,9 +33,10 @@
   Personal Teams shows "(あなた)"; work accounts may show "(自分)". Override with -SelfMarker.
 #>
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('status', 'open', 'post', 'send', 'sendto', 'read', 'diag', 'learn', 'chats', 'readchat', 'test-messages', 'test-compare', 'test-readback', 'test-container', 'test-failure', 'test-send-once', 'probe')][string]$Action,
+  [Parameter(Mandatory = $true)][ValidateSet('status', 'open', 'post', 'send', 'testreply', 'sendto', 'read', 'diag', 'learn', 'chats', 'readchat', 'test-messages', 'test-compare', 'test-readback', 'test-container', 'test-failure', 'test-send-once', 'probe')][string]$Action,
   [string]$Text = '',
   [string]$ChatId = '',      # readchat, sendto: the chat to open (its id from `chats`; sendto: a 1 対 1 chat only)
+  [string]$Numbers = '',     # testreply: the numbers (comma separated) of the [kimeru 試験 #N] / approval posts this run just made
   [string]$TextFile = '',    # sendto: the file that holds the approved text (UTF-8); the caller removes it after the call
   [int]$Count = 5,           # readchat: how many of the last messages to read
   [string]$ReadbackText = '',
@@ -50,6 +56,9 @@ Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.For
 # display every click (the compose box, a chat entry) landed elsewhere and the paste went nowhere
 Add-Type -Namespace KI -Name Dpi -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();'
 [void][KI.Dpi]::SetProcessDPIAware()
+# testreply: the only texts it may type. Words of the check's replies with a number in 100-998 (and a short note), or 停止 / 再開
+$ReplyWhitelist = '^(OK|NG|保留|詳細|聞き返し|違う|不要|着手|完了|延期|送った|再実行|済) ?(#)?([1-9][0-9]{2})( [^\r\n]{1,12})?$|^(停止|再開)$'
+$script:ReplyText = ''
 $A = [System.Windows.Automation.AutomationElement]
 $CT = [System.Windows.Automation.ControlType]
 $markers = @('あなた', '自分', 'You', 'Me')
@@ -210,7 +219,7 @@ function Test-PostedTextMatch([string]$sent, [string]$visible) {
   # a URL is shown as a link, and the label of a link is read before it: "リンクhttps://..." / "Linkhttps://..."
   $b = $b -replace '(?i)(リンク|Link)(?=https?://)', ''
   if ($a -ceq $b) { return $true }
-  if (-not $a.StartsWith('[kimeru') -or $a.Length -lt 8) { return $false }
+  if (-not $script:ReplyText -and (-not $a.StartsWith('[kimeru') -or $a.Length -lt 8)) { return $false }   # testreply: the short whitelisted text
   $i = $b.IndexOf($a, [StringComparison]::Ordinal)
   if ($i -lt 0 -or $i -gt 80) { return $false }
   $before = $b.Substring(0, $i)
@@ -738,10 +747,24 @@ if ($Action -eq 'test-container') {
   $snapshot = Get-Content -Raw -Encoding UTF8 -LiteralPath $TestRows | ConvertFrom-Json
   Out-Json @{ identity = (Select-MessageContainerId $snapshot.ancestors ([string]$snapshot.fallback)) }; exit 0
 }
-if ($Action -in 'open', 'post', 'send', 'read', 'readchat') { Enter-UiLock $(if ($Action -eq 'readchat') { 60000 } else { 180000 }) }
+if ($Action -eq 'testreply') {
+  # before anything touches Teams: the text is on the whitelist, has no line break or backslash, and its number is one this run just posted
+  if ($TextFile) { $Text = [IO.File]::ReadAllText($TextFile, (New-Object Text.UTF8Encoding $false)) }
+  if ($Text -match '[\\\r\n]' -or $Text -cnotmatch $ReplyWhitelist) { Fail 'testreply: the text is not on the whitelist; nothing typed' }
+  $allowed = @(([string]$Numbers -split ',') | Where-Object { $_ -match '^[1-9][0-9]{2}$' } | ForEach-Object { [int]$_ })
+  if (-not $allowed.Count) { Fail 'testreply: no number of this run was given; nothing typed' }
+  $mNum = [regex]::Match($Text, '[1-9][0-9]{2}')
+  if ($mNum.Success) {
+    if ([int]$mNum.Value -gt 998) { Fail 'testreply: the number is outside 100-998; nothing typed' }
+    if ($allowed -notcontains [int]$mNum.Value) { Fail 'testreply: the number is not one this run posted; nothing typed' }
+  }
+  $script:ReplyText = $Text
+  $Send = [switch]$true
+}
+if ($Action -in 'open', 'post', 'send', 'testreply', 'read', 'readchat') { Enter-UiLock $(if ($Action -eq 'readchat') { 60000 } else { 180000 }) }
 if ($Action -eq 'sendto') { Enter-UiLock 180000 }   # S2: one Teams operation at a time, as the others
 if ($Action -eq 'probe') { Enter-UiLock 180000 }   # the read the approvals step makes: one Teams operation at a time
-if ($Action -in 'post', 'send') { Wait-UserIdle 3 60 }   # writing moves the screen: not while the person works. readchat does not wait: it checks and postpones
+if ($Action -in 'post', 'send', 'testreply') { Wait-UserIdle 3 60 }   # writing moves the screen: not while the person works. readchat does not wait: it checks and postpones
 $w = Get-TeamsWindow
 if ($Action -eq 'diag') {
   if (-not $w) { Fail 'Teams window not found' }
@@ -993,9 +1016,14 @@ function Clear-OurBox($w, $box) {
   if (-not (Test-BoxFocused)) { return $false }
   [System.Windows.Forms.SendKeys]::SendWait('^a'); Start-Sleep -Milliseconds 100
   [System.Windows.Forms.SendKeys]::SendWait('{DEL}'); Start-Sleep -Milliseconds 300
-  -not (Get-BoxText $box).Trim().StartsWith('[kimeru')
+  -not (Test-OwnBoxText (Get-BoxText $box))
 }
-function Test-BoxHasKimeru($w) { (Get-BoxText (Get-Box $w)).Trim().StartsWith('[kimeru') }
+function Test-OwnBoxText([string]$t) {
+  # the box holds what this call put there: a [kimeru post, or (testreply) exactly the reply text
+  if ($script:ReplyText) { return ((Squash $t) -ceq (Squash $script:ReplyText)) }
+  $t.Trim().StartsWith('[kimeru')
+}
+function Test-BoxHasKimeru($w) { Test-OwnBoxText (Get-BoxText (Get-Box $w)) }
 
 function Wait-Sent($w) {
   for ($i = 0; $i -lt 12; $i++) { Start-Sleep -Milliseconds 250; if (-not (Test-BoxHasKimeru $w)) { return $true } }
@@ -1052,21 +1080,23 @@ if ($Action -eq 'send') {
   Out-Json @{ ok = $true; typed = $script:DeliveryTyped; sent = (Get-SentEvidence); via = $how; readback = $readback }; exit 0
 }
 
-if ($Action -eq 'post') {
-  if (-not $Text.StartsWith('[kimeru')) { Fail 'refusing to post text that does not start with [kimeru' }
-  $Text = $Text -replace '\\n', "`r`n"   # callers pass line breaks as literal \n
+if ($Action -in 'post', 'testreply') {
+  if ($Action -eq 'post' -and -not $Text.StartsWith('[kimeru')) { Fail 'refusing to post text that does not start with [kimeru' }
+  if ($Action -eq 'post') { $Text = $Text -replace '\\n', "`r`n" }   # callers pass line breaks as literal \n
   $box = Get-Box $w
   $prev = $null
   for ($i = 0; $i -lt 10; $i++) {   # the previous send may still be clearing the box: wait until it stops changing
     $cur = Get-BoxText $box
-    if ($cur -eq $prev -and -not $cur.Trim().StartsWith('[kimeru')) { break }
+    if ($cur -eq $prev -and -not (Test-OwnBoxText $cur)) { break }
     $prev = $cur; Start-Sleep -Milliseconds 300
   }
   if (-not (Test-SelfTitleStrict (Get-TeamsWindow))) { Fail 'the window title is not the self chat (learned name); nothing pasted' }
   $before = Squash (Get-BoxText $box)
   # a kimeru post left in the box by an earlier failed run is ours to remove; anything else is the
   # person's own draft: nothing is clicked or pasted (an empty box reads as its placeholder text)
-  if ((Get-BoxText $box).Trim().StartsWith('[kimeru')) {
+  if ($Action -eq 'testreply' -and $before.Length -gt 0 -and $before -ne (Squash ([string]$box.Current.Name))) {
+    Fail ("testreply: the compose box is not empty ($($before.Length) characters); nothing pasted")   # nothing is cleared here, not even a leftover
+  } elseif ((Get-BoxText $box).Trim().StartsWith('[kimeru')) {
     if (-not (Clear-OurBox $w $box)) { Fail 'an earlier kimeru post is left in the compose box and could not be cleared; clear it in Teams and retry' }
     $before = Squash (Get-BoxText $box)
   } elseif ($before.Length -gt 2 -and $before -ne (Squash ([string]$box.Current.Name))) {
@@ -1103,7 +1133,7 @@ if ($Action -eq 'post') {
   if ($Send) {
     if (-not $typed) {
       # take our paste back out when the box holds only kimeru text; a person's draft stays as it was
-      $cleared = (Get-BoxText $box).Trim().StartsWith('[kimeru') -and (Clear-OurBox $w $box)
+      $cleared = (Test-OwnBoxText (Get-BoxText $box)) -and (Clear-OurBox $w $box)
       $got = Squash (Get-BoxText $box); $want = Squash $Text
       $shape = "before=$($before.Length) box=$($got.Length) planned=$($want.Length) endsWith=$($got.EndsWith($want)) startsWith=$($got.StartsWith($want))"
       Fail ("compose box does not hold exactly the planned text ($shape); not sent" +

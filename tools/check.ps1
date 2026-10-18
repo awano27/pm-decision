@@ -12,6 +12,10 @@ param(
   # -Auto: no question is asked. Every step that would send, open a chat or need your eyes is answered "no" and recorded as
   # SKIP; Teams is not started. Used by run-auto-check.cmd
   [switch]$Auto,
+  # -SelfReply: the replies a human types in the steps T5/T9/T20/T25/T27 are typed by this script into the SELF chat only (a fixed
+  # whitelist of short words with the number it just posted: teams-self.ps1 testreply); the [y/N] consents of those steps are answered y.
+  # Also on with KIMERU_CHECK_SELF_REPLY=1. Never with -Auto
+  [switch]$SelfReply,
   # run-check.cmd T9  -> only T9 (plus the steps it depends on: T3, T6, T8)
   [Parameter(ValueFromRemainingArguments = $true)][string[]]$Only = @()
 )
@@ -27,7 +31,18 @@ New-Item -ItemType Directory -Force $tmp | Out-Null
 if ($Only -contains 'V1') { $Only = @('T9', 'T15', 'T16', 'T19', 'T20') }   # v1.0 set: approval flow, Copilot CLI, toast, Copilot paste test, ask-back / paste-back replies
 if ($Only -contains 'managed' -or $Only -contains 'monday') { $Only = @('T9', 'T10', 'T12', 'T13', 'T14', 'T15', 'T16', 'T17') }   # short bring-in set (T3/T6/T8 run anyway); T2 dropped: minutes come as .txt (docs/minutes-format.md)
 if ($Only -contains 'auto') { $Only = @('T1', 'T7', 'T8', 'T12', 'T13', 'T14', 'T16', 'T23') }   # what runs with nobody answering and nothing sent (T3/T6 run anyway)
-function Want($t) { -not $Only -or $Only -contains $t }
+if ($env:KIMERU_CHECK_SELF_REPLY -eq '1') { $SelfReply = [switch]$true }
+if ($Auto -and $SelfReply) { $SelfReply = [switch]$false }   # the automatic check stays read only
+# the steps that need another person or an outside service are not done with an automatic reply
+$SelfReplySkip = @('T10', 'T11', 'T15', 'T16', 'T17', 'T18', 'T19', 'T21', 'T22', 'T24', 'T26')
+function Want($t) {
+  $w = (-not $Only) -or ($Only -contains $t)
+  if ($w -and $SelfReply -and $SelfReplySkip -contains $t) {
+    if (-not $Results.Contains($t)) { Rec $t 'SKIP（自動の返信では行わない: 相手・外部が要る）' }
+    return $false
+  }
+  $w
+}
 function Fails($s) {
   # prefer our one-line "... failed: ..." message, else the last traceback line
   # PowerShell 5.1 prefixes native stderr with "python.exe : " and adds "+ CategoryInfo" noise lines
@@ -92,6 +107,25 @@ function Self($action, [string[]]$extra = @()) {
   # the script's own output is JSON with fixed messages; anything else (screen text, a stack trace) is never recorded: only its length
   try { return ($out.Trim().TrimStart([char]0xFEFF) | ConvertFrom-Json) } catch { return [pscustomobject]@{ ok = $false; error = "出力を解析できず（$($out.Length) 文字、内容は記録しない）" } }
 }
+# -SelfReply: the consent prompts of T5/T9/T20/T25/T27 are answered y, the questions about what a person saw are answered n
+function Consent($q) {
+  if ($SelfReply) { Write-Host "$q [y/N] -> （自動: y）" -ForegroundColor DarkGray; return $true }
+  YesNo $q
+}
+$replyWait = if ($SelfReply) { [Math]::Min($WaitSec, 60) } else { $WaitSec }   # the replies are typed already: a shorter wait
+function AutoNo($q) {
+  Write-Host "$q -> （自動: n）" -ForegroundColor DarkGray; 'n'
+}
+function AutoTag($k) { if ($SelfReply -and $Results.Contains($k)) { $Results[$k] = [string]$Results[$k] + ' 返信=自動'; Write-Host "   ${k}: 返信=自動" -ForegroundColor Yellow } }
+# types one short reply into the SELF chat (testreply: a fixed whitelist, only a number this run posted). $true when it was typed and read back
+function Auto-Reply([string]$text, [string]$nums) {
+  $r = Self 'testreply' @('-Text', $text, '-Numbers', $nums)
+  if ($r.ok -and $r.typed) { Write-Host "   （自動: 自分とのチャットに「$text」と返信）" -ForegroundColor DarkGray; return $true }
+  Write-Host "   （自動の返信に失敗: $(Short $r.error)）" -ForegroundColor Yellow
+  $script:ReplyErr = Short $r.error
+  return $false
+}
+$script:ReplyErr = ''
 function Probe($label, $keepAs = $null) {
   $o = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'probe-teams.ps1') -Label $label 2>&1 | Out-String
   $f = Join-Path $root "probe-$label.txt"
@@ -160,6 +194,7 @@ function Sent-Classes($sendText, $shown) {
 }
 
 Write-Host "kimeru 管理PCチェック（外部送信の前には必ず確認します。Ctrl+C でいつでも中止できます）" -ForegroundColor Green
+if ($SelfReply) { Write-Host "自動の返信（-SelfReply）: T5/T9/T20/T25/T27 の確認はすべて y とし、返信の短い語は、このスクリプトが自分とのチャットだけに打ちます" -ForegroundColor Green }
 
 # ---- Level 0: PowerShell only ----
 Say "T0 環境"
@@ -240,7 +275,7 @@ if ($uia) {
 
   if ($selfOk -and (Want 'T5')) {
     Say "T4/T5 貼り付け・送信・iPhone 返信"
-    if (YesNo "   自分とのチャットにテストメッセージを1通送信します（宛先は自分だけ）。よろしいですか") {
+    if (Consent "   自分とのチャットにテストメッセージを1通送信します（宛先は自分だけ）。よろしいですか") {
       $noWinMsg = 'Teams のウィンドウが表示されていません（起動はしています）。ウィンドウを開いてチャット一覧を表示してから run-check.cmd T5 をやり直してください'
       $st5 = Self 'status'
       if ($st5.teams_process -and -not $st5.teams_window) {
@@ -254,18 +289,22 @@ if ($uia) {
         # the reply may be typed on the PC or the iPhone and has been slower than 180 s: 300 s by default; KIMERU_T5_WAIT_SEC (30-900, otherwise ignored) changes it
         $t5Wait = 300
         if ($env:KIMERU_T5_WAIT_SEC -match '^\s*\d{1,4}\s*$') { $t5Env = [int]$env:KIMERU_T5_WAIT_SEC; if ($t5Env -ge 30 -and $t5Env -le 900) { $t5Wait = $t5Env } }
+        if ($SelfReply) { [void](Auto-Reply "OK $n" "$n"); $t5Wait = [Math]::Min($t5Wait, 90) }
+        else {
         Write-Host "   PC か iPhone の Teams で、自分とのチャットに「OK $n」と返信してください（全角でも可。最大 $t5Wait 秒待ちます）" -ForegroundColor Green
-        Write-Host "   ※ 自分宛てのメッセージなので、スマホには通知されません。Teams アプリで自分とのチャットを開いてください" 
+        Write-Host "   ※ 自分宛てのメッセージなので、スマホには通知されません。Teams アプリで自分とのチャットを開いてください"
+        }
         $got = WaitReply $n 'OK' $t5Wait
         $late = $false
         if (-not $got) {   # the reply may have arrived just after the window: read the self chat once more before calling it a failure
           $late = ReplySeen $n 'OK'
           if ($late) { Write-Host "   返信を読み取りました（待ち時間のあとに届いていました）" -ForegroundColor Green }
         }
-        $push = Read-Host "   iPhone に通知は届きましたか？ [y/n]"
+        $push = if ($SelfReply) { AutoNo "   iPhone に通知は届きましたか？ [y/n]" } else { Read-Host "   iPhone に通知は届きましたか？ [y/n]" }
         Rec 'T4' ("OK 送信方法=" + $s1.via)
-        $replied = if ($got -or $late) { 'y' } else { Read-Host "   返信しましたか（PC でも iPhone でも）？ [y/n]" }
-        Rec 'T5' ("送信=OK 投稿を画面で確認={0} iPhone通知={1} 返信した={2} 返信読取={3}" -f $(if ($script:PostSeen) { 'あり' } else { 'なし' }), $(if ($push -match '^\s*[yY]') { 'あり' } else { 'なし' }), $(if ($replied -match '^\s*[yY]') { 'はい' } else { 'いいえ' }), $(if ($got) { 'OK' } elseif ($late) { 'OK(遅れて届いた)' } else { 'NG(タイムアウト)' }))
+        $replied = if ($got -or $late) { 'y' } elseif ($SelfReply) { AutoNo "   返信しましたか（PC でも iPhone でも）？ [y/n]" } else { Read-Host "   返信しましたか（PC でも iPhone でも）？ [y/n]" }
+        Rec 'T5' ("送信=OK 投稿を画面で確認={0} iPhone通知={1} 返信した={2} 返信読取={3}" -f $(if ($script:PostSeen) { 'あり' } else { 'なし' }), $(if ($SelfReply) { '自動（確認せず）' } elseif ($push -match '^\s*[yY]') { 'あり' } else { 'なし' }), $(if ($replied -match '^\s*[yY]') { 'はい' } else { 'いいえ' }), $(if ($got) { 'OK' } elseif ($late) { 'OK(遅れて届いた)' } else { 'NG(タイムアウト)' }))
+        AutoTag 'T5'
         $selfOk = [bool]($got -or $late)
       } else {
         $e4 = "$($p1.error)"; $e5 = "$($s1.error)"
@@ -361,14 +400,18 @@ if ($py) {
 
   if (Want 'T9') { Say "T9 承認の流れ（iPhone から OK / NG）" }
   if (-not (Want 'T9')) { }
-  elseif ($selfOk -and (YesNo "   確認待ち2件を自分とのチャットに送信します（宛先は自分だけ）。よろしいですか")) {
+  elseif ($selfOk -and (Consent "   確認待ち2件を自分とのチャットに送信します（宛先は自分だけ）。よろしいですか")) {
     $base = Get-Random -Minimum 100 -Maximum 899
     [IO.File]::WriteAllText((Join-Path $out 'approvals.json'), "{`"next`": $base, `"items`": {}}")
     Write-Host "   数秒間マウス・キーボードに触らないでください"
     $nt = Py @('-m', 'kimeru', '--out', $out, 'notify', '--send')
     Rec 'T9-notify' $(if (Posted $nt) { 'OK ' + (Short (($nt -split "`n") | Where-Object { $_ -match 'posted:' })) } elseif ($nt -match 'another approvals run is in progress') { 'NG 鍵が取れず、何も投稿していません（他の処理が動いています。少し待って、やり直してください）' } else { 'NG ' + (Fails $nt) })
+    if ($SelfReply) {
+      if (Posted $nt) { [void](Auto-Reply "OK $base" "$base,$($base + 1)"); Start-Sleep -Seconds 2; [void](Auto-Reply "NG $($base + 1)" "$base,$($base + 1)") }
+    } else {
     Write-Host ("   iPhone から「OK {0}」と「NG {1}」を別々に返信してください（最大 {2} 秒）" -f $base, ($base + 1), $WaitSec) -ForegroundColor Green
-    $acc = ''; $deadline = (Get-Date).AddSeconds($WaitSec)
+    }
+    $acc = ''; $deadline = (Get-Date).AddSeconds($replyWait)
     while ((Get-Date) -lt $deadline -and -not ($acc -match 'approved' -and $acc -match 'rejected')) {
       Start-Sleep -Seconds 10
       $acc += Py @('-m', 'kimeru', '--out', $out, 'approvals')
@@ -377,6 +420,7 @@ if ($py) {
     $ok9 = $acc -match 'approved' -and $acc -match 'rejected'
     $shown = if ($acc -match 'failed: |Traceback|Error') { Fails $acc } else { Short $acc }
     Rec 'T9' ("{0} approvals={1} 2回目={2}" -f $(if ($ok9) { 'OK' } else { 'NG' }), $shown, $(if (-not $again.Trim()) { '（なし＝二重処理なし）' } elseif ($again -match 'failed: |Traceback') { Fails $again } else { Short $again }))
+    AutoTag 'T9'
   } else { Rec 'T9' 'SKIP' }
 }
 
@@ -520,7 +564,7 @@ if (Want 'T21') {
 # ---- T20: "聞き返し N" and "下書き N <文面>" are read from the real Teams chat (fictional items) ----
 if ($selfOk -and (Want 'T20')) {
   Say "T20 聞き返し・下書き（M365 Copilot の文面の貼り戻し）を Teams から読めるか"
-  if (-not (YesNo "   架空の確認待ち2件を自分とのチャットに送信します（宛先は自分だけ）。よろしいですか")) { Rec 'T20' 'SKIP' }
+  if (-not (Consent "   架空の確認待ち2件を自分とのチャットに送信します（宛先は自分だけ）。よろしいですか")) { Rec 'T20' 'SKIP' }
   else {
     $out20 = Join-Path $tmp 'out20'
     New-Item -ItemType Directory -Force $out20 | Out-Null
@@ -539,11 +583,14 @@ if ($selfOk -and (Want 'T20')) {
     $nt = Py @('-m', 'kimeru', '--out', $out20, 'notify', '--send')
     if (-not (Posted $nt)) { Rec 'T20' ('NG 投稿できません ' + $(if ($nt -match 'another approvals run is in progress') { '（鍵が取れず、何も投稿していません）' } else { Fails $nt })) }
     else {
+      if ($SelfReply) { [void](Auto-Reply "聞き返し $base" "$base,$($base + 1)") }   # 下書き carries a long text: it is not on the whitelist, so it is not typed
+      else {
       Write-Host ("   Teams の自分とのチャットで、次の 2 つを別々に返信してください（最大 {0} 秒）" -f $WaitSec) -ForegroundColor Green
       Write-Host ("     聞き返し {0}" -f $base) -ForegroundColor Green
       Write-Host ("     下書き {0} ご連絡ありがとうございます。仕様を確認して、改めてご連絡します。" -f ($base + 1)) -ForegroundColor Green
-      $deadline = (Get-Date).AddSeconds($WaitSec); $okA = $false; $okB = $false
-      while ((Get-Date) -lt $deadline -and -not ($okA -and $okB)) {
+      }
+      $deadline = (Get-Date).AddSeconds($replyWait); $okA = $false; $okB = $false
+      while ((Get-Date) -lt $deadline -and -not ($okA -and ($okB -or $SelfReply))) {
         Start-Sleep -Seconds 10
         [void](Py @('-m', 'kimeru', '--out', $out20, 'approvals'))
         try {
@@ -553,7 +600,8 @@ if ($selfOk -and (Want 'T20')) {
           $okB = ($ib.record.actions[0].drafted_by -like 'm365*')
         } catch {}
       }
-      Rec 'T20' ("{0} 聞き返し={1} 下書き={2}" -f $(if ($okA -and $okB) { 'OK' } else { 'NG' }), $(if ($okA) { '読めた' } else { '読めない' }), $(if ($okB) { '読めた' } else { '読めない' }))
+      if ($SelfReply) { Rec 'T20' ("{0} 聞き返し={1} 下書き=未確認（自動の返信では打たない）" -f $(if ($okA) { '部分OK' } else { 'NG' }), $(if ($okA) { '読めた' } else { '読めない' })); AutoTag 'T20' }
+      else { Rec 'T20' ("{0} 聞き返し={1} 下書き={2}" -f $(if ($okA -and $okB) { 'OK' } else { 'NG' }), $(if ($okA) { '読めた' } else { '読めない' }), $(if ($okB) { '読めた' } else { '読めない' })) }
     }
   }
 }
@@ -565,12 +613,22 @@ if (Want 'T25') {
   if ($Auto) { Rec 'T25' 'SKIP（自動: 自分とのチャットに人が打つ必要がある。run-check.cmd T25 で行う）' }
   elseif (-not $uia) { Rec 'T25' 'SKIP（組織ポリシーで画面操作不可）' }
   elseif (-not $py) { Rec 'T25' 'SKIP（Python なし）' }
-  elseif (-not (YesNo "   自分とのチャットに「停止」と「再開」を、あなたが 1 行ずつ打ちます（宛先は自分だけ。スクリプトは送りません）。よろしいですか")) { Rec 'T25' 'SKIP' }
+  elseif ($SelfReply -and -not $selfOk) { Rec 'T25' 'SKIP（自分とのチャットが開けていないため。先に T3 を通してください）' }
+  elseif (-not (Consent "   自分とのチャットに「停止」と「再開」を、あなたが 1 行ずつ打ちます（宛先は自分だけ。スクリプトは送りません）。よろしいですか")) { Rec 'T25' 'SKIP' }
   else {
     $ctlWait = 30; $found = @{}; $waited = @{}; $row = 'なし'; $readErr = $null
+    $n25 = Get-Random -Minimum 100 -Maximum 999
+    if ($SelfReply) {   # the replies go under a test post of this run; 停止 is always followed by 再開
+      $p25 = Self 'post' @('-Text', "[kimeru 試験 #$n25] 停止・再開の試験です")
+      $s25 = if ($p25.ok -and $p25.typed) { Self 'send' } else { $p25 }
+      if (-not $s25.ok) { $readErr = [string]$s25.error }
+    }
     foreach ($word in @('停止', '再開')) {
+      if ($SelfReply) { if (-not $readErr -and -not (Auto-Reply $word "$n25")) { $readErr = $script:ReplyErr } }
+      else {
       Write-Host ("   自分とのチャットに「{0}」とだけ打って Teams で送信し、この画面で Enter を押してください（最大 {1} 秒、一覧を読みます）" -f $word, $ctlWait) -ForegroundColor Green
       [void](Read-Host '   ')
+      }
       $began = Get-Date; $hit = $false
       while (-not $hit -and -not $readErr -and ((Get-Date) - $began).TotalSeconds -lt $ctlWait) {
         $c = Self 'chats'
@@ -584,7 +642,7 @@ if (Want 'T25') {
       $waited[$word] = [int]((Get-Date) - $began).TotalSeconds
     }
     if ($readErr) { Rec 'T25' ('NG ' + $readErr) }
-    else { $ok = [bool]($found['停止'] -and $found['再開']); Rec 'T25' ("{0} 停止={1}（待った{2}秒） 再開={3}（待った{4}秒） 自分の行={5}" -f $(if ($ok) { 'OK' } else { 'NG' }), $(if ($found['停止']) { '認識' } else { '未認識' }), $waited['停止'], $(if ($found['再開']) { '認識' } else { '未認識' }), $waited['再開'], $row) }
+    else { $ok = [bool]($found['停止'] -and $found['再開']); Rec 'T25' ("{0} 停止={1}（待った{2}秒） 再開={3}（待った{4}秒） 自分の行={5}" -f $(if ($ok) { 'OK' } else { 'NG' }), $(if ($found['停止']) { '認識' } else { '未認識' }), $waited['停止'], $(if ($found['再開']) { '認識' } else { '未認識' }), $waited['再開'], $row); AutoTag 'T25' }
   }
 }
 
@@ -626,7 +684,7 @@ if (Want 'T27') {
   Say "T27 返信の語を読み手が読めるか（試験の投稿の下に打つ語。承認の状態は変えません）"
   if ($Auto) { Rec 'T27' 'SKIP（自動: 自分とのチャットに投稿し、人が打つ必要がある。run-check.cmd T27 で行う）' }
   elseif (-not $uia -or -not $selfOk) { Rec 'T27' 'SKIP（自分とのチャットが開けていないため。先に T3 を通してください）' }
-  elseif (-not (YesNo "   自分とのチャットに試験の投稿を 1 通送信します（宛先は自分だけ。承認の投稿ではありません）。よろしいですか")) { Rec 'T27' 'SKIP' }
+  elseif (-not (Consent "   自分とのチャットに試験の投稿を 1 通送信します（宛先は自分だけ。承認の投稿ではありません）。よろしいですか")) { Rec 'T27' 'SKIP' }
   else {
     $n = Get-Random -Minimum 100 -Maximum 999
     $p27 = Self 'post' @('-Text', "[kimeru 試験 #$n] 返信の試験です。次の 7 行を、自分とのチャットに 1 行ずつ打ってください")
@@ -635,10 +693,14 @@ if (Want 'T27') {
     else {
       $want = @("R:違う $n", "R:保留 $n 明日", "R:不要 $n", "R:着手 $n", "R:完了 $n 1", "R:延期 $n 明日", "R:送った $n")
       $words = @('違う', '保留', '不要', '着手', '完了', '延期', '送った')
+      if ($SelfReply) {
+        foreach ($line in @($want | ForEach-Object { $_.Substring(2) })) { [void](Auto-Reply $line "$n"); Start-Sleep -Seconds 2 }
+      } else {
       Write-Host "   上の投稿の下に、次の 7 行を、自分とのチャットに 1 行ずつ打って送ってください（最大 $WaitSec 秒。読めたものから数えます）:" -ForegroundColor Green
       foreach ($line in @($want | ForEach-Object { $_.Substring(2) })) { Write-Host ("     {0}" -f $line) -ForegroundColor Green }
+      }
       $began = Get-Date; $tl = @(); $at = -1; $readErr = $null
-      while ((Get-Date) -lt $began.AddSeconds($WaitSec)) {
+      while ((Get-Date) -lt $began.AddSeconds($replyWait)) {
         $r = Self 'read'
         if (-not $r.ok) { $readErr = [string]$r.error; break }
         if ($r.timeline) {
@@ -656,7 +718,7 @@ if (Want 'T27') {
       $posted = if ($at -ge 0) { 'あり' } else { 'なし' }
       $missTxt = if ($missing.Count) { $missing -join '・' } else { 'なし' }
       if ($readErr) { Rec 'T27' ('NG ' + $readErr) }
-      else { Rec 'T27' ("{0} 投稿={1} 分類={2}/{3} 分類されなかった語={4} 待った={5}秒" -f $(if ($hits -eq $want.Count) { 'OK' } else { 'NG' }), $posted, $hits, $want.Count, $missTxt, $waited) }
+      else { Rec 'T27' ("{0} 投稿={1} 分類={2}/{3} 分類されなかった語={4} 待った={5}秒" -f $(if ($hits -eq $want.Count) { 'OK' } else { 'NG' }), $posted, $hits, $want.Count, $missTxt, $waited); AutoTag 'T27' }
     }
   }
 }

@@ -253,6 +253,53 @@ class TestT5WaitsForAReplyFromThePcOrThePhone(unittest.TestCase):   # a reply ty
         self.assertIn("送信=OK 投稿を画面で確認={0} iPhone通知={1} 返信した={2} 返信読取={3}", block)
 
 
+class TestSelfReplyIsOptInAndNeverAuto(unittest.TestCase):   # run-check.cmd -SelfReply: the script types the short replies itself
+    def test_the_switch_and_the_environment_variable_exist_and_auto_wins(self):
+        self.assertIn("[switch]$SelfReply", CHECK)
+        self.assertIn("$env:KIMERU_CHECK_SELF_REPLY -eq '1'", CHECK)
+        on_at = CHECK.index("$env:KIMERU_CHECK_SELF_REPLY -eq '1'")
+        auto_at = CHECK.index("if ($Auto -and $SelfReply) { $SelfReply = [switch]$false }")
+        self.assertLess(on_at, auto_at)   # -Auto switches it off after the variable switched it on
+        self.assertNotIn("SelfReply", AUTO.decode("utf-8-sig"))   # run-auto-check never asks for it
+
+    def test_the_consents_of_the_five_steps_are_answered_y(self):
+        self.assertRegex(CHECK, r"function Consent\(\$q\) \{\s*if \(\$SelfReply\) \{[^}]*自動: y[^}]*return \$true \}")
+        for step, prompt in (("T5", "テストメッセージを1通送信します"), ("T9", "確認待ち2件を"), ("T20", "架空の確認待ち2件を"),
+                             ("T25", "「停止」と「再開」を、あなたが 1 行ずつ打ちます"), ("T27", "試験の投稿を 1 通送信します")):
+            line = next(l for l in CHECK.splitlines() if prompt in l)
+            self.assertIn("Consent ", line, step)
+            self.assertNotIn("YesNo ", line, step)
+
+    def test_the_replies_are_typed_with_testreply_and_the_questions_about_what_a_person_saw_are_answered_n(self):
+        self.assertIn("Self 'testreply' @('-Text', $text, '-Numbers', $nums)", CHECK)
+        self.assertEqual(CHECK.count("function AutoNo"), 1)
+        self.assertIn('AutoNo "   iPhone に通知は届きましたか？ [y/n]"', CHECK)
+        self.assertIn("'自動（確認せず）'", CHECK)
+        self.assertIn("返信=自動", CHECK)
+        for call in ('Auto-Reply "OK $n" "$n"', 'Auto-Reply "OK $base" "$base,$($base + 1)"', 'Auto-Reply "NG $($base + 1)" "$base,$($base + 1)"',
+                     'Auto-Reply "聞き返し $base" "$base,$($base + 1)"', 'Auto-Reply $word "$n25"', 'Auto-Reply $line "$n"'):
+            self.assertIn(call, CHECK, call)   # every reply carries the number this run just posted
+
+    def test_t26_t22_t21_and_the_outside_steps_are_skipped_under_it(self):
+        line = next(l for l in CHECK.splitlines() if l.startswith("$SelfReplySkip"))
+        skipped = set(re.findall(r"'(T\d+)'", line))
+        self.assertEqual(skipped, {"T10", "T11", "T15", "T16", "T17", "T18", "T19", "T21", "T22", "T24", "T26"})
+        self.assertFalse(skipped & {"T5", "T9", "T20", "T25", "T27"})
+        self.assertIn("'SKIP（自動の返信では行わない: 相手・外部が要る）'", CHECK)
+
+    def test_the_default_run_is_unchanged(self):
+        # without the switch Consent is YesNo and Want is the plain "was it asked for" test
+        self.assertRegex(CHECK, r"function Consent\(\$q\) \{[^}]*\}\s*YesNo \$q\s*\}")
+        want = CHECK[CHECK.index("function Want($t) {"):]
+        want = want[:want.index("\n}\n")]
+        self.assertIn("if ($w -and $SelfReply -and", want)
+
+    def test_t25_posts_only_a_test_post_and_always_ends_with_the_resume_word(self):
+        block = CHECK[CHECK.index("# ---- T25 "):CHECK.index("# ---- T26 ")]
+        self.assertIn("[kimeru 試験 #$n25] 停止・再開の試験です", block)
+        self.assertIn("foreach ($word in @('停止', '再開'))", block)   # 再開 is typed even when 停止 was not read back
+
+
 class TestNoEnvironmentDetails(unittest.TestCase):
 
     def test_public_documents_do_not_name_the_tested_environment(self):

@@ -7,6 +7,7 @@ param(
   [string]$Text = '',
   [string]$ChatId = '',
   [string]$TextFile = '',
+  [string]$Numbers = '',
   [string]$Preview = '',
   [int]$Count = 5,
   [switch]$Send
@@ -16,6 +17,8 @@ $ErrorActionPreference = 'Stop'
 $path = $env:KIMERU_FAKE_CHAT
 $chat = if (Test-Path $path) { Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json } else { [pscustomobject]@{ messages = @() } }
 function Out-Json($o) { $o | ConvertTo-Json -Compress -Depth 5 }
+# testreply: the same whitelist as tools/teams-self.ps1 (tests/test_check_self_reply.py compares the two strings)
+$ReplyWhitelist = '^(OK|NG|保留|詳細|聞き返し|違う|不要|着手|完了|延期|送った|再実行|済) ?(#)?([1-9][0-9]{2})( [^\r\n]{1,12})?$|^(停止|再開)$'
 function Save { $chat | ConvertTo-Json -Depth 5 | Set-Content -Path $path -Encoding UTF8 }
 
 switch ($Action) {
@@ -30,6 +33,18 @@ switch ($Action) {
     }
     Out-Json @{ ok = $true; typed = $true; sent = [bool]$Send
                 readback = @{ matched = [bool]$Send; message_id = $messageId } }
+  }
+  'testreply' {
+    # the same refusals as the real script, before anything is written: the whitelist, no line break or backslash, a number of this run
+    if ($TextFile) { $Text = [IO.File]::ReadAllText($TextFile, (New-Object Text.UTF8Encoding $false)) }
+    if ($Text -match '[\\\r\n]' -or $Text -cnotmatch $ReplyWhitelist) { Out-Json @{ ok = $false; error = 'testreply: the text is not on the whitelist; nothing typed'; typed = $false; sent = $false }; exit 2 }
+    $allowed = @(([string]$Numbers -split ',') | Where-Object { $_ -match '^[1-9][0-9]{2}$' } | ForEach-Object { [int]$_ })
+    if (-not $allowed.Count) { Out-Json @{ ok = $false; error = 'testreply: no number of this run was given; nothing typed'; typed = $false; sent = $false }; exit 2 }
+    $mNum = [regex]::Match($Text, '[1-9][0-9]{2}')
+    if ($mNum.Success -and ([int]$mNum.Value -gt 998 -or $allowed -notcontains [int]$mNum.Value)) { Out-Json @{ ok = $false; error = 'testreply: the number is not one this run posted; nothing typed'; typed = $false; sent = $false }; exit 2 }
+    $chat.messages = @($chat.messages) + $Text
+    Save
+    Out-Json @{ ok = $true; typed = $true; sent = $true; readback = @{ matched = $true; message_id = 'fake-' + $chat.messages.Count } }
   }
   'read' {
     # like the real screen: only the last KIMERU_FAKE_TAIL messages are visible, and consecutive identical lines are folded into one

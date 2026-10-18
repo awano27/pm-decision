@@ -233,9 +233,15 @@ class TestTryReachesNothing(unittest.TestCase):
         with a_machine_with_everything_on(self.root):
             (self.root / "out").mkdir()
             (self.root / "a-file").write_text("x", encoding="utf-8")
-            for out in ("out.", "./out/../out", str(self.root / "out"), "OUT" if os.name == "nt" else "out"):
+            same = ["./out/../out", str(self.root / "out")]
+            if os.name == "nt":   # Windows drops a trailing dot and ignores case: these name the same folder there
+                same += ["out.", "OUT"]
+            for out in same:
                 rc, _, err = run("try", "--out", out)
                 self.assertEqual(rc, 2, out)
+            if os.name != "nt":   # elsewhere `out.` is a folder of its own: the try run may use it, and `out` stays untouched
+                self.assertEqual(run("try", "--out", "out.")[0], 0)
+                self.assertTrue(tryout.is_try_folder(self.root / "out."))
             rc, _, err = run("try", "--out", "a-file/sub")   # through a file: one line, no traceback
             self.assertEqual(rc, 2)
             self.assertNotIn("Traceback", err)

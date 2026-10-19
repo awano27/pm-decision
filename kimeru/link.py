@@ -136,6 +136,8 @@ def index(out, items, now=None):
             "target": str(link.get("target") or ""), "at": t, "kind": kind, "event_id": str(r.get("event_id")),
             "graph_key": r.get("graph_key"), "n": numbers.get(key), "severity": _rank(ev.get("severity")),
             "creates": any(isinstance(a, dict) and a.get("type") == "ado.create" for a in (r.get("actions") or [])),
+            "bug": any(isinstance(a, dict) and a.get("type") == "ado.create" and a.get("work_item_type") == "Bug"
+                       for a in (r.get("actions") or [])),
         })
     return {"rows": rows, "known": known, "now": at_now}   # the file's order: it is only appended to
 
@@ -236,13 +238,16 @@ def notice_note(idx, rec):
         earlier = _same_case_within_a_day(idx, rec, _fp_of(rec))
         if earlier:
             first = min(earlier, key=lambda r: r["at"])
-            return {"prefix": f"再発火 {len(earlier) + 1} 回目（初回 {_stamp(first['at'], idx)}）: ", "tail": ""}
+            bug = "（Bug は初回で記録済み）" if first.get("bug") else ""   # the first firing already planned the Bug: no second one is needed
+            return {"prefix": f"再発火 {len(earlier) + 1} 回目（初回 {_stamp(first['at'], idx)}）{bug}: ", "tail": ""}
     return {"prefix": "", "tail": post_note(idx, rec) or ""}
 
 
 def attach(res, ev, out, now=None):
     """Adds the `link` of the event to the judgment `res` (its event and graph_key are set already), and dup_of to an ado.create that
-    repeats one of the same case within 24 hours (the time of the first). Reads the records and writes nothing. Returns res."""
+    repeats one of the same case within 24 hours (the time of the first). A minutes risk line whose text came before within 35 days
+    gets `既出のリスク（N 回目、初回 M/D）: ` in front of its advice (the advice itself stays). Reads the records and writes nothing.
+    Returns res."""
     fp = fingerprint(ev)
     if fp is None and not _names_a_number(ev):   # nothing here can link: the records are not read
         return res
@@ -259,7 +264,23 @@ def attach(res, ev, out, now=None):
             for a in res.get("actions") or []:
                 if isinstance(a, dict) and a.get("type") == "ado.create":
                     a["dup_of"] = _stamp(first["at"], idx)
+        _mark_repeated_risk(res, ev, fp, idx)
     return res
+
+
+RISK_NODES = ("risk_item", "risk_planned")   # the nodes of graphs/meeting_item.json that register a risk line
+
+
+def _mark_repeated_risk(res, ev, fp, idx):
+    """A minutes risk line of the same text (the same fingerprint) that was judged before, within 35 days: its advice starts with
+    `既出のリスク（N 回目、初回 M/D）: ` and goes on with the advice it had. Nothing else about the item changes."""
+    if ev.get("kind") != "meeting.item" or res.get("node") not in RISK_NODES or not res.get("advice"):
+        return
+    earlier = [r for r in idx["rows"] if r["fp"] == fp and r["kind"] == "meeting.item"]
+    if not earlier:
+        return
+    first = min(earlier, key=lambda r: r["at"]).get("at").astimezone()
+    res["advice"] = f"既出のリスク（{len(earlier) + 1} 回目、初回 {first.month}/{first.day}）: {res['advice']}"
 
 
 # ---- R32: a recurring alert joins the waiting item (merge_recurring=1; notify.fold_recurring does the merge) ----

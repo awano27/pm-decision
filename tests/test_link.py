@@ -141,7 +141,7 @@ class TestAnAlertThatComesBackIsARefire(unittest.TestCase):
             self.assertEqual(len(rows(out, "notices.jsonl")), 2)
             first, second = notice_bodies(out)
             self.assertFalse(first.startswith("[kimeru 通知] 再発火"))
-            prefix = f"[kimeru 通知] 再発火 2 回目（初回 {local_hm(rows(out, 'decisions.jsonl')[0]['at'])}）: "
+            prefix = f"[kimeru 通知] 再発火 2 回目（初回 {local_hm(rows(out, 'decisions.jsonl')[0]['at'])}）（Bug は初回で記録済み）: "
             self.assertTrue(second.startswith(prefix), second)
             self.assertEqual(len(second.splitlines()), len(first.splitlines()))
 
@@ -393,6 +393,101 @@ class TestNothingIsMergedOrDropped(unittest.TestCase):
             statuses = [e["status"] for e in first[0]["executed"] if e["action"].get("type") == "ado.create"]
             self.assertEqual(statuses, [e["status"] for e in second[0]["executed"] if e["action"].get("type") == "ado.create"])
             self.assertTrue(all(s != "done" for s in statuses), statuses)
+
+
+class TestARepeatedRiskLineAndARefireWhoseBugIsRecorded(unittest.TestCase):
+    """The rest of R19's "しくみ": the advice of a minutes risk line seen before (within 35 days) starts with 既出のリスク（N 回目、初回
+    M/D）, and the notice of a refire says the Bug was recorded by the first firing. Only with link_related=1."""
+    NOW = datetime(2026, 10, 12, 12, 0, tzinfo=timezone.utc)
+    RISK = "リスク: 決済APIの遅延が出る可能性"
+
+    @staticmethod
+    def minutes(date, text=RISK):
+        return {"title": f"週次定例 {date}", "date": date, "text": f"- {text}"}
+
+    @staticmethod
+    def md(iso):
+        local = datetime.fromisoformat(iso).astimezone()
+        return f"{local.month}/{local.day}"
+
+    def old_row(self, out, days_ago, ev, node, actions=(), severity=None):
+        from kimeru import link
+        at = (self.NOW - timedelta(days=days_ago)).isoformat(timespec="seconds")
+        row = {"graph": "g", "graph_key": f"g:old{days_ago}", "event_kind": ev["kind"], "event_id": f"old{days_ago}", "node": node,
+               "at": at, "event": {"kind": ev["kind"], **({"severity": severity} if severity else {})},
+               "link": {"fp": link.fingerprint(ev), "refs": [], "target": "x"}, "actions": list(actions)}
+        with (Path(out) / "decisions.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    def test_the_same_risk_line_in_the_next_weeks_is_marked_with_its_count_and_first_date_and_keeps_its_advice(self):
+        with mock.patch.dict(os.environ, {"KIMERU_LINK_RELATED": "1"}), tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            res = [process(self.minutes(f"2026-10-{day:02d}"), GRAPHS, StubBackend(), out, PBS, dedup=True)[0] for day in (1, 8, 15)]
+            plain = res[0]["advice"]
+            first_day = self.md(res[0]["at"])
+            self.assertFalse(plain.startswith("既出のリスク"))
+            self.assertEqual(res[1]["advice"], f"既出のリスク（2 回目、初回 {first_day}）: {plain.replace('2026-10-01', '2026-10-08')}")
+            self.assertEqual(res[2]["advice"], f"既出のリスク（3 回目、初回 {first_day}）: {plain.replace('2026-10-01', '2026-10-15')}")
+            self.assertEqual(len(rows(out, "decisions.jsonl")), 3)           # every decision is still recorded
+            self.assertEqual([r["advice"] for r in rows(out, "decisions.jsonl")], [r["advice"] for r in res])
+            other = process(self.minutes("2026-10-22", "リスク: 別の件の遅延が出る可能性"), GRAPHS, StubBackend(), out, PBS, dedup=True)[0]
+            self.assertFalse(other["advice"].startswith("既出のリスク"))        # another text is another case
+
+    def test_with_the_setting_0_the_risk_advice_is_the_same_whatever_came_before(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            first = process(self.minutes("2026-10-01"), GRAPHS, StubBackend(), out, PBS, dedup=True)[0]
+            second = process(self.minutes("2026-10-08"), GRAPHS, StubBackend(), out, PBS, dedup=True)[0]
+            self.assertNotIn("既出", first["advice"] + second["advice"])
+            self.assertNotIn("link", second)
+            self.assertEqual(first["advice"].replace("2026-10-01", "2026-10-08"), second["advice"])
+
+    def test_only_a_risk_line_within_35_days_and_with_an_advice_is_marked(self):
+        from kimeru import link
+        ev = {"kind": "meeting.item", "id": "m9", "meeting": "週次定例", "item": self.RISK}
+        for days_ago, node, advice, marked in ((20, "risk_item", "リスク登録済み", True), (20, "risk_planned", "計画", True),
+                                              (36, "risk_item", "リスク登録済み", False), (20, "create_task", "タスク", False),
+                                              (20, "risk_item", None, False)):
+            with self.subTest(days_ago=days_ago, node=node, advice=advice), tempfile.TemporaryDirectory() as d:
+                self.old_row(d, days_ago, ev, "risk_item")
+                res = {"graph": "g", "graph_key": "g:new", "node": node, "event_kind": "meeting.item", "actions": [], "advice": advice}
+                link.attach(res, ev, d, now=self.NOW)
+                if marked:
+                    old = (self.NOW - timedelta(days=days_ago)).astimezone()
+                    self.assertEqual(res["advice"], f"既出のリスク（2 回目、初回 {old.month}/{old.day}）: {advice}")
+                else:
+                    self.assertEqual(res["advice"], advice)
+
+    def test_a_refire_whose_first_firing_planned_a_bug_says_the_bug_is_recorded_and_still_posts_the_notice(self):
+        with mock.patch.dict(os.environ, {"KIMERU_LINK_RELATED": "1"}), tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            for n, fired in enumerate(("2026-09-23T09:30:00Z", "2026-09-23T10:00:00Z", "2026-09-23T10:30:00Z"), 1):
+                process(alert(f"/subscriptions/x/alerts/a{n}", fired, "Sev1"), GRAPHS, StubBackend(), out, PBS, dedup=True)
+            first_rows = rows(out, "decisions.jsonl")
+            self.assertTrue(any(a.get("type") == "ado.create" and a.get("work_item_type") == "Bug" for a in first_rows[0]["actions"]))
+            first, second, third = notice_bodies(out)
+            hm = local_hm(first_rows[0]["at"])
+            self.assertFalse(first.startswith("[kimeru 通知] 再発火"))
+            self.assertTrue(second.startswith(f"[kimeru 通知] 再発火 2 回目（初回 {hm}）（Bug は初回で記録済み）: "), second)
+            self.assertTrue(third.startswith(f"[kimeru 通知] 再発火 3 回目（初回 {hm}）（Bug は初回で記録済み）: "), third)
+            self.assertEqual(second.partition("\n")[2], first.partition("\n")[2])   # Sev1: the notice is whole, only its prefix grew
+            self.assertEqual(len(second.splitlines()), len(first.splitlines()))
+
+    def test_a_refire_whose_first_firing_planned_no_bug_has_the_old_prefix(self):
+        from kimeru import link
+        ev = {"kind": "monitor.alert", "id": "a1", "rule": "disk usage", "resources": ["/subscriptions/x/resourceGroups/r/providers/p/vm1"]}
+        fp = link.fingerprint(ev)
+        task = [{"type": "ado.create", "work_item_type": "Task", "title": "t"}]
+        bug = [{"type": "ado.create", "work_item_type": "Bug", "title": "b"}]
+        for actions, tail in ((task, ""), ([], ""), (bug, "（Bug は初回で記録済み）")):
+            with self.subTest(tail=tail, actions=actions), tempfile.TemporaryDirectory() as d:
+                self.old_row(d, 0.02, ev, "task_internal", actions, severity="Sev3")
+                rec = {"event_kind": "monitor.alert", "link": {"fp": fp}, "event": {"severity": "Sev3"}, "graph_key": "g:new",
+                       "at": self.NOW.isoformat(timespec="seconds")}
+                note = link.notice_note(link.index(d, {}, now=self.NOW), rec)
+                stamp = (self.NOW - timedelta(days=0.02)).astimezone().strftime("%H:%M")
+                self.assertEqual(note["prefix"], f"再発火 2 回目（初回 {stamp}）{tail}: ")
+        self.assertIsNone(link.notice_note(None, rec))                     # the setting 0: the notice is as before
 
 
 if __name__ == "__main__":

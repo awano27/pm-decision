@@ -253,6 +253,22 @@ def _waiting_age(out, now):
     return {"n": len(ages), "median": median(ages) if ages else None, "max": max(ages) if ages else None}
 
 
+def _writer_use(now, since):
+    """T9 (e): {"calls", "seconds"} of the writer calls of the days in the week (writer.note_call keeps one line a day in the state
+    folder). Numbers only; zero when nothing was recorded."""
+    from . import fsutil, writer as writer_mod   # local: writer loads config only
+    data = fsutil.read_json(config.state_dir() / writer_mod.CALLS_FILE, {})
+    calls, seconds = 0, 0.0
+    first, last = since.astimezone().date().isoformat(), now.astimezone().date().isoformat()
+    for day, row in (data.items() if isinstance(data, dict) else ()):
+        if first <= str(day) <= last and isinstance(row, list) and len(row) == 2:
+            try:
+                calls, seconds = calls + int(row[0]), seconds + float(row[1])
+            except (TypeError, ValueError):
+                continue
+    return {"calls": calls, "seconds": seconds}
+
+
 def _age_words(seconds):
     return f"{seconds / 3600:.0f} 時間" if seconds < 48 * 3600 else f"{seconds / 86400:.1f} 日"
 
@@ -308,7 +324,7 @@ def _week_extra(out, decision_rows, decisions, week_replies, review_rows, now, s
         **({"rule_recorded": sum(1 for r in counted if r.get("demoted_by"))} if any(r.get("demoted_by") for r in counted) else {}),   # R33 (only when a rule recorded a line)
         "replied_items": len(replies), "replies": sum(replies.values()),
         "oks_with_draft": draft, "oks_unchanged": unchanged,
-        "draft_use": _draft_use(out, week_replies), "waiting_age": _waiting_age(out, now),
+        "draft_use": _draft_use(out, week_replies), "waiting_age": _waiting_age(out, now), "writer_use": _writer_use(now, since),
         "latency": {"now": [s for t, s in latencies if since_ts <= t <= now_ts],
                     "previous": [s for t, s in latencies if prev_ts <= t < since_ts]},
         "calibration": _calibration(out),
@@ -765,6 +781,9 @@ def render(s, share=False):
             lines.append("下書きの使われ方: " + (
                 f"OK {du['ok']} 件（{du['ok'] * 100 // nd}%）・NG {du['ng']} 件（{du['ng'] * 100 // nd}%）・修正 {du['fix']} 件（{du['fix'] * 100 // nd}%）"
                 f"（決まった下書きの件 {nd} 件{_count_note(nd)}）" if nd else "不明（決まった下書きの件 0 件）"))
+        wu = wk.get("writer_use")   # T9 (e): numbers only
+        if wu is not None:
+            lines.append(f"writer の呼び出し: {wu['calls']} 回・合計 {wu['seconds']:.0f} 秒" if wu["calls"] else "writer の呼び出し: 0 回")
         wa = wk.get("waiting_age")
         if wa is not None:
             lines.append("確認待ちの古さ: " + (f"中央値 {_age_words(wa['median'])} / 最長 {_age_words(wa['max'])}（{wa['n']} 件）"

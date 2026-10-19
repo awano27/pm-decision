@@ -427,5 +427,47 @@ class TestTheTextsStayTheSameWhenTheSettingIsZero(CycleCase):
         self.assertEqual(push.message([1, 2], 1, 0), GOLDEN_PUSH)
 
 
+class TestASevereAlertWhileStopped(CycleCase):
+    """usage.md: while stopped, even a Sev0/1 notice is not posted or announced; it stays in the inbox and goes out after 再開."""
+    ALERT = {"schemaId": "azureMonitorCommonAlertSchema", "data": {"essentials": {
+        "alertId": "a1", "alertRule": "checkout-api 5xx", "severity": "Sev1", "monitorCondition": "Fired",
+        "description": "customers cannot pay; checkout returns 500 for all users"}, "alertContext": {}}}
+
+    def notices(self):
+        return [t for t, _ in self.t.posts if t.startswith("[kimeru 通知]")]
+
+    def test_a_severe_alert_in_the_inbox_is_neither_posted_nor_announced_while_stopped_and_goes_out_after_the_resume(self):
+        self.cycle(T0, [self_row("あなた: 別の話")])
+        r = self.cycle(T0 + timedelta(minutes=5), [self_row("あなた: 停止")])
+        self.assertEqual(r["mode"], "stop")
+        self.assertEqual(len(self.toasts), 1)                     # the stop toast only
+        self.inbox.mkdir(parents=True, exist_ok=True)
+        alert_file = self.inbox / "a.json"
+        alert_file.write_text(json.dumps(self.ALERT), encoding="utf-8")
+        posts_before = list(self.t.posts)
+        with mock.patch.object(push, "run") as push_run, mock.patch.object(push, "begin_cycle") as begin:
+            r = self.cycle(T0 + timedelta(minutes=10), [self_row("あなた: 停止")])
+            r2 = self.cycle(T0 + timedelta(minutes=15), [self_row("あなた: 停止")])
+        self.assertEqual(r["mode"], "stop")
+        self.assertEqual(r2["mode"], "stop")
+        self.assertNotIn("notices", r)
+        self.assertEqual(self.t.posts, posts_before)              # nothing posted: no notice, no approval, no brief
+        self.assertEqual(self.notices(), [])
+        self.assertEqual(len(self.toasts), 1)                     # no PC toast for the alert
+        self.assertEqual(push_run.call_count, 0)                  # no push either
+        self.assertEqual(begin.call_count, 0)
+        self.assertEqual(self.judged, [])                         # not even judged
+        self.assertTrue(alert_file.exists())                      # it stays in the inbox for later
+        self.assertFalse((self.inbox / "done" / "a.json").exists())
+        r = self.cycle(T0 + timedelta(minutes=20), [self_row("あなた: 再開")])
+        self.assertNotIn("mode", r)
+        self.assertEqual(r["notices"], 1)                         # after 再開 the next cycle posts the notice
+        notice = self.notices()
+        self.assertEqual(len(notice), 1)
+        self.assertIn("customers cannot pay", notice[0])
+        self.assertFalse(alert_file.exists())                     # judged now, so it moved to done
+        self.assertTrue((self.inbox / "done" / "a.json").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -407,6 +407,32 @@ class TestPasteBack(unittest.TestCase):
         self.assertIn("改行を入れず", req)
 
 
+class TestManualRedraft(unittest.TestCase):
+    """H6: with writer=m365 (manual) a 修正 N after a pasted draft asks for a new Copilot request; it never fails."""
+
+    def test_revise_after_paste_posts_a_new_request_with_the_instruction_and_the_draft(self):
+        pasted = "ご連絡ありがとうございます。日程の影響を確認して、改めてご連絡します。"
+        w = writer.M365PromptWriter()
+        with tempfile.TemporaryDirectory() as d:
+            write_queue(d, copy.deepcopy(HELD))
+            b = FakeBridge()
+            notify.notify(d, b, send=True)
+            notify.collect(d, TimelineBridge(["P:1", "R:下書き 1 " + pasted]), writer=w)
+            notify.notify(d, b, send=True)
+            n = len(b.posts)
+            ch = notify.collect(d, TimelineBridge(["P:1", "R:修正 1 短く"]), writer=w)
+            self.assertEqual([c["status"] for c in ch], ["redrafted"])
+            it = json.loads((Path(d) / "approvals.json").read_text(encoding="utf-8"))["items"]["1"]
+            req = it["record"]["copilot_request"]
+            self.assertIn("短く", req)
+            self.assertIn(pasted, req)
+            self.assertFalse(it["request_posted"])
+            self.assertEqual(it["record"]["actions"][0]["held_for"], "m365")
+            notify.notify(d, b, send=True)
+            self.assertGreater(len(b.posts), n)
+            self.assertTrue(any(pasted in t and "短く" in t for t, _ in b.posts[n:]))
+
+
 REDRAFT_REC = {**CHAT_REC, "material_event": CHAT_REC["event"],
                "actions": [{"type": "teams.reply", "to": "山田", "text": "確認して今日中に返信します。",
                             "template_text": "受領しました。", "drafted_by": "fake"}]}

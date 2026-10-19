@@ -1664,7 +1664,12 @@ def _redraft(it, instruction, writer, out=None, n=None, now=None):
             material["thread"] = full["thread"]
     drafted = writer_mod.apply(rec, material, writer, instruction, previous=previous, precedent=precedent)
     used = [a for a in drafted if a.get("drafted_by")]
-    if not used:
+    manual = bool(getattr(writer, "PROMPT_ONLY", False)) and bool(rec.get("copilot_request"))
+    if manual:   # writer=m365: nothing is drafted here; a new request (with the instruction and the draft as it stands) goes to the PM
+        for _, a in writer_mod.targets(rec):
+            if a.get("template_text") is not None:   # back to the template: the pasted draft is in the request now
+                a[writer_mod.FIELD[a["type"]]] = a["template_text"]
+    if not used and not manual:
         invalidate_measurement_post(it)
         why = rec.get("writer_error") or "使える下書きが返りませんでした"
         rec.clear()
@@ -1672,7 +1677,7 @@ def _redraft(it, instruction, writer, out=None, n=None, now=None):
         rec["redraft_note"] = f"修正できませんでした（{str(why)[:60]}）。前の下書きのままです"
         return {"status": "redraft_failed", "instruction": instruction}
     if full and rec.get("copilot_request"):   # the record keeps the request built from the excerpt; the whole text stays in full_text.json
-        fulltext.set_request(out, it["key"], fulltext.redact_request(rec, material, instruction))
+        fulltext.set_request(out, it["key"], fulltext.redact_request(rec, material, instruction, previous=previous if manual else None))
     next_measurement(it)
     return {"status": "redrafted", "instruction": instruction}
 

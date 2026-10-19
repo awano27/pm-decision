@@ -300,14 +300,14 @@ def persistable(ev):
     return excerpt_event(ev) if ev.get("full") else ev
 
 
-def redact_request(res, ev, instruction=None):
+def redact_request(res, ev, instruction=None, previous=None):
     """The paste-in request for Microsoft 365 Copilot holds the text it asks about. The record keeps a request built from the
     excerpt (`res` is changed); the request with the whole text is returned, for full_text.json. None when there is none."""
     req = res.get("copilot_request")
     if not req:
         return None
     from . import writer
-    res["copilot_request"] = writer.human_request(res, excerpt_event(ev), instruction)
+    res["copilot_request"] = writer.human_request(res, excerpt_event(ev), instruction, previous=previous)
     return req
 
 

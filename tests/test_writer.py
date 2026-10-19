@@ -897,12 +897,15 @@ class TestRedraftPrev(unittest.TestCase):
             writer.apply(reply_res(), REDRAFT_EVENT, spy)
         self.assertEqual(spy.prompts, [writer.SYSTEM + "\n\n" + writer._material(reply_res(), REDRAFT_EVENT)])
 
-    def test_the_paste_in_request_for_microsoft_365_never_carries_the_previous_draft(self):
+    def test_the_paste_in_request_for_microsoft_365_carries_the_current_draft_on_a_revision_only(self):
+        # H6: the manual route has no writer to call, so the new request itself must hold the draft as it stands
         res = reply_res()
-        with self.setting("1"):
-            writer.apply(res, REDRAFT_EVENT, writer.M365PromptWriter(), "もっと短く", previous={"a1": PREV_TEXT})
-        self.assertEqual(res["copilot_request"], writer.human_request(reply_res(), REDRAFT_EVENT, "もっと短く"))
-        self.assertNotIn(PREV_TEXT, res["copilot_request"])
+        writer.apply(res, REDRAFT_EVENT, writer.M365PromptWriter(), "もっと短く", previous={"a1": PREV_TEXT})
+        self.assertEqual(res["copilot_request"], writer.human_request(reply_res(), REDRAFT_EVENT, "もっと短く", previous={"a1": PREV_TEXT}))
+        self.assertIn(PREV_TEXT, res["copilot_request"])
+        first = reply_res()
+        writer.apply(first, REDRAFT_EVENT, writer.M365PromptWriter())
+        self.assertEqual(first["copilot_request"], writer.human_request(reply_res(), REDRAFT_EVENT))
 
     def test_a_redraft_of_a_posted_draft_gives_the_writer_the_posted_text_as_data(self):
         with self.setting("1"), tempfile.TemporaryDirectory() as d:

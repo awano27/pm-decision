@@ -439,8 +439,9 @@ CLI_WRITERS = ("copilot", "claude", "codex", "grok", "cmd")   # one process per 
 GROUNDING = "あなたが参照できる私のメールや会議に関連する内容があれば、事実の確認に使ってかまいません。"
 
 
-def human_request(res, event, instruction=None):
-    """A request a person pastes into Microsoft 365 Copilot: plain Japanese, no JSON."""
+def human_request(res, event, instruction=None, previous=None):
+    """A request a person pastes into Microsoft 365 Copilot: plain Japanese, no JSON. `previous` (key -> text): with a 修正 N,
+    the draft as it stands, so Copilot fixes that draft."""
     ev = {k: _cut(event, k) for k in EVENT_FIELDS if event.get(k)}
     lines = ["次の件について、私（PM）の名前で送る文面を書いてください。"]
     if ev.get("author"):
@@ -479,6 +480,8 @@ def human_request(res, event, instruction=None):
         lines.append(f"{i}. 足りない情報があれば、送信者に聞き返す返信（3 文以内）")
     if instruction:
         lines.append(f"・直してほしい点: {instruction}")
+        for text in (previous or {}).values():
+            lines.append(f"・今の下書き（この文面を、上の点だけ直してください）: {_cut({'t': text}, 't')}")
     lines += ["・全体を日本語で、そのまま送れる自然な業務の文面にしてください。「させていただきます」は 1 回まで、定型文の言い換えではなく、相手の名前・対象・数値など材料の具体的な内容を入れてください。",
               "・材料にない部署・役職・承認者・原因・期限・完了は足さず、分からないことは「確認します」と書いてください。",
               "・1 件目の文面は、そのまま送れるよう、改行を入れず 1 つの段落で書いてください。",
@@ -492,8 +495,8 @@ class M365PromptWriter:
     NAME = "m365"
     PROMPT_ONLY = True
 
-    def request(self, res, event, instruction=None):
-        return human_request(res, event, instruction)
+    def request(self, res, event, instruction=None, previous=None):
+        return human_request(res, event, instruction, previous=previous)
 
 
 class M365AutoWriter(M365PromptWriter):
@@ -808,7 +811,10 @@ def apply(res, event, writer, instruction=None, previous=None, precedent=None):
     res["writer_name"] = writer.NAME   # the post names the writer that was asked (not always Copilot)
 
     def paste_in():   # m365: the PM gets a request to paste into Copilot; the actions wait for them
-        res["copilot_request"] = writer.request(res, event, instruction)
+        if instruction and previous and getattr(writer, "PROMPT_ONLY", False):   # a 修正 N: the request carries the draft as it stands
+            res["copilot_request"] = writer.request(res, event, instruction, previous=previous)
+        else:
+            res["copilot_request"] = writer.request(res, event, instruction)
         for _, a in todo:
             a["held_for"] = "m365"
         return [a for _, a in todo]

@@ -847,6 +847,27 @@ class TestRedraftPrev(unittest.TestCase):
         with self.setting("1"):
             writer.apply(res, REDRAFT_EVENT, spy)
         self.assertEqual(len(spy.prompts), 2)
+        # T9 (a): the second text is no better, so neither is used: the template stays and the warning names what did not match
+        a = res["actions"][0]
+        self.assertEqual(a["text"], "受領しました。")
+        self.assertNotIn("drafted_by", a)
+        self.assertEqual(a["held_for"], "fallback")
+        self.assertIn("10/5", a["writer_warning"])
+
+    def test_a_draft_that_still_has_an_unverified_fact_after_the_second_try_goes_back_to_the_template(self):
+        spy = PromptSpy([{"a1": "10/5 までに対応します。"}, {"a1": "10/5 までに対応します。"}])
+        res = reply_res()
+        with self.setting("1"):
+            writer.apply(res, REDRAFT_EVENT, spy)
+        a = res["actions"][0]
+        self.assertEqual(a["text"], "受領しました。")
+        self.assertEqual(a["held_for"], "fallback")
+        self.assertIn("10/5", a["writer_warning"])
+
+    def test_with_the_setting_off_an_unverified_fact_stays_in_the_draft(self):
+        spy = PromptSpy([{"a1": "10/5 までに対応します。"}])
+        res = reply_res()
+        writer.apply(res, REDRAFT_EVENT, spy)
         self.assertEqual(res["actions"][0]["text"], "10/5 までに対応します。")
         self.assertEqual(res["actions"][0]["unverified"], ["10/5"])
 

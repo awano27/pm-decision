@@ -883,8 +883,9 @@ def apply(res, event, writer, instruction=None, previous=None, precedent=None):
         src = [_item_text(x).strip()[:80] for x in d["sources"] if _item_text(x).strip()]
         if src:
             res["copilot_sources"] = src[:3]
+    unv = {}
     if instruction is None:
-        unv = {}   # R23: with redraft_prev=1, a text with a date or number the material lacks gets the same second call (see _polish)
+        # R23: with redraft_prev=1, a text with a date or number the material lacks gets the same second call (see _polish)
         if config.value("redraft_prev") == "1":
             for k, _ in todo:
                 text = d.get(k)
@@ -902,6 +903,11 @@ def apply(res, event, writer, instruction=None, previous=None, precedent=None):
         why = unusable(text)
         if why:   # keep the template for this text, show why, and let the PM look at it
             a["writer_warning"], a["held_for"] = why, "fallback"
+            refused.append(a)
+            continue
+        left = unverified(text, material) if key in unv else []
+        if left:   # T9 (a): still a fact the event lacks after the second try (redraft_prev=1): the template stays, the post says what did not match
+            a["writer_warning"], a["held_for"] = "書き直しても元のイベントに無い事実が残った: " + ", ".join(left[:5]), "fallback"
             refused.append(a)
             continue
         f = FIELD[a["type"]]

@@ -243,3 +243,11 @@ class TestRankStateHasNoConclusion(unittest.TestCase):
         bare = self.rec(summary="")
         self.assertEqual(brief._subject(with_event), "Waiting for the PM's approval: 佐藤: 確認お願いします")
         self.assertEqual(brief._subject(bare), "Waiting for the PM's approval: workitem-intake 7")
+
+
+class TestSecurityDocNamesTheRankingState(unittest.TestCase):
+    def test_the_ranking_row_says_the_event_summary_with_120_characters(self):
+        sec = (Path(__file__).resolve().parent.parent / "SECURITY.md").read_text(encoding="utf-8")
+        row = next(l for l in sec.splitlines() if l.startswith("|") and "朝のまとめの順位付け" in l)
+        self.assertIn("120 字", row)
+        self.assertIn("{event.text}", row)

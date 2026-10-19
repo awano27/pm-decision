@@ -2059,6 +2059,7 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
                 continue   # a journal that cannot be read stops this reply only; the cycle goes on
         work.due_notice(ap.data, post, clock)   # the deadline post of the day, once (put in the outbox like the other posts)
     if real:   # a decision reply of a post that has left the screen is not read: say so once and post the item again (nothing is approved)
+        unseen_changed = False
         for num, line in unseen_reply_numbers(read):
             it = ap.data["items"].get(num)
             if not it or not it["posted"] or it["status"] not in ("pending", "held"):
@@ -2068,6 +2069,7 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
             if key in seen_lines:
                 continue
             it["reply_ignored_seen"] = (seen_lines + [key])[-20:]
+            unseen_changed = True
             held = it["status"] == "held"   # a held item is told about only: it comes back when its hold ends (hold.py), not now
             try:
                 post(f"[kimeru 通知] #{num} への返信を読めませんでした（投稿が画面から流れました）。"
@@ -2077,7 +2079,8 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
             if not held:
                 it["posted"], it["request_posted"] = False, False
             changes.append({"id": int(num), "status": "reply_ignored"})
-        ap.save()
+        if unseen_changed:   # nothing changed = no save (a save rewrites approvals.json.bak)
+            ap.save()
     fresh = fresh_entries(read)
     replies = [line for line, _ in fresh]
     seen_results = {}   # for `再実行`: the highest result count of the item that stands before the reply (the context of the reply)

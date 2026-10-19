@@ -58,6 +58,26 @@ class TestUnseenReply(unittest.TestCase):
             ch, _ = collect(out, ["R:OK 1"])                       # told once
             self.assertEqual(ch, [])
 
+    def test_a_collect_with_no_unseen_reply_does_not_save_for_it(self):
+        # the cycle's own closing save stays (one per collect); the unseen-number step adds a second one only when it changed something
+        saves = []
+        real_save = notify.Approvals.save
+
+        def spy(self, *a, **k):
+            saves.append(1)
+            return real_save(self, *a, **k)
+
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "s"
+            state_with_item(out)
+            with mock.patch.object(notify.Approvals, "save", spy):
+                collect(out, ["P:1"])                              # the post is on the screen and nobody replied
+                quiet = len(saves)
+                saves.clear()
+                collect(out, ["R:OK 1"])                           # an unseen reply: the step changes the item and saves it
+            self.assertEqual(quiet, 1)
+            self.assertGreater(len(saves), quiet)
+
     def test_visible_number_is_approved_as_before(self):
         with tempfile.TemporaryDirectory() as d:
             out = Path(d) / "s"

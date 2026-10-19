@@ -19,7 +19,7 @@ from pathlib import Path
 from unittest import mock
 
 from kimeru import config, graph, memory, notify, plan, writer
-from kimeru.backends import StubBackend
+from kimeru.backends import ReplayBackend, StubBackend
 from kimeru.cli import process
 
 _STATE = tempfile.TemporaryDirectory()
@@ -155,6 +155,31 @@ class TestWriter(unittest.TestCase):
         material = writer._material(res, ev)
         self.assertIn('"description": "要件: 一覧画面が必要"', material)
         self.assertIn('"repro_steps": "1. 保存 2. 一覧を開く 3. 500"', material)
+
+    def test_ado_id_priority_and_the_alert_time_are_writer_material(self):
+        ado = {"eventType": "workitem.created", "resource": {"id": 123, "fields": {
+            "System.WorkItemType": "Task", "System.Title": "レビュー指摘の修正", "Microsoft.VSTS.Common.Priority": 2,
+            "System.Description": "", "Microsoft.VSTS.Common.AcceptanceCriteria": ""}}}
+        ado_be = ReplayBackend({"ready": {"type": "noul", "noul": 0.1}, "priority": {
+            "type": "score", "score": 1.0, "confidence": 0.9, "probabilities": {"0": 0.1, "1": 0.8, "2": 0.1}}})
+        alert = {"schemaId": "azureMonitorCommonAlertSchema", "data": {"essentials": {
+            "alertId": "a1", "alertRule": "checkout-api 5xx", "severity": "Sev1", "monitorCondition": "Fired",
+            "firedDateTime": "2026-10-05T03:04:05Z", "description": "5xx"}, "alertContext": {}}}
+        for payload, be, want in ((ado, ado_be, {"id": "123", "priority": 2}),
+                                  (alert, StubBackend(), {"ts": "2026-10-05T03:04:05Z"})):
+            seen = []
+
+            class Capture(FakeWriter):
+                def draft(self, res, event, instruction=None):
+                    seen.append(writer._material(res, event, instruction))
+                    return super().draft(res, event, instruction)
+
+            with tempfile.TemporaryDirectory() as d:
+                res = process(payload, GRAPHS, be, Path(d), PBS, writer=Capture())[0]
+            self.assertTrue(seen)
+            for k, v in want.items():
+                self.assertIn(json.dumps(v, ensure_ascii=False), seen[0].split("kimeru の判断経路")[0], k)
+                self.assertEqual(res["material_event"].get(k), v, k)
 
     def test_writer_material_is_bounded_whatever_the_alert_or_the_graph_carries(self):
         big = "X" * 50000

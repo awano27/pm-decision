@@ -74,7 +74,7 @@ def writer_label(rec):
 
 
 LABEL = {"teams.reply": "返信", "teams.post": "チャネル投稿", "ado.comment": "チケットへのコメント", "ado.create": "作業項目の説明"}
-EVENT_FIELDS = ("author", "text", "item", "meeting", "title", "description", "repro_steps", "type", "acceptance_criteria",
+EVENT_FIELDS = ("id", "priority", "ts", "author", "text", "item", "meeting", "title", "description", "repro_steps", "type", "acceptance_criteria",
                 "test_steps", "created_by", "area", "rule", "severity", "condition")
 MAX_FIELD = 2000
 FIELD_MAX = {"repro_steps": 600, "acceptance_criteria": 600, "test_steps": 600}   # a work item's structured fields: what is there, cut short

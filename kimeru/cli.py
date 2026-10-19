@@ -398,7 +398,7 @@ def _draft(res, ev, meter, writer, out=None, now=None):
     res["perf"] = {"calls": meter.calls, "questions": meter.questions, "judge_sec": round(meter.seconds, 2),
                    "writer_sec": round(time.perf_counter() - t_writer, 2)}
     if drafted_any:
-        res["material_event"] = {k: ev.get(k) for k in writer_mod.EVENT_FIELDS if ev.get(k)}
+        res["material_event"] = writer_mod.event_material(ev, cut=False)
         # LLM text goes out only after the PM approves its exact wording
         held = [a for a in res["actions"] if a.get("drafted_by") or a.get("held_for")]
     # a kind the PM switched on for real execution never runs by itself, decided by the graph or not

@@ -181,6 +181,37 @@ class TestWriter(unittest.TestCase):
                 self.assertIn(json.dumps(v, ensure_ascii=False), seen[0].split("kimeru の判断経路")[0], k)
                 self.assertEqual(res["material_event"].get(k), v, k)
 
+    def test_an_arm_alert_id_and_subscription_paths_never_reach_the_writer_or_the_record(self):
+        arm = "/subscriptions/00000000-1111-2222-3333-444444444444/resourceGroups/rg/providers/Microsoft.Insights/alerts/x"
+        alert = {"schemaId": "azureMonitorCommonAlertSchema", "data": {"essentials": {
+            "alertId": arm, "alertRule": "checkout-api 5xx", "severity": "Sev1", "monitorCondition": "Fired",
+            "description": "5xx"}, "alertContext": {}}}
+        ado = {"eventType": "workitem.created", "resource": {"id": 123, "fields": {
+            "System.WorkItemType": "Task", "System.Title": "レビュー指摘の修正",
+            "System.Description": "see /subscriptions/abc/x", "Microsoft.VSTS.Common.AcceptanceCriteria": ""}}}
+        ado_be = ReplayBackend({"ready": {"type": "noul", "noul": 0.1}, "priority": {
+            "type": "score", "score": 1.0, "confidence": 0.9, "probabilities": {"0": 0.1, "1": 0.8, "2": 0.1}}})
+        seen = []
+
+        class Capture(FakeWriter):
+            def draft(self, res, event, instruction=None):
+                seen.append(writer._material(res, event, instruction))
+                return super().draft(res, event, instruction)
+
+        outs = []
+        for payload, be in ((alert, StubBackend()), (ado, ado_be)):
+            with tempfile.TemporaryDirectory() as d:
+                outs.append(process(payload, GRAPHS, be, Path(d), PBS, writer=Capture())[0])
+        self.assertEqual(len(seen), 2)
+        for m in seen:
+            self.assertNotIn("/subscriptions/", m.split("kimeru の判断経路")[0])
+        for res in outs:
+            self.assertNotIn("/subscriptions/", json.dumps(res.get("material_event") or {}, ensure_ascii=False))
+        self.assertNotIn("id", outs[0].get("material_event") or {})
+        self.assertEqual(outs[1]["material_event"].get("id"), "123")
+        self.assertIn('"id": "123"', seen[1])
+        self.assertNotIn("description", outs[1]["material_event"])
+
     def test_writer_material_is_bounded_whatever_the_alert_or_the_graph_carries(self):
         big = "X" * 50000
         alert = {"schemaId": "azureMonitorCommonAlertSchema", "data": {"essentials": {

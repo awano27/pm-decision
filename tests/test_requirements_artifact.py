@@ -181,30 +181,40 @@ class RequirementsArtifactTests(unittest.TestCase):
         self.assertFalse((self.out / "requirements" / "approvals.json").exists())
 
     def test_concurrent_builds_for_same_case_only_one_can_create_artifacts(self):
+        # Both builds are held at a rendezvous right after they read the case (before either takes the lock), so each one has
+        # seen "no artifacts yet" and only the in-lock re-check can stop the second one. The rendezvous waits for the other
+        # build, not for the clock: the timeouts below only keep a broken run from hanging, and are far above any loaded machine.
+        hang_guard = 120
         barrier = threading.Barrier(2)
         calls_lock = threading.Lock()
-        calls = 0
+        seen_first_read = set()
         original_case = requirements._case
 
         def synchronized_case(out, number):
-            nonlocal calls
+            me = threading.get_ident()
             with calls_lock:
-                calls += 1
-                synchronize = calls <= 2
-            if synchronize:
-                barrier.wait(timeout=3)
-            value = original_case(out, number)
-            return value
+                first_read = me not in seen_first_read   # a build's first read is the one before its lock; the second is in the lock
+                seen_first_read.add(me)
+            if first_read:
+                barrier.wait(timeout=hang_guard)
+            return original_case(out, number)
 
         def build():
             lines = []
-            return requirements.dispatch(["build", "1"], self.out, lines.append)
+            return requirements.dispatch(["build", "1"], self.out, lines.append), lines
 
         with patch.object(requirements, "_case", synchronized_case):
             with ThreadPoolExecutor(max_workers=2) as pool:
-                results = (pool.submit(build), pool.submit(build))
-                codes = sorted(f.result(timeout=5) for f in results)
-        self.assertEqual(codes, [0, 1])
+                results = [pool.submit(build), pool.submit(build)]
+                done = [f.result(timeout=hang_guard) for f in results]
+        self.assertEqual(barrier.n_waiting, 0)
+        self.assertEqual(len(seen_first_read), 2)              # two different builds met at the rendezvous
+        self.assertEqual(sorted(code for code, _ in done), [0, 1], done)
+        refused = [lines for code, lines in done if code == 1][0]
+        self.assertTrue(any("既存の成果物" in line or "使用中" in line for line in refused), refused)   # refused, not crashed
+        folder = self.out / "requirements"
+        self.assertTrue((folder / "1.json").is_file() and (folder / "1.md").is_file())
+        self.assertEqual([p.name for p in folder.glob("*.stage")], [])   # no half-written artifact is left
 
     def test_concurrent_approvals_merge_manifest_entries(self):
         for number in (1, 2, 3):

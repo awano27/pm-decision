@@ -729,6 +729,8 @@ def _main(argv=None):
     p_cal.add_argument("--allow-wider", action="store_true", help="also propose changes that decide more automatically")
     p_cal.add_argument("--apply", action="store_true", help="write the proposal to the local thresholds file")
     p_cal.add_argument("--revert", action="store_true", help="remove the judge coefficients from the local thresholds file (question entries stay)")
+    p_rp = sub.add_parser("replay", help="run your reviewed cases again on today's graphs with the recorded answers (the model is not called; nothing is posted)")
+    p_rp.add_argument("--result", default=None, help="folder for replay.json (default: replay under the state folder; --out is the records folder that is read)")
     p_n = sub.add_parser("notify", help="post human-queue items to Teams self chat")
     p_n.add_argument("--send", action="store_true", help="actually press Enter (default: paste only)")
     p_ap = sub.add_parser("approvals", help="read OK/NG/保留/再実行/済 replies from Teams self chat; carries out approved kinds that are switched on")
@@ -1127,6 +1129,10 @@ def _main(argv=None):
         from . import calibrate
         calibrate.run(out, gs, min_questions=a.min_questions, allow_wider=a.allow_wider, do_apply=a.apply)
         return 0
+    if a.cmd == "replay":
+        from . import replay
+        replay.run(out, gs, pbs, result=a.result)
+        return 0
     be = _backend(a.backend, a.model)
     if a.cmd in ("run", "watch"):   # the demo records them only after it has checked the folder and the judge
         _record_warnings(out)
@@ -1302,7 +1308,7 @@ def config_cmd(a):
 
 TASK = "kimeru-daily"
 # commands that never write records into --out (the demo manages its own mark)
-READ_ONLY = ("demo", "validate", "config", "report", "digest", "push", "diagnose", "memory", "owed", "--help")
+READ_ONLY = ("demo", "validate", "config", "report", "digest", "push", "diagnose", "memory", "owed", "replay", "--help")
 SCHEDULE_SENDS_NOTE = ("note: このタスクは自分とのチャットへ実際に投稿します（daily --once --send）。"
                        "貼り付けだけにしたいときは手動で daily --once を使ってください。"
                        "止めるときは python -m kimeru schedule remove")

@@ -4,7 +4,7 @@
 
 ### コマンド
 
-- 判断の正誤を付ける・週の集計・係数の調整: `kimeru review` / `kimeru digest --week [--share]` / `kimeru calibrate [--apply | --revert | --allow-wider]` / `kimeru learn list | revert L<n>` / `kimeru config show --share`（[下の節](#判断の正誤の確認と係数の調整)、[1 週間の試し方](trial-week.md)）
+- 判断の正誤を付ける・週の集計・係数の調整: `kimeru review` / `kimeru digest --week [--share]` / `kimeru calibrate [--apply | --revert | --allow-wider]` / `kimeru replay` / `kimeru learn list | revert L<n>` / `kimeru config show --share`（[下の節](#判断の正誤の確認と係数の調整)、[1 週間の試し方](trial-week.md)）
 
 ```bash
 python -m kimeru validate
@@ -103,6 +103,7 @@ python -m kimeru --out <出力先> delivery confirm KIND TARGET --confirm-delive
 - `不要 N`（設定 `learn=1`）: 議事録の行への NG と同じく却下し、「見る必要はなかった」の印を付けます。同じ一文（議事録の最初の文）の `不要` が 2 日にわたり 3 回・OK 0 のとき、その一文の規則の札を 1 日 1 件出します。OK で `learned_rules.json` に規則（`A<n>`）が入り、同じ一文で種類が決まらない議事録の行は、確かめず記録だけにします（投稿・ADO の起票は増えません）。`kimeru learn revert A<n>` で止められます。規則が止まるのは、この取り消し、後の回に届いた同じ会議（議事録の題名）の 24 時間以内の新しい行（同じ回の箇条書きは数えません）、60 日使わなかったときです。止めた・取り消した一文は、NG と同じく 30 日の間は札を出しません。同じチャットの新しい行で止まる仕組み（chat_id）は、規則を作れる件が議事録だけなので、今は使われません。規則を止めた新しい行は、判断によらず PM へ回します（`[kimeru #N]（規則を戻しました）`）。朝のまとめに「規則で記録だけにした件」を最大 5 行出します。
 - 書き方の好み（設定 `learn=1`）: 同じ `修正 N <指示>` の言い方が 30 日以内に別の件でも使われたとき、その言い方を書き方の好みとして OK するかを札で聞きます（`[kimeru #N] 学習の提案: 書き方の好みを下書きに入れますか`）。OK で、以降の `copilot`・`claude`・`grok`・`cmd` の依頼文に、事実を足さない書き方の好みとして入ります（`m365`・`m365-auto`・`codex` には入りません）。好みは `kimeru learn list` に出ます。取り消しは `kimeru learn revert S<sig>`。NG なら残しません。
 - `kimeru calibrate [--apply | --revert | --allow-wider] [--min-questions N]`: 記録した回答を、別の係数で読み直して、`conf_scale` と `noul_scale` の変更を探します（条件は 1 週間の試し方）。**判断モデルごとに分けて**探し、適用します。Jev・Kev・CLM の判断を確かめた記録だけが対象で、stub など判断モデルの分からない記録からは、探さず、適用せず、理由を出します。`--apply` は、状態フォルダの `thresholds.json` に書きます。グラフと `profiles.py` は書き換えません。`--revert` は、判断モデルごとの係数を消します（質問ごとの採用は残ります。下の `kimeru learn`）。
+- `kimeru replay [--result DIR]`: `kimeru review` / `違う N` で正誤を付けた事例を、今のグラフで、そのとき記録した回答を使って再生し（モデルは呼びません。何も投稿しません）、前回の最終行動（結果の種類とノード）と今の最終行動が変わった件を一覧にします。正しいと付いた件が変わった数、違うと付いた件が変わった数、間違った質問の正解に合うようになった数も出ます。回答が記録に無い質問（手順の型を選ぶ質問など、一部の回答しか残らないもの）に着いた件は「記録なし」と出して、その件だけ止めます。画面と書き出しは、数字・事例の番号（`user-…`）・ノード名だけで、元のメッセージの本文は出ません。`--out` は読む記録のフォルダ、`--result` は `replay.json` の書き出し先（既定は状態フォルダの `replay`）です。`queue.jsonl`・`notices.jsonl`・`approvals.json` は変わりません。判断モデルが Jev の事例を含むときは、正誤の内訳は出ません（TypeSafe の利用規約）。
 
 ### 要件ドラフト
 

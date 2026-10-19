@@ -1427,7 +1427,13 @@ def schedule(a, state_out=None):
     if a.action == "remove":
         rc = subprocess.run(["schtasks", "/Delete", "/TN", TASK, "/F"]).returncode
         out = Path(a.out).resolve()
-        restored = [] if getattr(a, "keep_settings", False) else _restore_install_settings()
+        restored = []
+        if getattr(a, "keep_settings", False):
+            pass
+        elif rc == 0:
+            restored = _restore_install_settings()
+        elif _install_record().exists():   # the task is still there: the settings it runs with stay, and so does the record
+            print("タスクを消せなかったので設定は戻していません（記録は残してあります。消せたあとにもう一度 schedule remove）")
         kept = [k for k in ("backend", "ado_org", "ado_project") if config.SOURCES.get(k) == "file" and k not in restored]
         print(f"残るもの: {out / 'run-daily.vbs'}（自動運転の起動用。手で消せます）")
         if restored:

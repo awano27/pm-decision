@@ -100,6 +100,20 @@ class TestScheduleRemoveRestoresSettings(unittest.TestCase):
         self._run("remove")                               # the record is still there: a later plain remove restores
         self.assertNotIn("ado_org", self._file())
 
+    def test_a_failed_delete_leaves_the_settings_and_the_record(self):
+        self.config.set_value("backend", "stub")
+        self._run("install", backend="kev", ado_org="o1", ado_project="p1")
+        a = SimpleNamespace(action="remove", minutes=5, extra="", out=str(self.out), backend="", ado_org="", ado_project="")
+        with mock.patch.object(subprocess, "run", return_value=SimpleNamespace(returncode=1)):
+            self.assertEqual(cli.schedule(a), 1)
+        f = self._file()
+        self.assertEqual((f.get("backend"), f.get("ado_org"), f.get("ado_project")), ("kev", "o1", "p1"))
+        rec = self.state / "schedule_install.json"
+        self.assertIn("ado_org", rec.read_text(encoding="utf-8"))
+        self._run("remove")                               # the delete works the next time: the settings go back
+        self.assertEqual(self._file().get("backend"), "stub")
+        self.assertNotIn("ado_org", self._file())
+
 
 class TestStateFolderIsolation(unittest.TestCase):
     def test_a_preset_state_dir_is_never_written_by_the_tests(self):

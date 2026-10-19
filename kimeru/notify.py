@@ -2068,11 +2068,14 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
             if key in seen_lines:
                 continue
             it["reply_ignored_seen"] = (seen_lines + [key])[-20:]
+            held = it["status"] == "held"   # a held item is told about only: it comes back when its hold ends (hold.py), not now
             try:
-                post(f"[kimeru 通知] #{num} への返信を読めませんでした（投稿が画面から流れました）。もう一度投稿します")   # not "[kimeru #N]": the reader would take this line for the post of #N
+                post(f"[kimeru 通知] #{num} への返信を読めませんでした（投稿が画面から流れました）。"
+                     + ("保留の間は投稿し直しません" if held else "もう一度投稿します"))   # not "[kimeru #N]": the reader would take this line for the post of #N
             except Exception:   # the notice failing must not stop the cycle; the item is posted again all the same
                 pass
-            it["posted"], it["request_posted"] = False, False
+            if not held:
+                it["posted"], it["request_posted"] = False, False
             changes.append({"id": int(num), "status": "reply_ignored"})
         ap.save()
     fresh = fresh_entries(read)

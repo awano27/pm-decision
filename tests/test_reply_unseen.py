@@ -39,6 +39,25 @@ class TestUnseenReply(unittest.TestCase):
             self.assertEqual(ch, [])
             self.assertEqual(len([t for t in (notify.Approvals(out).data.get("outbox") or []) if "返信を読めませんでした" in t]), 1)
 
+    def test_a_held_item_is_told_about_but_not_posted_again(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "s"
+            state_with_item(out)
+            ap = notify.Approvals(out)
+            ap.data["items"]["1"].update(status="held", held_until="2099-01-01T09:00")
+            ap.save()
+            ch, _ = collect(out, ["R:OK 1"])                       # the post of #1 is off the screen
+            self.assertEqual([(c["id"], c["status"]) for c in ch], [(1, "reply_ignored")])
+            it = notify.Approvals(out).data["items"]["1"]
+            self.assertEqual(it["status"], "held")
+            self.assertTrue(it["posted"])                          # not reset: it is not posted before its day
+            self.assertEqual(it["held_until"], "2099-01-01T09:00")
+            outbox = notify.Approvals(out).data.get("outbox") or []
+            self.assertEqual(len([t for t in outbox if "返信を読めませんでした" in t]), 1)
+            self.assertNotIn("もう一度投稿します", outbox[0])
+            ch, _ = collect(out, ["R:OK 1"])                       # told once
+            self.assertEqual(ch, [])
+
     def test_visible_number_is_approved_as_before(self):
         with tempfile.TemporaryDirectory() as d:
             out = Path(d) / "s"

@@ -10,7 +10,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import actions, attention, brief as brief_mod, config, control, events, fsutil, fulltext, graph, hold, learn, notify, owed, pull, push, sent, spot
+from . import actions, attention, brief as brief_mod, config, control, events, expire, fsutil, fulltext, graph, hold, learn, notify, owed, pull, push, sent, spot
 from .backends import BackendUnavailable, is_jev
 
 
@@ -496,6 +496,16 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
                 return "busy"
             return added or "nothing new"
         _step(out, "owed", do_owed, r)
+    if send and config.int_value("draft_expire_hours") > 0:   # T7: a draft check nobody answered is closed as 期限切れ (expire.py); nothing is approved or executed
+        try:
+            gone = expire.close_expired(out, now)
+        except Exception as e:   # the cycle goes on; the draft check stays as it was
+            gone = []
+            _log(out, {"step": "expire", "error": f"{type(e).__name__}: {str(e)[:120]}"})
+        if getattr(gone, "busy", False):
+            gone = []
+        if gone:
+            r["draft_expired"] = list(gone)
     if send:   # R09: a held item whose day has come is posted again under the same number, in this cycle; nothing is decided by it
         try:
             back = hold.resurface(out, now)

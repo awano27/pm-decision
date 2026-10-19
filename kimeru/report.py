@@ -271,7 +271,7 @@ def _io_note(out, ap, executions):
 
 
 DECISION = {"pending": ("⏳", "確認待ち（まだ決めていない）"), "held": ("⏸", "保留"), "approved": ("✔", "承認済み"),
-            "rejected": ("✖", "却下")}
+            "rejected": ("✖", "却下"), "expired": ("⌛", "期限切れ（誰も答えず閉じた。承認でも却下でもない）")}
 WORK = {"approved": "未着手", "in_progress": "作業中", "done": "作業完了", "blocked": "停止中"}
 TRY_NOTICE = ("体験モードの記録です。判断はキーワード一致の簡易ルールです。要点・足りない情報・選択肢・返信案と、確認の返信（詳細・修正・OK）は"
               "台本の固定文で、AI モデルの推論でも、あなたの操作でもありません。"
@@ -355,7 +355,7 @@ def _clock(value):
     return datetime.fromtimestamp(parsed).strftime("%m/%d %H:%M") if parsed is not None else "時刻不明"
 
 
-NOT_RUN = {"pending": "承認待ちのため", "held": "保留中のため", "rejected": "却下したため"}
+NOT_RUN = {"pending": "承認待ちのため", "held": "保留中のため", "rejected": "却下したため", "expired": "期限切れのため"}
 
 
 def _reply_state(item, index, executions):
@@ -373,7 +373,7 @@ def _reply_state(item, index, executions):
         return known[state]
     status = item.get("status")
     if status in NOT_RUN:
-        return ("—", NOT_RUN[status] + "送っていない", "" if status == "rejected" else "wait")
+        return ("—", NOT_RUN[status] + "送っていない", "" if status in ("rejected", "expired") else "wait")
     if status != "approved":
         return ("?", "判断の状態が不明のため送っていない", "")
     if item.get("sent_confirmed"):

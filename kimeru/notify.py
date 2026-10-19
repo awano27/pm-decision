@@ -1255,7 +1255,7 @@ def toast_text(out, posted, notices, unposted=0, sitting=False):
     return "kimeru: " + " / ".join(parts) + ("（まとめ）" if sitting and parts else ""), body
 
 
-ACK = {"approved": "承認", "rejected": "却下", "held": "保留", "ask_back": "聞き返し",
+ACK = {"approved": "承認", "rejected": "却下", "held": "保留", "expired": "期限切れ", "ask_back": "聞き返し",
        "redrafted": "書き直し", "redraft_failed": "書き直せず", "redo": "再実行", "redo_ignored": "再実行（無視: 古い回数）", "redo_ahead": "再実行（回数が大きすぎます。その回数の結果が出たら 1 回だけ効きます）", "redo_malformed": "再実行（形が違います）", "closed": "済（閉じました）", "detail": "詳細を返信",
        "reply_ignored": "返信を読めませんでした（投稿が画面から流れたため、もう一度投稿します。承認はしていません）",
        "reposted": "文面を確認して OK し直してください",

@@ -1271,7 +1271,7 @@ def toast_text(out, posted, notices, unposted=0, sitting=False):
 
 
 ACK = {"approved": "承認", "rejected": "却下", "held": "保留", "expired": "期限切れ", "ask_back": "聞き返し",
-       "redrafted": "書き直し", "redraft_failed": "書き直せず", "redo": "再実行", "redo_ignored": "再実行（無視: 古い回数）", "redo_ahead": "再実行（回数が大きすぎます。その回数の結果が出たら 1 回だけ効きます）", "redo_malformed": "再実行（形が違います）", "closed": "済（閉じました）", "detail": "詳細を返信",
+       "redrafted": "書き直し", "redraft_failed": "書き直せず", "redraft_limit": "修正は上限まで", "redo": "再実行", "redo_ignored": "再実行（無視: 古い回数）", "redo_ahead": "再実行（回数が大きすぎます。その回数の結果が出たら 1 回だけ効きます）", "redo_malformed": "再実行（形が違います）", "closed": "済（閉じました）", "detail": "詳細を返信",
        "reply_ignored": "返信を読めませんでした（投稿が画面から流れたため、もう一度投稿します。承認はしていません）",
        "reposted": "文面を確認して OK し直してください",
        "learned": "学習を採用しました（基準を変えました）", "learn_stale": "学習（基準が変わっていたため採用せず）",
@@ -1708,6 +1708,12 @@ def _redraft(it, instruction, writer, out=None, n=None, now=None):
         invalidate_measurement_post(it)
         rec["redraft_note"] = "修正できませんでした（writer が設定されていません）。前の下書きのままです"
         return {"status": "redraft_failed", "instruction": instruction}
+    limit = config.int_value("redraft_max")
+    if limit > 0 and int(it.get("redraft_count") or 0) >= limit:   # T9 (d): past the limit the writer is not called; the post says so
+        invalidate_measurement_post(it)
+        rec["redraft_note"] = f"修正は {limit} 回までです。前の下書きのままです"
+        return {"status": "redraft_limit", "instruction": instruction}
+    it["redraft_count"] = int(it.get("redraft_count") or 0) + 1   # a call of the writer, whether it works or not
     before = copy.deepcopy(rec)
     # the draft that was posted (its text, before the stale keys go): the writer gets it as data when redraft_prev=1 (R23)
     previous = {k: a[writer_mod.FIELD[a["type"]]] for k, a in writer_mod.targets(rec)

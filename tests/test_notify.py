@@ -552,6 +552,37 @@ class TestRedraftHistory(unittest.TestCase):
                 self.assertNotIn("秘密の指示ABC", text, name)
 
 
+class TestRedraftMax(unittest.TestCase):
+    """T9 (d) redraft_max: past the limit a 修正 N does not call the writer and the post says 修正は N 回までです. 0 = no limit."""
+
+    def run_flow(self, limit, count):
+        spy = PromptSpy([{"a1": "延期の件、承知しました。"}])
+        env = {"KIMERU_REDRAFT_MAX": limit}
+        with mock.patch.dict(os.environ, env), tempfile.TemporaryDirectory() as d:
+            write_queue(d, REDRAFT_REC)
+            b = FakeBridge()
+            notify.notify(d, b, send=True)
+            statuses = []
+            for i in range(count):
+                b.replies = [f"修正 1 指示{i}"]
+                statuses.append(notify.collect(d, b, writer=spy)[0]["status"])
+                notify.notify(d, b, send=True)
+            return spy, statuses, b.posts[-1][0]
+
+    def test_default_has_no_limit(self):
+        self.assertEqual(config.SETTINGS["redraft_max"], ("KIMERU_REDRAFT_MAX", "0"))
+        self.assertIn("redraft_max", config.LOGGABLE)
+        spy, statuses, _ = self.run_flow("0", 4)
+        self.assertEqual(statuses, ["redrafted"] * 4)
+        self.assertEqual(len(spy.prompts), 4)
+
+    def test_past_the_limit_the_writer_is_not_called_and_the_post_says_so(self):
+        spy, statuses, post = self.run_flow("2", 3)
+        self.assertEqual(statuses, ["redrafted", "redrafted", "redraft_limit"])
+        self.assertEqual(len(spy.prompts), 2)
+        self.assertIn("修正は 2 回までです", post)
+
+
 class TestPostChecked(unittest.TestCase):
     """T9 (b) post_checked=1: the post of a drafted text names, in at most two lines, what of the draft the event itself has
     (確かめた点) and what only kimeru's judgment or template has (kimeru の提案). 0 (the default) adds nothing."""

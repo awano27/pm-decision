@@ -689,7 +689,7 @@ def config_share():
     return "\n".join(lines)
 
 
-LABEL = {"approved": "OK", "rejected": "NG", "held": "保留", "redrafted": "修正", "redraft_failed": "修正できず", "ask_back": "聞き返し", "expired": "期限切れ"}
+LABEL = {"approved": "OK", "rejected": "NG", "held": "保留", "redrafted": "修正", "redraft_failed": "修正できず", "redraft_limit": "修正の上限", "ask_back": "聞き返し", "expired": "期限切れ"}
 
 
 def _graph_labels(per_graph, share):

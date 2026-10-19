@@ -173,7 +173,7 @@ class TestTheWordsAtOne(unittest.TestCase):
 
     def test_the_post_gets_only_the_question_line_as_before(self):
         recs = chats()
-        for name, extra in (("veto", QUESTION), ("mixed", MIXED_QUESTION), ("yes", None), ("none", QUESTION)):
+        for name, extra in (("veto", QUESTION + " / 最有力 0.62"), ("mixed", MIXED_QUESTION), ("yes", None), ("none", QUESTION + " / 最有力 0.62")):   # T7: the post line adds the number
             with self.subTest(chat=name):
                 gold = GOLD[f"{name}.post"]
                 want = gold if extra is None else inserted(gold, 2, extra)

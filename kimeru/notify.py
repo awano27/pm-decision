@@ -437,6 +437,22 @@ def _why(rec):
     return explain.open_question(rec)
 
 
+def _why_post(rec):
+    """T7 (post_reason=1): the line of the approval post: the question the model was unsure of (_why), then its number
+    (probability or confidence) and, when the memo names them, the missing material, in one line. "" when there is no question."""
+    why = _why(rec)
+    if not why:
+        return ""
+    extra = []
+    num = explain.open_question_numbers(rec)
+    if num:
+        extra.append(num)
+    missing = [str(v) for v in ((rec.get("memo") or {}).get("missing") or []) if str(v).strip()]
+    if missing:
+        extra.append("足りない材料: " + _clip(" / ".join(missing), 60))
+    return why + (" / " + " / ".join(extra) if extra else "")
+
+
 def _rules(rec, full):
     """R25: with the setting post_reason=1, the lines that name the words a rule read (explain.rule_evidence) at the top of 詳細 N;
     [] otherwise, so at 0 (the default) the detail is unchanged. `full` is the whole text kept while the item waits (fulltext.load)."""
@@ -494,7 +510,7 @@ def format_post(n, rec, full=None, marks=None, precedent=None, promise=None, rel
         arrow = "→ " + _clip(proposal, 100)
     lines.append(arrow + (f" {precedent}" if precedent else "") + (f" {promise}" if promise else "")
                  + (f" {related}" if related else ""))   # R16 / R18 / R19: they end the arrow line; no line is added
-    why = _why(rec)   # R11: one line more, after the arrow line (it replaces nothing)
+    why = _why_post(rec)   # R11 / T7: one line more, after the arrow line (it replaces nothing)
     if why:
         lines.append(why)
     if rec.get("first_message"):   # R08: the newest message of a continued item, one line after the proposal (30 characters)

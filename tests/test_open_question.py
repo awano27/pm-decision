@@ -198,7 +198,7 @@ class TestAnUnsureAdoItemInThePost(unittest.TestCase):
         with mock.patch.dict(os.environ, {"KIMERU_POST_REASON": "1"}):
             lines = notify.format_post(5, res).splitlines()
         self.assertTrue(lines[1].startswith("→ "))
-        self.assertEqual(lines[2], "迷った点: 優先度（中ほどで迷いました）")
+        self.assertEqual(lines[2], "迷った点: 優先度（中ほどで迷いました） / 最有力 0.40")   # T7: the post line adds the number
         self.assertLessEqual(len(lines), 5)
         self.assertTrue(lines[-1].startswith("OK 5 / NG 5"))
 

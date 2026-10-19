@@ -74,6 +74,33 @@ def open_question(rec):
     return ""
 
 
+def open_question_numbers(rec):
+    """R11/T7: the number behind the unsure question of open_question, in words ("確率 0.45" for a yes/no, "最有力 0.52" for a
+    choice, "確信度 0.40" otherwise), and "" when the path has no unsure step or no number in it. Numbers only, never text."""
+    if not isinstance(rec, dict) or not isinstance(rec.get("path"), list):
+        return ""
+    for step in reversed(rec["path"]):
+        if not isinstance(step, dict):
+            continue
+        if step.get("edge") == "mixed":
+            return ""
+        if step.get("edge") != "unsure":
+            continue
+        ans = step.get("answer") if isinstance(step.get("answer"), dict) else {}
+
+        def num(v):
+            return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+        if num(ans.get("noul")) is not None:
+            return f"確率 {num(ans['noul']):.2f}"
+        ranked = _ranked(ans.get("probabilities"))
+        if ranked:
+            return f"最有力 {ranked[0][0]:.2f}"
+        if num(ans.get("confidence")) is not None:
+            return f"確信度 {num(ans['confidence']):.2f}"
+        return ""
+    return ""
+
+
 def _unsure(graph_name, step):
     node = step.get("node")
     label = QUESTION_LABEL.get((graph_name, node))

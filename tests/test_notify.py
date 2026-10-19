@@ -264,6 +264,7 @@ GOLD_DETAIL = "\n".join([
     "文面 LLM のメモ:", "・要点: 進め方の相談", "・次の一手: 状況を確認して返事する",
     "返信の下書き（fake）:", "確認して返信します。", "返信: OK 3 / NG 3 / 保留 3 / 修正 3 <直してほしい点>"])
 LINE = "迷った点: 依頼の種類（近いのは 状況確認）"
+POST_LINE = LINE + " / 最有力 0.62"   # T7: the post adds the number behind the question; the detail does not
 
 
 class TestPostReasonLine(unittest.TestCase):
@@ -284,7 +285,7 @@ class TestPostReasonLine(unittest.TestCase):
     def test_at_one_the_unsure_question_is_the_line_under_the_arrow_and_the_post_stays_within_five_lines(self):
         with mock.patch.dict(os.environ, {"KIMERU_POST_REASON": "1"}):
             lines = notify.format_post(3, UNSURE_CHAT).splitlines()
-        self.assertEqual(lines, ["[kimeru #3] 佐藤さん: 進め方の相談", "→ 状況を確認して返事する", LINE,
+        self.assertEqual(lines, ["[kimeru #3] 佐藤さん: 進め方の相談", "→ 状況を確認して返事する", POST_LINE,
                                  "案: 確認して返信します。", "OK 3 / NG 3 / 修正 3 <点> / 詳細 3"])
         self.assertLessEqual(len(lines), 5)
 
@@ -302,7 +303,22 @@ class TestPostReasonLine(unittest.TestCase):
             lines = notify.format_post(3, rec).splitlines()
         self.assertIn("⚠ プレビューだけで判断しました（元のメッセージを Teams で確認）", lines)
         self.assertEqual(len(lines), len(base) + 1)
-        self.assertEqual([l for l in lines if l != LINE], base)
+        self.assertEqual([l for l in lines if l != POST_LINE], base)
+
+    def test_the_post_line_adds_the_missing_material_of_the_memo_and_the_detail_does_not(self):
+        rec = {**UNSURE_CHAT, "memo": {"next": "確認する", "missing": ["期限", "担当者"]}}
+        with mock.patch.dict(os.environ, {"KIMERU_POST_REASON": "1"}):
+            post = notify.format_post(3, rec).splitlines()
+            detail = notify.format_detail(3, rec).splitlines()
+        self.assertIn(POST_LINE + " / 足りない材料: 期限 / 担当者", post)
+        self.assertIn(LINE, detail)
+        self.assertNotIn(POST_LINE + " / 足りない材料: 期限 / 担当者", detail)
+
+    def test_at_zero_the_missing_material_is_not_added(self):
+        rec = {**UNSURE_CHAT, "memo": {"next": "確認する", "missing": ["期限"]}}
+        with mock.patch.dict(os.environ, {"KIMERU_POST_REASON": "0"}):
+            self.assertNotIn("足りない材料", notify.format_post(3, rec))
+            self.assertNotIn("最有力", notify.format_post(3, rec))
 
     def test_a_record_without_a_path_gets_no_line_and_no_error(self):
         rec = {k: v for k, v in UNSURE_CHAT.items() if k != "path"}
@@ -320,7 +336,7 @@ class TestPostReasonLine(unittest.TestCase):
     def test_the_line_names_no_graph_node_option_or_action_in_english(self):
         with mock.patch.dict(os.environ, {"KIMERU_POST_REASON": "1"}):
             line = [l for l in notify.format_post(3, UNSURE_CHAT).splitlines() if l.startswith("迷った点")][0]
-        self.assertNotRegex(line, r"[A-Za-z0-9_%.]")
+        self.assertNotRegex(line.replace(" / 最有力 0.62", ""), r"[A-Za-z0-9_%.]")
 
 
 if __name__ == "__main__":

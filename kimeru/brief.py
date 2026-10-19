@@ -12,7 +12,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import autorun, config, fsutil, hold, learn, memory
+from . import autorun, config, events, fsutil, hold, learn, memory
 from .backends import judge_name
 
 HARM = ["No real harm", "Minor inconvenience for the team",
@@ -51,6 +51,14 @@ def due_label(due, today):
     return f"{due.month}/{due.day} まで"
 
 
+def _subject(rec):
+    """What the ranking judge reads about a waiting item (T11): the summary of the original event, never kimeru's own conclusion
+    (`advice`), which would make the judge agree with kimeru. Older records without a summary use the recorded event, then the ids."""
+    ev = rec.get("event") if isinstance(rec.get("event"), dict) else None
+    what = rec.get("summary") or (events.summary(ev) if ev else "") or f"{rec.get('graph')} {rec.get('event_id')}"
+    return f"Waiting for the PM's approval: {what}"
+
+
 def collect(out, now=None, days=2):
     """Return candidate items: [{key, kind, text, subject, due_level}] (deduped, newest first, capped).
     `text` is for humans; `subject` (no due label) is what Jev sees."""
@@ -59,11 +67,11 @@ def collect(out, now=None, days=2):
     since = now - timedelta(days=days)
     items, seen = [], set()
 
-    def add(key, kind, text, subject, due_level, rec=None):
+    def add(key, kind, text, subject, due_level, rec=None, sig_text=None):
         # `notify` and `severe` are copied from the decision record (what the history keeps); neither reaches Jev
         if key not in seen:
             seen.add(key)
-            items.append({"key": key, "kind": kind, "text": text, "subject": subject, "due_level": due_level,
+            items.append({"key": key, "kind": kind, "text": text, "subject": subject, "sig_text": sig_text or subject, "due_level": due_level,
                           "notify": bool((rec or {}).get("notify")), "severe": bool((rec or {}).get("severe_guard")),
                           "draft": (rec or {}).get("held_reason") == "draft"})   # R12: waits only for a writer's draft
 
@@ -75,14 +83,15 @@ def collect(out, now=None, days=2):
             what = it['record'].get('advice') or it['record'].get('graph')
             head = hold.brief_label(n, it, now) or f"確認待ち #{n}"   # R09: 保留 #N（10/15 に再表示）, 長く保留 (hold_stale_days)
             same = memory.same_person_note(ap["items"], n, it["record"], now)   # R16 (memory=1): 同じ相手 N 件目; "" otherwise
-            add(f"approval:{n}", "approval", f"{head}: {what}{same}", f"Waiting for the PM's approval: {what}", 0, it["record"])
+            add(f"approval:{n}", "approval", f"{head}: {what}{same}", _subject(it["record"]), 0, it["record"],
+                f"Waiting for the PM's approval: {what}")
     if isinstance(ap.get("folded"), dict):   # R32 (merge_recurring=1): a queue line joined a waiting item stays in queue.jsonl; it is no row of its own
         queued |= set(ap["folded"])
     for rec in reversed(_rows(out / "queue.jsonl")):
         key = f"{rec.get('graph')}:{rec.get('event_id')}:{rec.get('node')}"
         if key not in queued and not learn.is_card(rec):
             what = rec.get('advice') or rec.get('graph')
-            add(f"queue:{key}", "approval", f"確認待ち（未投稿）: {what}", f"Waiting for the PM's approval: {what}", 0, rec)
+            add(f"queue:{key}", "approval", f"確認待ち（未投稿）: {what}", _subject(rec), 0, rec, f"Waiting for the PM's approval: {what}")
     decisions = _rows(out / "decisions.jsonl")
     # A decision row is only a proposal snapshot. For a case with a current
     # approval record, that record's status, revision and plan are authoritative.
@@ -150,7 +159,7 @@ def rank(items, backend, top=None, reuse=None):
     if not items:
         return []
     reuse = reuse or {}
-    harm = {i: reuse[_sig(it["subject"])] for i, it in enumerate(items) if _sig(it["subject"]) in reuse}
+    harm = {i: reuse[_sig(_sig_text(it))] for i, it in enumerate(items) if _sig(_sig_text(it)) in reuse}
     fresh = [i for i in range(len(items)) if i not in harm]
     if fresh:
         state = {"items": [items[i]["subject"] for i in fresh]}
@@ -404,6 +413,12 @@ def unsure_section(out, now=None, days=1, since=None):
 # --- brief_delta=1 (R15): what changed since the last brief. Read only: the history rows (brief_history.jsonl), the reply log
 # (approvals.log.jsonl) and the approval statuses (approvals.json). Nothing is written here.
 
+def _sig_text(it):
+    """What "the same item" is judged by (reuse of a harm, days in a row, the history): the text of the waiting item as before T11,
+    which still carries kimeru's advice, so that a changed conclusion is a changed item. The judge never sees it."""
+    return it.get("sig_text") or it["subject"]
+
+
 def _sig(subject):
     """The first 12 hex digits of the sha1 of a subject: the identity of a row in brief_history (no text is kept)."""
     return hashlib.sha1(subject.encode("utf-8")).hexdigest()[:12]
@@ -465,7 +480,7 @@ def _mark(ranked, prev):
         if not it["key"].startswith(APPROVAL_PREFIX):
             marked.append(it)
             continue
-        days, same = _run(prev, it["key"], _sig(it["subject"]), _band(it["rank"]))
+        days, same = _run(prev, it["key"], _sig(_sig_text(it)), _band(it["rank"]))
         label = "新" if days == 0 else f"継続 {days + 1} 日目"
         fold = same + 1 >= FOLD_DAYS and not it["notify"] and not it["severe"]
         if fold:
@@ -627,7 +642,7 @@ def _write(path, lines):
 
 def _history_row(it):
     return {"key": it["key"], "kind": it["kind"],
-            "sig": _sig(it["subject"]),
+            "sig": _sig(_sig_text(it)),
             "harm": it.get("harm"), "rank": it.get("rank"), "notify": bool(it.get("notify")),
             "severe": bool(it.get("severe")), "due_level": it["due_level"]}
 

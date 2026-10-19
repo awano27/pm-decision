@@ -31,7 +31,7 @@ GOLDEN_BRIEF = ("[kimeru brief 2026-09-28] 今日の進め方\n"
 
 def queue_row(eid, advice, **extra):
     return {"graph": "workitem-intake", "event_kind": "ado.workitem.created", "event_id": eid, "node": "triage_pm",
-            "outcome": "advise", "needs_human": True, "advice": advice,
+            "outcome": "advise", "needs_human": True, "advice": advice, "summary": f"#{eid} の依頼",
             "actions": [{"type": "ado.update", "id": eid, "fields": {"Microsoft.VSTS.Common.Priority": 2}}], **extra}
 
 
@@ -143,7 +143,7 @@ class TestHistoryAfterDelivery(Briefed):
     def test_sig_is_the_first_twelve_hex_digits_of_the_sha1_of_the_subject(self):
         self.cycle()
         row = {r["key"]: r for r in self.history()[0]["rows"]}["approval:1"]
-        subject = "Waiting for the PM's approval: 顧客から障害の報告 #101"
+        subject = "Waiting for the PM's approval: 顧客から障害の報告 #101"   # the text of the item, as before T11 (the judge reads the summary)
         self.assertEqual(row["sig"], hashlib.sha1(subject.encode("utf-8")).hexdigest()[:12])
 
     def test_the_backend_name_is_written_and_is_jev_for_jev(self):

@@ -199,3 +199,47 @@ class TestTheSameCountChangesNoSubject(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRankStateHasNoConclusion(unittest.TestCase):
+    """T11: the state the ranking judge reads names the original event, never kimeru's own advice."""
+    ADVICE = "kimeruの結論: 今日中に承認してください"
+
+    def rec(self, **extra):
+        return {"graph": "workitem-intake", "event_id": "7", "node": "n", "outcome": "advise", "needs_human": True,
+                "advice": self.ADVICE, "summary": "#7 決済の障害", **extra}
+
+    def asked_states(self, d):
+        class Spy:
+            states = []
+
+            def ask(self, state, qs):
+                Spy.states.append(state)
+                return {q: {"score": 1.0, "confidence": 0.9} for q in qs}
+        brief.rank(brief.collect(d, now=NOW), Spy())
+        return Spy.states
+
+    def test_a_waiting_item_in_approvals_and_in_the_queue_is_ranked_by_its_event_summary(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "approvals.json").write_text(json.dumps({"items": {"1": {
+                "key": "workitem-intake:7:n", "status": "pending", "record": self.rec()}}}), encoding="utf-8")
+            write(d, "queue.jsonl", [self.rec(event_id="8", summary="#8 ログインの不具合")])
+            states = self.asked_states(d)
+        self.assertEqual(len(states), 1)
+        self.assertEqual(sorted(states[0]["items"]), ["Waiting for the PM's approval: #7 決済の障害",
+                                                      "Waiting for the PM's approval: #8 ログインの不具合"])
+        self.assertNotIn("kimeru", json.dumps(states, ensure_ascii=False))
+        self.assertNotIn("承認してください", json.dumps(states, ensure_ascii=False))
+
+    def test_the_text_shown_in_the_morning_post_still_has_the_advice(self):
+        with tempfile.TemporaryDirectory() as d:
+            write(d, "queue.jsonl", [self.rec()])
+            items = brief.collect(d, now=NOW)
+        self.assertEqual(items[0]["text"], f"確認待ち（未投稿）: {self.ADVICE}")
+        self.assertNotIn(self.ADVICE, items[0]["subject"])
+
+    def test_a_record_without_a_summary_uses_its_event_then_its_ids_and_never_the_advice(self):
+        with_event = self.rec(summary="", event={"kind": "teams.chat", "author": "佐藤", "text": "確認お願いします"})
+        bare = self.rec(summary="")
+        self.assertEqual(brief._subject(with_event), "Waiting for the PM's approval: 佐藤: 確認お願いします")
+        self.assertEqual(brief._subject(bare), "Waiting for the PM's approval: workitem-intake 7")

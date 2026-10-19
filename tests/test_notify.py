@@ -264,7 +264,7 @@ GOLD_DETAIL = "\n".join([
     "文面 LLM のメモ:", "・要点: 進め方の相談", "・次の一手: 状況を確認して返事する",
     "返信の下書き（fake）:", "確認して返信します。", "返信: OK 3 / NG 3 / 保留 3 / 修正 3 <直してほしい点>"])
 LINE = "迷った点: 依頼の種類（近いのは 状況確認）"
-POST_LINE = LINE + " / 最有力 0.62"   # T7: the post adds the number behind the question; the detail does not
+POST_LINE = LINE   # no probability number on the post line (R11: the doubt is said in words)
 
 
 class TestPostReasonLine(unittest.TestCase):
@@ -336,7 +336,7 @@ class TestPostReasonLine(unittest.TestCase):
     def test_the_line_names_no_graph_node_option_or_action_in_english(self):
         with mock.patch.dict(os.environ, {"KIMERU_POST_REASON": "1"}):
             line = [l for l in notify.format_post(3, UNSURE_CHAT).splitlines() if l.startswith("迷った点")][0]
-        self.assertNotRegex(line.replace(" / 最有力 0.62", ""), r"[A-Za-z0-9_%.]")
+        self.assertNotRegex(line, r"[A-Za-z0-9_%.]")
 
 
 if __name__ == "__main__":

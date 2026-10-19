@@ -551,7 +551,7 @@ class JevAnswers(StubBackend):
 
 
 class TestUnsureLineHasNoJevNumber(unittest.TestCase):
-    def test_the_post_names_the_question_with_one_number_and_the_detail_shows_none(self):
+    def test_the_post_and_the_detail_name_the_question_and_show_no_probability(self):
         chat = next(g for lst in GRAPHS.values() for g in lst if g["name"] == "teams-chat-triage")
         event = {"kind": "teams.chat", "id": "t9", "author": "佐藤", "text": "この件、どうしましょう"}
         res = graph.run(chat, event, JevAnswers(), playbooks=PBS)
@@ -563,11 +563,8 @@ class TestUnsureLineHasNoJevNumber(unittest.TestCase):
             line = [l for l in text.splitlines() if l.startswith("迷った点")]
             self.assertEqual(len(line), 1, text)
             self.assertIn("依頼の種類", line[0])
-        # T7: the post line (not the detail) adds one number, the best option's probability, as a number and never as a percent
-        post_line = [l for l in post.splitlines() if l.startswith("迷った点")][0]
-        self.assertTrue(post_line.endswith(" / 最有力 0.41"), post_line)
-        self.assertNotRegex([l for l in detail.splitlines() if l.startswith("迷った点")][0], r"[0-9%]")
-        for shown in ("0.37", "41%", "37%"):
+            self.assertNotRegex(line[0], r"[0-9%]")
+        for shown in ("0.41", "0.37", "41%", "37%"):
             self.assertNotIn(shown, post + detail)
 
 

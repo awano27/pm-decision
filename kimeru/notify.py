@@ -438,15 +438,12 @@ def _why(rec):
 
 
 def _why_post(rec):
-    """T7 (post_reason=1): the line of the approval post: the question the model was unsure of (_why), then its number
-    (probability or confidence) and, when the memo names them, the missing material, in one line. "" when there is no question."""
+    """post_reason=1: the line of the approval post: the question the model was unsure of (_why) and, when the memo names
+    them, the missing material, in one line. "" when there is no question."""
     why = _why(rec)
     if not why:
         return ""
-    extra = []
-    num = explain.open_question_numbers(rec)
-    if num:
-        extra.append(num)
+    extra = []   # no probability or confidence number: R11 shows the doubt in words (and Jev's numbers stay out of Teams)
     missing = [str(v) for v in ((rec.get("memo") or {}).get("missing") or []) if str(v).strip()]
     if missing:
         extra.append("足りない材料: " + _clip(" / ".join(missing), 60))

@@ -373,3 +373,77 @@ class TestQuestionWritingWarnings(unittest.TestCase):
         self.assertEqual(rc, 0, err)
         self.assertIn(f"warn  compound-check: a: {NOUL_WARNING}", out.splitlines())
         self.assertNotIn("Traceback", err)
+
+
+# --- T11: the fields a question names, and the checks of the playbooks ------------------------------------------
+BUNDLED_PLAYBOOK_WARNINGS = [   # the check questions of the bundled playbooks that ask two things in one, fixed as they are now
+    "incident/comms: " + NOUL_WARNING,
+    "requirements_review/constraints: " + NOUL_WARNING,
+    "requirements_review/review: " + NOUL_WARNING,
+    "schedule_change/dependencies: " + NOUL_WARNING,
+    "scope_change/tradeoff: " + NOUL_WARNING,
+]
+
+
+def field_warning(name, kind):
+    return f"question reads `{name}`, which the {kind} event state does not have"
+
+
+def output_warning(name):
+    return f"question reads `{name}`, which kimeru writes (its own conclusion), not the event"
+
+
+def lint_event_question(instructions, kind="teams.chat"):
+    g = {"event": kind, "nodes": {"q": {"kind": "judge", "routes": {},
+                                        "question": {"type": "score", "instructions": instructions, "criteria": ["a", "b"]}}}}
+    return graph.lint(g)
+
+
+class TestFieldAndPlaybookWarnings(unittest.TestCase):
+    def test_bundled_playbooks_have_exactly_these_warnings(self):
+        found = []
+        for pid in sorted(PBS):
+            found += graph.lint_playbook(PBS[pid])
+        self.assertEqual(found, BUNDLED_PLAYBOOK_WARNINGS)
+
+    def test_bundled_graphs_name_only_fields_their_event_has_and_no_output_field(self):
+        for path in sorted((ROOT / "graphs").glob("*.json")):
+            g = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual([w for w in graph.lint(g) if "question reads" in w], [], path.name)
+
+    def test_a_field_the_event_does_not_have_is_flagged(self):
+        self.assertEqual(lint_event_question("Is `body` urgent?"), ["q: " + field_warning("body", "teams.chat")])
+        self.assertEqual(lint_event_question("Is `text` urgent?"), [])
+        self.assertEqual(lint_event_question("Is `items[0].text` urgent?", "meeting.item"),
+                         ["q: " + field_warning("items", "meeting.item")])
+        self.assertEqual(lint_event_question("Does `earlier[0]` change `text` today?"), [])
+        self.assertEqual(lint_event_question("Is `item` urgent?", "no.such.kind"), [])
+
+    def test_a_field_of_another_event_kind_is_flagged(self):
+        self.assertEqual(lint_event_question("Is `rule` urgent?"), ["q: " + field_warning("rule", "teams.chat")])
+        self.assertEqual(lint_event_question("Is `rule` urgent?", "monitor.alert"), [])
+
+    def test_a_field_kimeru_writes_is_flagged_as_its_own_conclusion(self):
+        for name in ("advice", "decision", "outcome", "plan"):
+            self.assertEqual(lint_event_question(f"Is `{name}` right?"), ["q: " + output_warning(name)], name)
+
+    def test_a_playbook_check_gets_the_same_three_checks(self):
+        pb = {"id": "p", "steps": [
+            {"id": "a", "check": "Is there a deadline or a customer?"},
+            {"id": "b", "check": "Does `advice` say it is late?"},
+            {"id": "c", "check": "Does `nothing` appear?"},
+            {"id": "d", "check": "Is `text` late?"},
+            {"id": "e"}]}
+        self.assertEqual(graph.lint_playbook(pb), [
+            "p/a: " + NOUL_WARNING, "p/b: " + output_warning("advice"),
+            "p/c: " + field_warning("nothing", "any")])
+
+    def test_validate_prints_the_playbook_warnings_and_still_exits_zero(self):
+        rc, out, err = run_cli("validate")
+        self.assertEqual(rc, 0, err)
+        for text in BUNDLED_PLAYBOOK_WARNINGS:
+            self.assertIn(f"warn  playbook {text}", out.splitlines())
+
+    def test_the_new_warnings_are_ascii(self):
+        for text in BUNDLED_PLAYBOOK_WARNINGS + [field_warning("x", "k"), output_warning("x")]:
+            self.assertTrue(text.isascii(), text)

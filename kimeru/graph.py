@@ -228,6 +228,58 @@ def _has_none(options):
                for k, v in options.items())
 
 
+# P6/T11: the fields a question may name in backticks. A name outside the event's state means the judge reads nothing there;
+# a field kimeru itself writes (its conclusion) in the state makes the judge agree with kimeru instead of judging the event.
+FIELD_WARNING = "question reads `{name}`, which the {kind} event state does not have"
+OUTPUT_WARNING = "question reads `{name}`, which kimeru writes (its own conclusion), not the event"
+_EVENT_FIELDS = {   # events.state_of(event): the fields of the normalized event (kimeru/events.py), minus JUDGE_HIDDEN
+    "teams.chat": ("kind", "source", "id", "ts", "chat_id", "author", "mentions_me", "text"),
+    "monitor.alert": ("kind", "source", "id", "ts", "rule", "severity", "condition", "resources", "description", "context"),
+    "ado.workitem.created": ("kind", "source", "id", "ts", "type", "title", "area", "created_by", "priority", "severity",
+                             "description", "repro_steps", "acceptance_criteria", "test_steps"),
+    "meeting.item": ("kind", "source", "id", "ts", "meeting", "index", "item"),
+}
+_CONTEXT_FIELDS = ("earlier", "today")   # added to the state of a chat judged on this PC (events.state_of, context)
+_OUTPUT_FIELDS = frozenset(("advice", "decision", "outcome", "plan", "proposal", "draft", "reply", "memo", "summary", "reason",
+                            "actions", "notify", "harm", "rank", "next"))
+_FIELD_REF = re.compile(r"`([A-Za-z_]\w*)")
+
+
+def _field_warnings(instructions, kind):
+    """Warnings for the names a question puts in backticks. `kind` None = any event kind (a playbook check is asked of every one)."""
+    known = set(_CONTEXT_FIELDS)
+    for k, names in _EVENT_FIELDS.items():
+        if kind is None or k == kind:
+            known.update(names)
+    if kind is not None and kind not in _EVENT_FIELDS:
+        return []
+    out, seen = [], set()
+    for name in _FIELD_REF.findall(str(instructions or "")):
+        if name in seen:
+            continue
+        seen.add(name)
+        label = kind or "any"
+        if name in _OUTPUT_FIELDS and name not in known:
+            out.append(OUTPUT_WARNING.format(name=name))
+        elif name not in known:
+            out.append(FIELD_WARNING.format(name=name, kind=label))
+    return out
+
+
+def lint_playbook(pb):
+    """The same warnings for the `check` questions of a playbook's steps (each a noul, asked of any event), as "<id>/<step>: <text>"."""
+    out = []
+    for s in (pb.get("steps") or []):
+        check = s.get("check") if isinstance(s, dict) else None
+        if not check:
+            continue
+        nid = f"{pb.get('id')}/{s.get('id')}"
+        if _COMPOUND.search(str(check)):
+            out.append(f"{nid}: {NOUL_WARNING}")
+        out += [f"{nid}: {w}" for w in _field_warnings(check, None)]
+    return out
+
+
 def lint(g):
     """Warnings about how the judge questions are written, as "<node>: <text>" (ASCII only). Nothing is refused and the
     graph is not changed: a question's wording is the judgment, so changing it is a decision of its own (a new version)."""
@@ -237,6 +289,7 @@ def lint(g):
         if not isinstance(q, dict):
             continue
         crit = q.get("criteria")
+        out += [f"{nid}: {w}" for w in _field_warnings(q.get("instructions"), g.get("event"))]
         if q.get("type") == "noul" and _COMPOUND.search(str(q.get("instructions") or "")):
             out.append(f"{nid}: {NOUL_WARNING}")
         if q.get("type") == "choice" and isinstance(crit, dict) and not _has_none(crit):

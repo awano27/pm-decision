@@ -1070,6 +1070,9 @@ def _main(argv=None):
                 print(f"ok  {g['name']} ({kind}, {len(g['nodes'])} nodes)")
                 for w in graph.lint(g):   # R38: warnings about how a question is written; the graph still passes
                     print(f"warn  {g['name']}: {w}")
+        for pid, pb in pbs.items():   # T11: the same warnings for the check questions of a playbook; the exit code stays 0
+            for w in graph.lint_playbook(pb):
+                print(f"warn  playbook {w}")
         return 0
 
     if a.cmd == "memory":   # R16: the earlier decisions of #N, in the terminal (nothing is written, nothing is posted)

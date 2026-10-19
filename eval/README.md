@@ -127,6 +127,15 @@ python eval/draft_quality.py --fixtures fixtures_holdout.jsonl --per-kind 2
 
 下書きごとに、日本語・英語の混入・定型文の複製・不自然な言い回し・材料にない権限者や完了・具体性・材料にない日付や数値を数えます（判定は LLM ではなく決まった規則なので、プロンプトの変更の前後で比べられます）。`--show` で、定型文と下書きを並べて読めます。最終的な確認は、読んで行ってください。
 
+## PM の 1 日（`day_run.py`）
+
+```bash
+python eval/day_run.py --backend stub                   # 文面は定型文（writer を呼ばない）
+python eval/day_run.py --backend stub --writer copilot  # GitHub Copilot CLI を実際に呼ぶ（上限を使う）
+```
+
+`--writer` の既定は空で、定型文（テンプレート）で書きます。外部の CLI を呼ぶのは `--writer copilot` などと明示したときだけです。
+
 ## 期待経路（`eval/golden.json`）
 
 `python eval/golden.py` は、ラベルだけで各 fixture がどこへ行くかを `eval/golden.json` と比べ、動いた件を `id: 前 -> 後` で出します（モデルは呼びません）。

@@ -1,6 +1,6 @@
 """A PM's day through the real pipeline, with only Teams replaced by an in-memory fake.
 
-  python eval/day_run.py --backend kev --writer copilot [--n 8] [--out day-out]
+  python eval/day_run.py --backend kev [--writer copilot] [--n 8] [--out day-out]
 
 Drops fixture events of every kind into an inbox, runs daily cycles (judge -> writer drafts ->
 approval posts -> replies -> actions -> morning brief) and checks what a PM would see:
@@ -93,7 +93,7 @@ def main():
         sys.stdout.reconfigure(errors="replace")
     ap = argparse.ArgumentParser()
     ap.add_argument("--backend", choices=["stub", "jev", "kev"], default="kev")
-    ap.add_argument("--writer", default="copilot")
+    ap.add_argument("--writer", default="", help="empty (default) = the template writer, no CLI is called; e.g. copilot calls the GitHub Copilot CLI")
     ap.add_argument("--n", type=int, default=2, help="events per kind")
     ap.add_argument("--out", default=str(ROOT / "out" / f"day-{datetime.now():%Y%m%d-%H%M%S}"))
     ap.add_argument("--user-thresholds", action="store_true",

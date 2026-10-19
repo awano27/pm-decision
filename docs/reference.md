@@ -281,7 +281,7 @@ python -m kimeru config path
 python eval/run_eval.py live --backend kev --out answers.jsonl        # 判断ポイントごと
 python eval/e2e.py --backend kev [--fixtures fixtures_holdout.jsonl]  # 最終的な行動
 python eval/drafts.py --backend stub --writer copilot                 # 文面の下書きの点検
-python eval/day_run.py --backend kev --writer copilot                 # PM の 1 日を、Teams だけ偽物にして通す
+python eval/day_run.py --backend kev                 # PM の 1 日を、Teams だけ偽物にして通す
 python eval/run_eval.py score answers.jsonl --fixtures <状態フォルダ>\fixtures_user.jsonl   # 自分で確かめた判断で採点する（tune も同じ）
 ```
 

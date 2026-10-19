@@ -50,5 +50,68 @@ class TestADayRunOnACp932Console(unittest.TestCase):
         self.assertIn("judge+draft time", text)   # the last line of main: the day was not stopped by the print
 
 
+class TestTheDefaultWriterIsTheTemplate(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        clean = {k: v for k, v in os.environ.items() if not k.startswith("KIMERU_")}
+        clean["KIMERU_STATE_DIR"] = self.dir.name
+        self.env = mock.patch.dict(os.environ, clean, clear=True)
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        self.dir.cleanup()
+
+    def _run(self, extra):
+        day_run = _load_day_run()
+        argv = ["day_run.py", "--backend", "stub", "--n", "1", "--out", str(Path(self.dir.name) / "day")] + extra
+        asked = []
+        real = day_run.writer.get_writer
+
+        def spy(name=None):
+            asked.append(name)
+            return real(name)
+
+        with mock.patch.object(day_run.writer, "get_writer", side_effect=spy), \
+                mock.patch.object(sys, "stdout", io.StringIO()), mock.patch.object(sys, "argv", argv):
+            day_run.main()
+        return asked
+
+    def test_default_writer_argument_is_empty(self):
+        import argparse
+        day_run = _load_day_run()
+        captured = {}
+        real_parse = argparse.ArgumentParser.parse_args
+
+        class Stop(Exception):
+            pass
+
+        def grab(self, args=None, namespace=None):
+            captured["writer"] = real_parse(self, args, namespace).writer
+            raise Stop()
+
+        with mock.patch.object(argparse.ArgumentParser, "parse_args", grab), \
+                mock.patch.object(sys, "argv", ["day_run.py", "--backend", "stub"]):
+            with self.assertRaises(Stop):
+                day_run.main()
+        self.assertEqual(captured["writer"], "")
+
+    def test_no_cli_writer_is_constructed_by_default(self):
+        from kimeru import writer
+        with mock.patch.dict(writer.WRITERS, {k: mock.Mock(side_effect=AssertionError("a CLI writer was built")) for k in writer.WRITERS}):
+            asked = self._run([])
+        self.assertEqual(asked[0], "")   # main asks for the template writer; get_writer("") is None
+        self.assertFalse([a for a in asked if a], asked)   # nothing else named a CLI writer
+
+    def test_the_default_writer_object_is_none(self):
+        from kimeru import writer
+        self.assertIsNone(writer.get_writer(""))
+
+    def test_copilot_is_still_selectable_by_name(self):
+        from kimeru import writer
+        with mock.patch.dict(writer.WRITERS, {"copilot": mock.Mock(return_value="W")}):
+            self.assertEqual(writer.get_writer("copilot"), "W")
+
+
 if __name__ == "__main__":
     unittest.main()

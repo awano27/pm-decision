@@ -895,6 +895,47 @@ class TestRedraftPrev(unittest.TestCase):
         self.assertEqual(a["held_for"], "fallback")
         self.assertIn("10/5", a["writer_warning"])
 
+    def test_a_writer_that_was_not_asked_again_keeps_its_draft_with_the_warning(self):
+        spy = PromptSpy([{"a1": "明日までに対応します。"}])
+        spy.NAME = "m365-auto"   # not a CLI writer: no second call is made
+        res = reply_res()
+        with self.setting("1"):
+            writer.apply(res, REDRAFT_EVENT, spy)
+        a = res["actions"][0]
+        self.assertEqual(len(spy.prompts), 1)
+        self.assertEqual(a["text"], "明日までに対応します。")
+        self.assertEqual(a["unverified"], ["明日"])
+        self.assertNotIn("writer_warning", a)
+        self.assertNotEqual(a.get("held_for"), "fallback")
+
+    def test_a_second_call_that_failed_does_not_send_the_draft_back_to_the_template(self):
+        class Fails(PromptSpy):
+            def ask_text(self, prompt):
+                if self.prompts:
+                    self.prompts.append(prompt)
+                    raise RuntimeError("down")
+                return super().ask_text(prompt)
+
+        spy = Fails([{"a1": "明日までに対応します。"}])
+        res = reply_res()
+        with self.setting("1"):
+            writer.apply(res, REDRAFT_EVENT, spy)
+        a = res["actions"][0]
+        self.assertEqual(len(spy.prompts), 2)
+        self.assertEqual(a["text"], "明日までに対応します。")
+        self.assertEqual(a["unverified"], ["明日"])
+        self.assertNotEqual(a.get("held_for"), "fallback")
+
+    def test_a_second_call_with_an_empty_answer_does_not_send_the_draft_back_to_the_template(self):
+        spy = PromptSpy([{"a1": "明日までに対応します。"}, {}])
+        res = reply_res()
+        with self.setting("1"):
+            writer.apply(res, REDRAFT_EVENT, spy)
+        a = res["actions"][0]
+        self.assertEqual(len(spy.prompts), 2)
+        self.assertEqual(a["text"], "明日までに対応します。")
+        self.assertNotEqual(a.get("held_for"), "fallback")
+
     def test_with_the_setting_off_an_unverified_fact_stays_in_the_draft(self):
         spy = PromptSpy([{"a1": "10/5 までに対応します。"}])
         res = reply_res()

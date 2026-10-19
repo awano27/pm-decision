@@ -767,11 +767,12 @@ def timed_draft(writer, res, event, instruction=None):
 UNVERIFIED_FIX = "材料に無い日付・数値を使わずに書き直す"
 
 
-def _polish(writer, res, event, d, todo, material, unv=None):
+def _polish(writer, res, event, d, todo, material, unv=None, asked=None):
     """One second try for the texts that read badly (stiff, English, a copy of the template) and, with redraft_prev=1, for the
     texts with a date or number the material lacks (`unv`: key -> those tokens): the writer gets the exact problems as one
     correction instruction, and a text is replaced only when the new one is better (for `unv`: has fewer such tokens). CLI
-    writers only: the Teams route would paste into Copilot a second time."""
+    writers only: the Teams route would paste into Copilot a second time. `asked` (a set): gets the keys of a second call that
+    was really made and answered; a key not in it was not asked again."""
     if getattr(writer, "NAME", "") not in CLI_WRITERS:
         return d
     unv = unv or {}
@@ -795,6 +796,8 @@ def _polish(writer, res, event, d, todo, material, unv=None):
         return d
     if not d2:
         return d
+    if asked is not None:
+        asked.update(keys)
     out = dict(d)
     for key in keys:
         new = d2.get(key)
@@ -986,7 +989,9 @@ def apply(res, event, writer, instruction=None, previous=None, precedent=None, h
                 found = unverified(text, material) if isinstance(text, str) and text.strip() else []
                 if found:
                     unv[k] = found
-        d = _polish(writer, res, event, d, todo, material, unv)
+        asked = set()
+        d = _polish(writer, res, event, d, todo, material, unv, asked)
+        unv = {k: v for k, v in unv.items() if k in asked}   # only a text that was asked again and still holds the fact goes back to the template
     drafted, refused = [], []
     for key, a in todo:
         text = d.get(key)

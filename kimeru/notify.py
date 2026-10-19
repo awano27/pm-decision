@@ -1241,6 +1241,7 @@ def toast_text(out, posted, notices, unposted=0, sitting=False):
 
 ACK = {"approved": "承認", "rejected": "却下", "held": "保留", "ask_back": "聞き返し",
        "redrafted": "書き直し", "redraft_failed": "書き直せず", "redo": "再実行", "redo_ignored": "再実行（無視: 古い回数）", "redo_ahead": "再実行（回数が大きすぎます。その回数の結果が出たら 1 回だけ効きます）", "redo_malformed": "再実行（形が違います）", "closed": "済（閉じました）", "detail": "詳細を返信",
+       "reply_ignored": "返信を読めませんでした（投稿が画面から流れたため、もう一度投稿します。承認はしていません）",
        "reposted": "文面を確認して OK し直してください",
        "learned": "学習を採用しました（基準を変えました）", "learn_stale": "学習（基準が変わっていたため採用せず）",
        "sent_confirmed": "送った（催促を止めました）", "reply_send": "送る（結果は自分とのチャットへ）"}
@@ -1517,6 +1518,41 @@ def fresh_entries(read, x_boundary=True):
                 if r0 and r0[0] == "詳細" and i < last_detail.get(num, -1):
                     continue   # answered already
                 out.append((e[2:], top.get(num, 0)))
+    return out
+
+
+def unseen_reply_numbers(read):
+    """[(number, reply line)] for the decision replies ("OK 5", "NG 5", 保留, 聞き返し, 修正, 不要) of a number none of whose posts "[kimeru #N]" /
+    "[kimeru 実行 #N k]" is on the screen, in order, once per number. fresh_entries leaves such a reply out (freshness cannot be proven);
+    this names them, so that it is not dropped without a word. The test reader and a reader with no timeline get nothing; a number
+    whose last post is a test post is not listed (scoped_timeline leaves its replies out)."""
+    if test_mode():
+        return []
+    tl = scoped_timeline(read)
+    if tl is None:
+        return []
+    shown = set()
+    for e in tl:
+        if e.startswith("P:"):
+            shown.add(e[2:])
+        else:
+            x = parse_result_entry(e)
+            if x:
+                shown.add(x[0])
+    out, seen = [], set()
+    for e in tl:
+        if not e.startswith("R:"):
+            continue
+        line = e[2:]
+        r = parse_reply(line)
+        if r and r[0] in ("OK", "NG", "保留", "聞き返し", "不要"):
+            num = r[1]
+        else:
+            r = parse_redraft(line) or hold.parse_hold_until(line)
+            num = r and r[0]
+        if num and num not in shown and num not in seen:
+            seen.add(num)
+            out.append((num, line))
     return out
 
 
@@ -1981,6 +2017,23 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
             except work.WorkError:
                 continue   # a journal that cannot be read stops this reply only; the cycle goes on
         work.due_notice(ap.data, post, clock)   # the deadline post of the day, once (put in the outbox like the other posts)
+    if real:   # a decision reply of a post that has left the screen is not read: say so once and post the item again (nothing is approved)
+        for num, line in unseen_reply_numbers(read):
+            it = ap.data["items"].get(num)
+            if not it or not it["posted"] or it["status"] not in ("pending", "held"):
+                continue
+            seen_lines = it.get("reply_ignored_seen") or []
+            key = unicodedata.normalize("NFKC", line).strip()
+            if key in seen_lines:
+                continue
+            it["reply_ignored_seen"] = (seen_lines + [key])[-20:]
+            try:
+                post(f"[kimeru 通知] #{num} への返信を読めませんでした（投稿が画面から流れました）。もう一度投稿します")   # not "[kimeru #N]": the reader would take this line for the post of #N
+            except Exception:   # the notice failing must not stop the cycle; the item is posted again all the same
+                pass
+            it["posted"], it["request_posted"] = False, False
+            changes.append({"id": int(num), "status": "reply_ignored"})
+        ap.save()
     fresh = fresh_entries(read)
     replies = [line for line, _ in fresh]
     seen_results = {}   # for `再実行`: the highest result count of the item that stands before the reply (the context of the reply)

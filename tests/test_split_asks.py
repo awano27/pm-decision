@@ -587,5 +587,62 @@ class TestBatchMode(unittest.TestCase):
         self.assertEqual(res["node"], "decision_today")
 
 
+class TestThePlannedPathsAreNeverQuieterThanTheSingleIntent(unittest.TestCase):
+    """The combination table of tests/test_judgment_gaps.py asks with no playbook that fits, so the plan nodes never answered ok.
+    Here the playbook answer fits (ReplayBackend answers `playbook`), so the route can end in decision_planned or
+    requirements_planned, and the final node is never quieter than the single-intent result."""
+    LABELS = CHOICES + ("unsure",)
+
+    @staticmethod
+    def judge(text, body, requests=(), split=None, playbook="schedule_change"):
+        """Like judge(), with the plan answers of the playbook: every step is needed, due today, and the first step goes first."""
+        steps = PBS[playbook]["steps"]
+        extra = {"first": ans(steps[0]["id"])}
+        for s in steps:
+            if s.get("check"):
+                extra[f"need_{s['id']}"] = {"type": "noul", "noul": 0.9, "confidence": 0.9, "probabilities": {}}
+            extra[f"due_{s['id']}"] = ans(score=2.0)
+        be = Answers({**answers_for(body, requests, playbook), **extra})
+        return graph.run(TEAMS, ev(text), be, playbooks=PBS, split_asks=split), be
+
+    def test_a_status_body_with_a_decision_request_and_a_fitting_playbook_ends_in_decision_planned(self):
+        single, _ = self.judge(TWO, "status", split=False, playbook="schedule_change")
+        res, be = self.judge(TWO, "status", ["status", "decision"], split=True, playbook="schedule_change")
+        self.assertEqual(single["node"], "reply_status")
+        self.assertEqual(res["node"], "decision_planned")
+        self.assertIn("plan_decision", [s["node"] for s in res["path"]])
+        self.assertGreaterEqual(rank(res), rank(single))
+        self.assertTrue(res["notify"])
+        for state, qids in be.calls[1:]:
+            self.assertNotIn("asks", state, qids)
+
+    def test_no_pair_of_requests_ends_quieter_than_the_single_intent_when_a_playbook_fits(self):
+        reached = set()
+        for playbook in ("schedule_change", "requirements_review"):
+            for body in self.LABELS:
+                single, _ = self.judge(TWO, body, split=False, playbook=playbook)
+                for first in self.LABELS:
+                    for second in self.LABELS:
+                        with self.subTest(playbook=playbook, body=body, requests=(first, second)):
+                            res, _ = self.judge(TWO, body, [first, second], split=True, playbook=playbook)
+                            reached.add(res["node"])
+                            self.assertGreaterEqual(rank(res), rank(single))
+                            self.assertIn(res["node"], NODES)
+                            self.assertTrue(all(step["node"] in NODES for step in res["path"]))
+        self.assertIn("decision_planned", reached)   # the table does cover the plan path
+        self.assertIn("requirements_planned", reached)
+
+    def test_a_planned_single_intent_stays_planned_or_louder_for_every_request_pair(self):
+        for body, planned in (("decision", "decision_planned"), ("requirements", "requirements_planned")):
+            playbook = "schedule_change" if body == "decision" else "requirements_review"
+            single, _ = self.judge(TWO, body, split=False, playbook=playbook)
+            self.assertEqual(single["node"], planned)
+            for first in self.LABELS:
+                for second in self.LABELS:
+                    with self.subTest(body=body, requests=(first, second)):
+                        res, _ = self.judge(TWO, body, [first, second], split=True, playbook=playbook)
+                        self.assertGreaterEqual(rank(res), rank(single))
+
+
 if __name__ == "__main__":
     unittest.main()

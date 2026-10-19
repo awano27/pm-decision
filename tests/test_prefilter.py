@@ -119,6 +119,12 @@ class TestAtOneTheJudgeIsNotAsked(unittest.TestCase):
         self.assertNotIn("prefilter", run(ado("7", type="Epic"), prefilter="1")[1])
         self.assertNotIn("prefilter", run(ado("8", repro_steps="1. 開く"), prefilter="1")[1])
 
+    def test_a_template_with_only_headings_is_not_matched_the_safe_side(self):
+        # docs: only "all three fields empty" counts; a heading-only template is not guessed at
+        for k in ("description", "repro_steps", "acceptance_criteria"):
+            self.assertIsNone(prefilter.rule_of(ado("9", **{k: "再現手順:"})), k)
+        self.assertEqual(prefilter.rule_of(ado("9", description="  ")), "ado_template")
+
     def test_the_none_words(self):
         for item in ("特になし", "なし", "該当なし", "特になし。"):
             self.assertEqual(prefilter.rule_of(minutes("m", item)), "minutes_none", item)

@@ -496,6 +496,53 @@ class TestRedraftMaterial(unittest.TestCase):
                          writer._material(copy.deepcopy(REDRAFT_REC), REDRAFT_REC["material_event"], "もっと短く"))
 
 
+class TestPostChecked(unittest.TestCase):
+    """T9 (b) post_checked=1: the post of a drafted text names, in at most two lines, what of the draft the event itself has
+    (確かめた点) and what only kimeru's judgment or template has (kimeru の提案). 0 (the default) adds nothing."""
+    EVENT = {"kind": "teams.chat", "author": "山田", "text": "#123 の仕様変更を 10/15 までにお願いします。https://example.com/x を見てください。"}
+
+    def rec(self, text, template="受領しました。期限は 10/20 です。"):
+        return {"graph": "g", "event_kind": "teams.chat", "event_id": "c1", "node": "n", "path": [], "advice": "期限は 10/20 に設定",
+                "material_event": dict(self.EVENT), "event": dict(self.EVENT), "needs_human": True,
+                "actions": [{"type": "teams.reply", "to": "山田", "text": text, "template_text": template, "drafted_by": "fake"}]}
+
+    def post(self, value, rec):
+        with mock.patch.dict(os.environ, {"KIMERU_POST_CHECKED": value}):
+            return notify.format_post(1, rec)
+
+    TEXT = "#123 を 10/15 までに対応します。https://example.com/x を確認し、10/20 に再連絡します。"
+
+    def test_default_adds_nothing(self):
+        self.assertNotIn("確かめた点", self.post("0", self.rec(self.TEXT)))
+        self.assertNotIn("kimeru の提案", self.post("0", self.rec(self.TEXT)))
+
+    def test_event_facts_and_kimeru_facts_are_on_separate_lines(self):
+        base = self.post("0", self.rec(self.TEXT)).split("\n")
+        got = self.post("1", self.rec(self.TEXT)).split("\n")
+        self.assertEqual(len(got), len(base) + 2)
+        checked = next(l for l in got if l.startswith("確かめた点: "))
+        own = next(l for l in got if l.startswith("kimeru の提案: "))
+        for t in ("#123", "10/15", "https://example.com/x"):
+            self.assertIn(t, checked)
+        self.assertNotIn("10/20", checked)
+        self.assertIn("10/20", own)
+        self.assertNotIn("10/15", own)
+
+    def test_at_most_five_points_and_no_percentage_of_the_judgment(self):
+        rec = self.rec("10/1、10/2、10/3、10/4、10/5、10/6、10/7 と 80%")
+        rec["material_event"]["text"] = "10/1、10/2、10/3、10/4、10/5、10/6、10/7"
+        rec["advice"] = "確度 80%"
+        line = next(l for l in self.post("1", rec).split("\n") if l.startswith("確かめた点: "))
+        self.assertEqual(line.count("10/"), 5)
+        self.assertNotIn("80%", "".join(l for l in self.post("1", rec).split(chr(10)) if l.startswith("kimeru の提案")))
+        self.assertNotIn("kimeru の提案", self.post("1", rec))
+
+    def test_nothing_is_added_without_a_draft(self):
+        rec = self.rec(self.TEXT)
+        rec["actions"][0].pop("drafted_by")
+        self.assertNotIn("確かめた点", self.post("1", rec))
+
+
 class TestSendReadySplit(unittest.TestCase):
     """S1 (send_ready_split=1): an approved reply comes back to the self chat as two posts, the heading (to whom, and the chat link
     with open_chat_link=1) and the body alone under its own marker line. With the setting at 0 the posts keep their old bytes."""

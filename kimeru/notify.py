@@ -533,6 +533,12 @@ def format_post(n, rec, full=None, marks=None, precedent=None, promise=None, rel
         lines.append(f"⚠ 元の材料に無い日付・数値あり（詳細 {n}）")
     if rec.get("redraft_note"):
         lines.append("⚠ " + _clip(rec["redraft_note"], 100))
+    if drafts and config.value("post_checked") == "1":   # T9 (b): what of the draft is in the event, and what only kimeru proposes (two lines at most)
+        found, own = writer_mod.checked_points(rec, rec.get("material_event"), full)
+        if found:
+            lines.append("確かめた点: " + _clip(", ".join(found), 100))
+        if own:
+            lines.append("kimeru の提案: " + _clip(", ".join(own), 100))
     writes = [a for a in actions if a.get("exec_text")]
     if writes:   # where it will be written: the organization and the project it was pulled from (execute.freeze)
         tg = writes[0].get("exec_origin") or writes[0].get("exec_target") or {}

@@ -627,6 +627,42 @@ def unverified(text, material):
     m = _canon(material)
     return sorted({t for t in TOKENS.findall(text or "") if not _covered(t, m)})
 
+URL = re.compile(r"https?://[^\s)）」』>]+")
+CHECKED_MAX = 5
+
+
+def checked_points(rec, event, full=None):
+    """T9 (b): (found in the event, only in kimeru's own text) for the dates / numbers / ids / urls / people of the drafts of `rec`.
+    "found in the event" are tokens that the event's own fields (the source text, the title, the thread...) contain; "kimeru" are
+    the ones that only the judgment path, the advice, the plan or the template carry (a deadline, for example). A token that is in
+    neither is not listed (the post already warns of it with ⚠). Each list: at most CHECKED_MAX, in the order of the draft."""
+    texts = [str(a.get(FIELD[a["type"]]) or "") for a in rec.get("actions", []) if a.get("drafted_by") and a.get("type") in FIELD]
+    ev = dict(event or {})
+    if full:
+        ev.update(full.get("material") or {})
+        if full.get("text"):
+            ev["text"] = full["text"]
+        if full.get("thread"):
+            ev["thread"] = full["thread"]
+    src = {k: _cut(ev, k) for k in EVENT_FIELDS if ev.get(k)}
+    if ev.get("thread"):
+        src["thread"] = [str(t) for t in ev["thread"]]
+    in_event = _canon(json.dumps(src, ensure_ascii=False))
+    in_kimeru = _canon(_material(rec, {}))
+    found, own, seen = [], [], set()
+    for text in texts:
+        for t in TOKENS.findall(text) + URL.findall(text):
+            c = _canon(t)
+            if c in seen:
+                continue
+            seen.add(c)
+            if _covered(t, in_event) or (t.startswith("http") and t in json.dumps(src, ensure_ascii=False)):
+                found.append(t)
+            elif "%" not in t and _covered(t, in_kimeru):   # a percentage may be the judgment model's number: never listed
+                own.append(t)
+    return found[:CHECKED_MAX], own[:CHECKED_MAX]
+
+
 CITATION = re.compile(r"\s*\[\d{1,2}\]|\s*\[\[\d{1,2}\]\]|【[^】]{0,40}†[^】]{0,80}】|\^\d{1,2}\^")
 
 

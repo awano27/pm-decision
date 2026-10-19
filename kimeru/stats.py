@@ -211,6 +211,52 @@ def _unchanged_oks(out, week_replies):
     return draft, unchanged
 
 
+DRAFT_DECIDED = ("approved", "rejected", "redrafted", "expired")   # the replies (and the expiry) that settle what became of a draft
+
+
+def _draft_use(out, week_replies):
+    """T7: {"drafts", "ok", "ng", "fix"}: of the items with a draft that were decided in the week (same filters as _unchanged_oks),
+    how many (each item once) were OK'd, NG'd and sent back with 修正. Numbers only."""
+    from . import trial
+    items = _approval_items(out)
+    seen = {}
+    for r in week_replies:
+        if r.get("status") not in DRAFT_DECIDED:
+            continue
+        item = items.get(str(r.get("id")))
+        if not isinstance(item, dict) or item.get("key") != r.get("key"):
+            continue
+        rec = item.get("record") if isinstance(item.get("record"), dict) else {}
+        timing = r.get("measurement") if isinstance(r.get("measurement"), dict) else {}
+        reference = rec.get("measurement") if isinstance(rec.get("measurement"), dict) else {}
+        if timing.get("source") == "demo" or reference.get("source") == "demo":
+            continue
+        if autorun._key_is_sample(r.get("key")) or autorun.is_sample(rec.get("event_kind"), rec.get("event_id")):
+            continue
+        if not _performance_judge(_record_judge_name(rec)) or not trial._eligible_draft(rec):
+            continue
+        seen.setdefault(r["key"], set()).add(r["status"])
+    return {"drafts": len(seen), "ok": sum("approved" in v for v in seen.values()),
+            "ng": sum("rejected" in v for v in seen.values()), "fix": sum("redrafted" in v for v in seen.values())}
+
+
+def _waiting_age(out, now):
+    """T7: how long the items that wait for an answer have waited since they were posted: {"n", "median", "max"} in seconds (None
+    when none can be measured). Read only; the demo and the fictional item are left out."""
+    ages = []
+    for item in _approval_items(out).values():
+        if not isinstance(item, dict) or item.get("status") not in ("pending", "held") or not item.get("posted") or _sample_or_demo_item(item):
+            continue
+        at = _parse((item.get("measurement") or {}).get("posted_at")) if isinstance(item.get("measurement"), dict) else None
+        if at is not None and at <= now:
+            ages.append((now - at).total_seconds())
+    return {"n": len(ages), "median": median(ages) if ages else None, "max": max(ages) if ages else None}
+
+
+def _age_words(seconds):
+    return f"{seconds / 3600:.0f} 時間" if seconds < 48 * 3600 else f"{seconds / 86400:.1f} 日"
+
+
 def _calibration(out):
     """Labeled questions per judge that `calibrate` can tune (Jev left out). The graphs that ship with kimeru are read, the model
     is not called; None when they cannot be read (then the line says Unknown)."""
@@ -262,6 +308,7 @@ def _week_extra(out, decision_rows, decisions, week_replies, review_rows, now, s
         **({"rule_recorded": sum(1 for r in counted if r.get("demoted_by"))} if any(r.get("demoted_by") for r in counted) else {}),   # R33 (only when a rule recorded a line)
         "replied_items": len(replies), "replies": sum(replies.values()),
         "oks_with_draft": draft, "oks_unchanged": unchanged,
+        "draft_use": _draft_use(out, week_replies), "waiting_age": _waiting_age(out, now),
         "latency": {"now": [s for t, s in latencies if since_ts <= t <= now_ts],
                     "previous": [s for t, s in latencies if prev_ts <= t < since_ts]},
         "calibration": _calibration(out),
@@ -712,6 +759,16 @@ def render(s, share=False):
         n_ok = wk["oks_with_draft"]
         lines.append("提案が一度も変わらなかった OK: " + (f"{wk['oks_unchanged']} 件（下書きのある OK {n_ok} 件{_count_note(n_ok)}）"
                                                      if n_ok else "不明（下書きのある OK 0 件）"))
+        du = wk.get("draft_use")   # T7: numbers only (no text of any draft)
+        if du is not None:
+            nd = du["drafts"]
+            lines.append("下書きの使われ方: " + (
+                f"OK {du['ok']} 件（{du['ok'] * 100 // nd}%）・NG {du['ng']} 件（{du['ng'] * 100 // nd}%）・修正 {du['fix']} 件（{du['fix'] * 100 // nd}%）"
+                f"（決まった下書きの件 {nd} 件{_count_note(nd)}）" if nd else "不明（決まった下書きの件 0 件）"))
+        wa = wk.get("waiting_age")
+        if wa is not None:
+            lines.append("確認待ちの古さ: " + (f"中央値 {_age_words(wa['median'])} / 最長 {_age_words(wa['max'])}（{wa['n']} 件）"
+                                          if wa["n"] else "確認待ち 0 件（測れた件なし）"))
 
         def _seconds(values):
             return f"{median(values):.1f} 秒（測れた {len(values)} 件{_count_note(len(values))}）" if values else "不明"

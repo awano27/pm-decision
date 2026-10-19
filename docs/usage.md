@@ -201,6 +201,7 @@ python -m kimeru config unset backend   # install のときに保存した判断
 
 - 記録の場所: `--out` で指定したフォルダです。README のデモは `out\demo\`、体験（`try`）は `out\try\`、1 件のサンプルは `out\example\` に保存します。取り込んだ原本は inbox の `done/` に全文で残り、`daily` が既定 7 日で消します。`setup-managed` で入れた場合の出力先は `%LOCALAPPDATA%\kimeru` です。保存先を確かめ、不要になった記録を削除してください
 - `out\run-daily.vbs`（自動運転の起動用）は `schedule remove` のあとも残ります。手で消せます
+- `schedule remove` は、`schedule install` が設定ファイルへ保存した設定（`backend`・`ado_org`・`ado_project` など）を、install より前の値に戻します（前に無かった設定は消します）。戻したくないときは `schedule remove --keep-settings`。install を 2 回続けても、戻る先は最初の install より前の値です（記録は状態フォルダの `schedule_install.json`）
 - 状態フォルダ（既定 `%LOCALAPPDATA%\kimeru`。`config.json`・`self-name.txt`・`reviews.jsonl`・`fixtures_user.jsonl` など）は `schedule remove` では消えません。消すときはフォルダごと削除します
 - `setup-managed` で入れた場合は `.\setup-managed.cmd remove`（[手順](managed-pc-check.md)）
 

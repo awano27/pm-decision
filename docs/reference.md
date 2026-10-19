@@ -18,7 +18,7 @@ python -m kimeru owed                              # 返事の借り: 自分が�
 python -m kimeru pull teams|ado|alerts --inbox inbox    # ado: --org <組織 or URL> [--project <名前>] [--login]
 python -m kimeru brief [--post [--send]]
 python -m kimeru daily [--once] [--send]
-python -m kimeru schedule install|remove|status   # タスクスケジューラ（管理者権限不要）
+python -m kimeru schedule install|remove|status   # タスクスケジューラ（管理者権限不要）（remove は install が保存した設定も戻す。`--keep-settings` で戻さない）
 python -m kimeru push test|status                 # 通知の経路（iPhone 用）の試験と状態（[docs](push-notification.md)）
 python -m kimeru notify [--send]                   # 確認待ちを自分とのチャットへ（--send なしは貼り付けだけ）
 python -m kimeru approvals                         # 自分とのチャットの返信（OK / NG / 保留 / 詳細 / 修正 / 聞き返し / 再実行 / 済）を読む

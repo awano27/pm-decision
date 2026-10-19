@@ -47,6 +47,60 @@ class TestSchedule(unittest.TestCase):
             self.assertIn('--ado-org ""contoso"" --ado-project ""My Project""', vbs)
 
 
+class TestScheduleRemoveRestoresSettings(unittest.TestCase):
+    def setUp(self):
+        from kimeru import config
+        self.config = config
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.state = Path(self.tmp.name) / "state"
+        self.state.mkdir()
+        p = mock.patch.dict("os.environ", {"KIMERU_STATE_DIR": str(self.state)})
+        p.start()
+        self.addCleanup(p.stop)
+        self.out = Path(self.tmp.name) / "out"
+
+    def _run(self, action, **kw):
+        a = SimpleNamespace(action=action, minutes=5, extra="", out=str(self.out), backend=kw.pop("backend", "kev"),
+                            ado_org=kw.pop("ado_org", ""), ado_project=kw.pop("ado_project", ""), **kw)
+        with mock.patch.object(subprocess, "run", return_value=SimpleNamespace(returncode=0)):
+            self.assertEqual(cli.schedule(a), 0)
+
+    def _file(self):
+        return self.config.read_raw()
+
+    def test_remove_puts_back_the_values_from_before_the_first_install(self):
+        self.config.set_value("backend", "stub")          # before install: backend set, ado_org / ado_project absent
+        self._run("install", backend="kev", ado_org="o1", ado_project="p1")
+        self.assertEqual(self._file()["backend"], "kev")
+        self._run("install", backend="jev", ado_org="o2", ado_project="p2")   # second install: not the original
+        self.assertEqual(self._file()["ado_org"], "o2")
+        self._run("remove")
+        f = self._file()
+        self.assertEqual(f.get("backend"), "stub")        # not "kev": the first install's value is not the original
+        self.assertNotIn("ado_org", f)                    # did not exist before: removed
+        self.assertNotIn("ado_project", f)
+        rec = self.state / "schedule_install.json"
+        self.assertTrue(not rec.exists() or rec.read_text(encoding="utf-8").strip() in ("", "{}"))
+
+    def test_a_value_the_pm_changed_after_install_stays(self):
+        self._run("install", backend="kev", ado_org="o1", ado_project="p1")
+        self.config.set_value("ado_org", "mine")          # changed by hand after install
+        self._run("remove")
+        f = self._file()
+        self.assertEqual(f.get("ado_org"), "mine")
+        self.assertNotIn("ado_project", f)                # still what install wrote: removed
+
+    def test_keep_settings_leaves_them_and_no_record_changes_nothing(self):
+        self._run("remove")                               # no record: as before
+        self.assertEqual(self._file(), {})
+        self._run("install", backend="kev", ado_org="o1", ado_project="p1")
+        self._run("remove", keep_settings=True)
+        self.assertEqual(self._file()["ado_org"], "o1")
+        self._run("remove")                               # the record is still there: a later plain remove restores
+        self.assertNotIn("ado_org", self._file())
+
+
 class TestStateFolderIsolation(unittest.TestCase):
     def test_a_preset_state_dir_is_never_written_by_the_tests(self):
         import os

@@ -153,7 +153,7 @@ class TestScheduleRemoveSaysWhatStays(Base):
     def test_remove_lists_the_runner_the_saved_settings_and_the_records(self):
         with mock.patch.object(subprocess, "run", return_value=SimpleNamespace(returncode=0)):
             self.cli("--backend", "kev", "schedule", "install")
-            rc, text, _ = self.cli("schedule", "remove")
+            rc, text, _ = self.cli("schedule", "remove", "--keep-settings")   # T6: a plain remove now puts the settings back
         self.assertEqual(rc, 0)
         self.assertIn("run-daily.vbs", text)
         self.assertIn("保存した設定", text)

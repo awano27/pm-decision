@@ -762,6 +762,7 @@ def _main(argv=None):
     p_s = sub.add_parser("schedule", help="register/remove `daily --once --send` every N minutes (Task Scheduler, no admin)")
     p_s.add_argument("action", choices=["install", "remove", "status", "trial-start", "report"])
     p_s.add_argument("--minutes", type=int, default=5)
+    p_s.add_argument("--keep-settings", action="store_true", help="remove: leave the settings that install saved as they are")
     p_s.add_argument("--hours", type=float, default=8, help="trial-start: how long the trial runs")
     p_s.add_argument("--sample", action="store_true", help="trial-start: drop one fictional ADO work item that lacks information")
     p_s.add_argument("--since", default=None, help="report: start of the period (ISO local time; default: the trial window)")
@@ -1333,6 +1334,73 @@ def _trial_command(a, out):
     return 0
 
 
+def _install_record():
+    return config.state_dir() / "schedule_install.json"
+
+
+def _read_raw_or_empty():
+    try:
+        return config.read_raw()
+    except config.ConfigError:
+        return {}
+
+
+def _remember_install_settings(before, after):
+    """`schedule install`: keep the names it changed and their values from before the first install, so `remove` can put them back.
+    A name already in the record keeps its first value (a second install must not take the first install's value as the original)."""
+    p = _install_record()
+    try:
+        rec = json.loads(p.read_text(encoding="utf-8-sig")) if p.exists() else {}
+        rec = rec if isinstance(rec, dict) else {}
+    except (OSError, ValueError):
+        rec = {}
+    for k in config.SETTINGS:
+        if after.get(k) == before.get(k):
+            continue
+        if k not in rec:
+            rec[k] = {"was": before[k]} if k in before else {}   # no "was" = there was no such setting
+        rec[k]["set"] = after.get(k)   # what install wrote: remove puts back only a value the PM has not changed since
+    if rec:
+        try:
+            fsutil.write_atomic(p, json.dumps(rec, ensure_ascii=False, indent=2) + "\n")
+        except OSError as e:
+            print(f"note: install 前の設定を記録できませんでした（remove で戻せません）: {type(e).__name__}")
+
+
+def _restore_install_settings():
+    """`schedule remove`: put back what install changed (a setting that did not exist before is removed), then drop the record.
+    No record = nothing to do. A failure is reported and never stops the removal; the record stays so it can be tried again."""
+    p = _install_record()
+    if not p.exists():
+        return []
+    try:
+        rec = json.loads(p.read_text(encoding="utf-8-sig"))
+        values = config.read_raw()
+        names, changed = [], []
+        for k, v in (rec.items() if isinstance(rec, dict) else []):
+            if k in config.SETTINGS and isinstance(v, dict):
+                if "set" in v and values.get(k) != v["set"]:   # changed by hand after install: the PM's value stays
+                    changed.append(k)
+                    continue
+                if "was" in v:
+                    values[k] = v["was"]
+                else:
+                    values.pop(k, None)
+                names.append(k)
+        config._write(values)
+        if changed:
+            print(f"install のあとに変えた設定は、そのままにしました: {' / '.join(changed)}")
+        p.write_text("{}\n", encoding="utf-8")   # a file cannot always be deleted here: an empty record is the same as none
+        try:
+            p.unlink()
+        except OSError:
+            pass
+        return names
+    except (OSError, ValueError, config.ConfigError) as e:
+        print(f"note: 設定を戻せませんでした（{type(e).__name__}）。python -m kimeru config unset <名前> で戻せます")
+        return []
+
+
 def schedule(a, state_out=None):
     """Windows Task Scheduler entry that runs one daily cycle every N minutes as the
     current user (no admin). The task calls a tiny hidden VBS runner in the data folder,
@@ -1344,8 +1412,11 @@ def schedule(a, state_out=None):
     if a.action == "remove":
         rc = subprocess.run(["schtasks", "/Delete", "/TN", TASK, "/F"]).returncode
         out = Path(a.out).resolve()
-        kept = [k for k in ("backend", "ado_org", "ado_project") if config.SOURCES.get(k) == "file"]
+        restored = [] if getattr(a, "keep_settings", False) else _restore_install_settings()
+        kept = [k for k in ("backend", "ado_org", "ado_project") if config.SOURCES.get(k) == "file" and k not in restored]
         print(f"残るもの: {out / 'run-daily.vbs'}（自動運転の起動用。手で消せます）")
+        if restored:
+            print(f"install で保存した設定を、install より前に戻しました: {' / '.join(restored)}（残したいときは schedule remove --keep-settings）")
         print(f"保存した設定: {config.path()}" + (f" の {' / '.join(kept)}（python -m kimeru config unset <名前> で戻せます）" if kept else "（install で保存したものはありません）"))
         print(f"記録: {out}（同僚のメッセージの抜粋と取り込んだ原本を含みます。消し方は docs/usage.md の「止める・消す」）")
         return rc
@@ -1364,7 +1435,9 @@ def schedule(a, state_out=None):
     ado = getattr(a, "ado_org", ""), getattr(a, "ado_project", "")
     extra = (f'--ado-org "{ado[0]}" --ado-project "{ado[1]}" ' if all(ado) else "") + (a.extra or "")
     # the settings in effect now are kept in the config file: the scheduled runs read it (a task has no shell profile)
+    before = _read_raw_or_empty()
     saved = config.save_effective({"backend": a.backend, "ado_org": ado[0], "ado_project": ado[1]})
+    _remember_install_settings(before, _read_raw_or_empty())
     # the state folder is carried over (the task has no shell profile, and the config file lives there); the other
     # machine-specific variables (KIMERU_WRITER_CMD, KIMERU_*_EXE) are not: set them as user environment variables
     state = f'set "KIMERU_STATE_DIR={os.environ["KIMERU_STATE_DIR"]}" && ' if os.environ.get("KIMERU_STATE_DIR") else ""

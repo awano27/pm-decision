@@ -156,6 +156,34 @@ class TestWriter(unittest.TestCase):
         self.assertIn('"description": "要件: 一覧画面が必要"', material)
         self.assertIn('"repro_steps": "1. 保存 2. 一覧を開く 3. 500"', material)
 
+    def test_writer_material_is_bounded_whatever_the_alert_or_the_graph_carries(self):
+        big = "X" * 50000
+        alert = {"schemaId": "azureMonitorCommonAlertSchema", "data": {"essentials": {
+            "alertId": "a1", "alertRule": "checkout-api 5xx", "severity": "Sev1", "monitorCondition": "Fired",
+            "description": big}, "alertContext": {}}}
+        seen = []
+
+        class Capture(FakeWriter):
+            def draft(self, res, event, instruction=None):
+                seen.append(writer._material(res, event, instruction))
+                return super().draft(res, event, instruction)
+
+        with tempfile.TemporaryDirectory() as d:
+            process(alert, GRAPHS, StubBackend(), Path(d), PBS, writer=Capture())
+        self.assertTrue(seen)
+        for m in seen:
+            self.assertNotIn(big, m)
+            self.assertLess(len(m), 6 * writer.MAX_FIELD + 4000)
+        # the cut is the writer's material only: the graph's own record keeps the full text
+        res = {"node": "n", "path": [], "advice": big, "actions": [
+            {"type": "teams.post", "template_text": big, "title": big, "text": big},
+            {"type": "ado.create", "description": big, "title": "t"}]}
+        m = writer._material(res, {"text": big})
+        self.assertNotIn("X" * (writer.MAX_FIELD + 1), m)
+        self.assertEqual(m.count("X"), 5 * writer.MAX_FIELD)   # text, advice, intent x2 (post, create), title
+        self.assertEqual(len(res["advice"]), 50000)
+        self.assertEqual(len(res["actions"][0]["template_text"]), 50000)
+
     def test_alert_first_report_is_drafted_and_held(self):
         alert = {"schemaId": "azureMonitorCommonAlertSchema", "data": {"essentials": {
             "alertId": "a1", "alertRule": "checkout-api 5xx", "severity": "Sev1", "monitorCondition": "Fired",

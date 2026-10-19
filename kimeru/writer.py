@@ -121,7 +121,7 @@ def _material(res, event, instruction=None):
         a = s.get("answer") or {}
         val = a.get("choice") or a.get("playbook") or (f"{a['noul']:.2f}" if "noul" in a else a.get("score"))
         lines.append(f"- {s['node']} = {val} → {s['edge']}")
-    lines.append(f"結論: {res.get('node')}（{res.get('advice') or ''}）")
+    lines.append(f"結論: {res.get('node')}（{str(res.get('advice') or '')[:MAX_FIELD]}）")   # H9: only the writer's material is cut
     if res.get("plan"):
         lines.append(f"進め方: {res['plan']['title']}")
         lines += [f"  {i + 1}. {st['title']}（{st.get('due', '')}）" for i, st in enumerate(res["plan"].get("steps", []))]
@@ -130,8 +130,8 @@ def _material(res, event, instruction=None):
         lines += ["", hint]
     lines += ["", "書くもの（キーごとに 1 つ）:"]
     for key, a in targets(res):
-        intent = a.get("template_text") or a.get(FIELD[a["type"]]) or ""
-        title = f" 題名「{a['title']}」" if a.get("title") else ""
+        intent = str(a.get("template_text") or a.get(FIELD[a["type"]]) or "")[:MAX_FIELD]
+        title = f" 題名「{str(a['title'])[:MAX_FIELD]}」" if a.get("title") else ""
         lines.append(f"- {key}: {PURPOSE[a['type']]}{title}" + (f"。意図は定型文「{intent}」と同じ" if intent else ""))
     has_reply = any(a["type"] == "teams.reply" for _, a in targets(res))
     lines += ["", "PM 向けのメモ（memo）: 材料から読み取れることだけで、PM が判断しやすくする:",
@@ -463,7 +463,7 @@ def human_request(res, event, instruction=None):
     i = 0
     for a in texts:
         i += 1
-        intent = a.get("template_text") or a.get(FIELD[a["type"]]) or ""
+        intent = str(a.get("template_text") or a.get(FIELD[a["type"]]) or "")[:MAX_FIELD]
         lines.append(f"{i}. {LABEL[a['type']]}（{PURPOSE[a['type']].split('（', 1)[-1].rstrip('）')}）"
                      + (f"。方針: {intent}" if intent else ""))
     if tasks:

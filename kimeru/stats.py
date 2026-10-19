@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
 
-from . import __version__, attention, autorun, calibrate, config, learn, paths, profiles, review
+from . import __version__, attention, autorun, calibrate, config, learn, paths, prefilter, profiles, review
 from .backends import JevBackend
 
 HERE = paths.base()
@@ -322,6 +322,7 @@ def _week_extra(out, decision_rows, decisions, week_replies, review_rows, now, s
         "unnamed_decisions": sum(_record_judge_name(r) == "unknown" for r in decisions),
         "auto_checked": len(auto_keys), "auto_wrong": len(auto_keys & wrong_keys),
         **({"rule_recorded": sum(1 for r in counted if r.get("demoted_by"))} if any(r.get("demoted_by") for r in counted) else {}),   # R33 (only when a rule recorded a line)
+        **({"prefilter": _pf} if (_pf := prefilter.counts(decisions)) else {}),   # T10 (only when a rule hit; numbers per rule)
         "replied_items": len(replies), "replies": sum(replies.values()),
         "oks_with_draft": draft, "oks_unchanged": unchanged,
         "draft_use": _draft_use(out, week_replies), "waiting_age": _waiting_age(out, now), "writer_use": _writer_use(now, since),
@@ -772,6 +773,8 @@ def render(s, share=False):
                                                            if n_auto else "不明（対象 0 件）"))
         if wk.get("rule_recorded"):   # R33: a rule's recorded-only lines are not in the automatic figure above (shown only when there are some)
             lines.append(f"規則で記録だけにした件（自動の正誤には入れていません）: {wk['rule_recorded']} 件")
+        if wk.get("prefilter"):   # T10: the sieve's hits by rule, numbers only
+            lines.append("ふるいに当たった件（規則別）: " + "、".join(f"{k} {v} 件" for k, v in sorted(wk["prefilter"].items())))
         n_ok = wk["oks_with_draft"]
         lines.append("提案が一度も変わらなかった OK: " + (f"{wk['oks_unchanged']} 件（下書きのある OK {n_ok} 件{_count_note(n_ok)}）"
                                                      if n_ok else "不明（下書きのある OK 0 件）"))

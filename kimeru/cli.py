@@ -24,7 +24,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import actions, paths, attention, config, events, execute, fsutil, graph, learn, memory, promises, pull
+from . import actions, paths, attention, config, events, execute, fsutil, graph, learn, memory, prefilter, promises, pull
 from . import writer as writer_mod
 from . import plan as planner
 from .backends import BackendUnavailable, ClmBackend, JevBackend, KevBackend, StubBackend, is_local_judge, judge_name
@@ -488,7 +488,9 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
             key = f"{g['name']}@{_graph_version(g)}:{ev['kind']}:{ev.get('id')}".replace(" ", "_")
             if key in seen:
                 continue
-            can_read = reader is not None and ev["kind"] == "teams.chat" and bool(ev.get("chat_id"))
+            sieve = prefilter.check(g, ev)   # T10: after the graph's own safety rules, before the judge; None unless a rule names the event
+            skip = bool(sieve and sieve["applied"])   # prefilter=1: not judged, the graph's record-only (or request-for-information) node takes it
+            can_read = reader is not None and ev["kind"] == "teams.chat" and bool(ev.get("chat_id")) and not skip
             read_info, ev_run = None, ev
             meter = Meter(backend)
             pend = _PreviewJudgments(out) if can_read else None
@@ -496,7 +498,9 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
             max_defer = fulltext.max_defer()
             # read_max_defer=0: never put off. The chat is tried once; when it cannot be read now, the preview decides (no waiting)
             tired = bool(pend) and max_defer > 0 and pend.deferrals(key) >= max_defer
-            if can_read and fulltext.truncated(ev.get("text")):        # the preview is cut off: read before judging
+            if skip:
+                res = _judge({**g, "start": sieve["start"]}, ev, meter, playbooks, context, out=out, now=now, batch=batch)
+            elif can_read and fulltext.truncated(ev.get("text")):        # the preview is cut off: read before judging
                 if tired:
                     read_info = fulltext.gave_up(fulltext.max_defer())
                 else:
@@ -545,6 +549,8 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
                 res["material_event"].pop("直前のやり取り", None)
             res["judge"] = _judge_info(backend)
             res["graph_key"] = key
+            if sieve:   # T10: a new field only on a hit
+                res["prefilter"] = {"rule": sieve["rule"], "applied": sieve["applied"]}
             if context is not None:   # R22: the record keeps how many earlier messages the judge was given, never their text
                 res["context_used"] = {"earlier": len(context["earlier"])}
             answer = promises.answer_for(out, ev, now)   # R31 (promises=1): the first message of a chat with an open ask-back is its answer; read only, the judgment stays

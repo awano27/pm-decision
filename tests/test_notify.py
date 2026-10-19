@@ -496,6 +496,62 @@ class TestRedraftMaterial(unittest.TestCase):
                          writer._material(copy.deepcopy(REDRAFT_REC), REDRAFT_REC["material_event"], "もっと短く"))
 
 
+class TestRedraftHistory(unittest.TestCase):
+    """T9 (c) redraft_history=1: a 修正 N gives the writer the earlier 修正 instructions of the same item (oldest first, 5 at most,
+    300 characters each), kept in approvals.json until the item closes. 0 (the default): nothing is passed and nothing is kept."""
+
+    def run_flow(self, setting, instructions, then=()):
+        spy = PromptSpy([{"a1": "延期の件、承知しました。"}])
+        with mock.patch.dict(os.environ, {"KIMERU_REDRAFT_HISTORY": setting}), tempfile.TemporaryDirectory() as d:
+            write_queue(d, REDRAFT_REC)
+            b = FakeBridge()
+            notify.notify(d, b, send=True)
+            for ins in instructions:
+                b.replies = ["修正 1 " + ins]
+                notify.collect(d, b, writer=spy)
+                notify.notify(d, b, send=True)
+            kept = []
+            for line in then:
+                b.replies = [line]
+                notify.collect(d, b, writer=spy)
+                notify.notify(d, b, send=True)
+            files = {f.name: f.read_text(encoding="utf-8") for f in Path(d).glob("approvals.json*")}
+            item = json.loads(files["approvals.json"])["items"]["1"]
+            return spy, item, files
+
+    def test_off_nothing_is_passed_or_kept(self):
+        spy, item, files = self.run_flow("0", ["短く", "丁寧に"])
+        self.assertNotIn("短く", spy.prompts[1].replace("PM からの修正指示: 丁寧に", ""))
+        self.assertNotIn("redraft_history", item)
+        self.assertEqual(spy.prompts[1], writer.SYSTEM + "\n\n" + writer._material(copy.deepcopy(REDRAFT_REC), REDRAFT_REC["material_event"], "丁寧に"))
+
+    def test_on_the_second_request_has_the_first_instruction_and_it_is_kept_in_the_item(self):
+        spy, item, _ = self.run_flow("1", ["短く", "丁寧に"])
+        self.assertNotIn(writer.HISTORY_HEAD, spy.prompts[0])
+        self.assertIn(writer.HISTORY_HEAD, spy.prompts[1])
+        self.assertIn("短く", spy.prompts[1].split(writer.HISTORY_HEAD)[1])
+        self.assertEqual(item["redraft_history"], ["短く", "丁寧に"])
+        self.assertNotIn("短く", writer._material(copy.deepcopy(REDRAFT_REC), REDRAFT_REC["material_event"], "丁寧に"))
+
+    def test_five_at_most_and_300_characters_each(self):
+        spy, item, _ = self.run_flow("1", ["あ" * 400] + [f"指示{i}" for i in range(6)] + ["最後"])
+        self.assertEqual(item["redraft_history"], [f"指示{i}" for i in range(2, 6)] + ["最後"])
+        last = spy.prompts[-1].split(writer.HISTORY_HEAD)[1].split("出力形式")[0]
+        self.assertEqual([x for x in ("指示0", "指示1", "指示5") if x in last], ["指示1", "指示5"])
+        self.assertNotIn("あ" * 10, last)
+        spy2, item2, _ = self.run_flow("1", ["あ" * 400, "次"])
+        self.assertIn("あ" * 300, spy2.prompts[1])
+        self.assertNotIn("あ" * 301, spy2.prompts[1])
+
+    def test_a_closed_item_loses_the_instructions_and_no_backup_keeps_them(self):
+        for closing in ("OK 1", "NG 1"):
+            _, item, files = self.run_flow("1", ["秘密の指示ABC"], then=[closing])
+            self.assertIn(item["status"], ("approved", "rejected"))
+            self.assertNotIn("redraft_history", item)
+            for name, text in files.items():
+                self.assertNotIn("秘密の指示ABC", text, name)
+
+
 class TestPostChecked(unittest.TestCase):
     """T9 (b) post_checked=1: the post of a drafted text names, in at most two lines, what of the draft the event itself has
     (確かめた点) and what only kimeru's judgment or template has (kimeru の提案). 0 (the default) adds nothing."""

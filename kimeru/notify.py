@@ -707,8 +707,20 @@ class Approvals:
         self.path = Path(out) / "approvals.json"
         self.data = fsutil.read_json(self.path, {"next": 1, "items": {}})
 
+    def _drop_closed_history(self):
+        """T9 (c): the instructions of redraft_history=1 stay in a waiting item (pending or held) only: an approved, rejected or expired
+        item loses them, and so does every item when the setting is off. True when something was removed."""
+        keep = config.value("redraft_history") == "1"
+        dropped = False
+        for it in (self.data.get("items") or {}).values():
+            if isinstance(it, dict) and "redraft_history" in it and not (keep and it.get("status") in ("pending", "held")):
+                del it["redraft_history"]
+                dropped = True
+        return dropped
+
     def save(self, compact=False):
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        compact = self._drop_closed_history() or compact   # no .bak that would keep the instructions of a closed item
         text = json.dumps(self.data, ensure_ascii=False, indent=1)
         if not compact:
             fsutil.write_atomic(self.path, text)
@@ -1717,7 +1729,9 @@ def _redraft(it, instruction, writer, out=None, n=None, now=None):
             material["text"] = full["text"]
         if full.get("thread"):
             material["thread"] = full["thread"]
-    drafted = writer_mod.apply(rec, material, writer, instruction, previous=previous, precedent=precedent)
+    keep_history = config.value("redraft_history") == "1"   # T9 (c): the earlier instructions of this item go to the writer; kept in the item until it closes
+    earlier = [h for h in (it.get("redraft_history") or []) if isinstance(h, str)] if keep_history else []
+    drafted = writer_mod.apply(rec, material, writer, instruction, previous=previous, precedent=precedent, history=earlier)
     used = [a for a in drafted if a.get("drafted_by")]
     manual = bool(getattr(writer, "PROMPT_ONLY", False)) and bool(rec.get("copilot_request"))
     if manual:   # writer=m365: nothing is drafted here; a new request (with the instruction and the draft as it stands) goes to the PM
@@ -1734,6 +1748,8 @@ def _redraft(it, instruction, writer, out=None, n=None, now=None):
     if full and rec.get("copilot_request"):   # the record keeps the request built from the excerpt; the whole text stays in full_text.json
         fulltext.set_request(out, it["key"], fulltext.redact_request(rec, material, instruction, previous=previous if manual else None))
     next_measurement(it)
+    if keep_history:
+        it["redraft_history"] = (earlier + [str(instruction)[:writer_mod.HISTORY_CHARS]])[-writer_mod.HISTORY_MAX:]
     return {"status": "redrafted", "instruction": instruction}
 
 

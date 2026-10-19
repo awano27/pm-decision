@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import tempfile
+import sys
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1146,3 +1147,16 @@ class TestWriterPrecedent(unittest.TestCase):
         self.assertEqual(sum(1 for line in ref.splitlines() if line.startswith("| `KIMERU_WRITER_PRECEDENT`")), 1)
         self.assertIn("writer_precedent=1", (ROOT / "SECURITY.md").read_text(encoding="utf-8"))
         self.assertIn("writer_precedent=1", (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+
+
+class ChildEnvTest(unittest.TestCase):
+    def test_the_child_process_gets_no_kimeru_secrets_but_keeps_path(self):
+        env = {"TYPESAFE_API_KEY": "fake-key", "KIMERU_PUSH_WEBHOOK_URL": "https://example.invalid/h",
+               "KIMERU_PUSH_TEAMS_URL": "https://example.invalid/t", "PATH": os.environ.get("PATH", "x")}
+        code = "import os,json;print(json.dumps(sorted(k for k in os.environ if k in ('TYPESAFE_API_KEY','PATH') or k.startswith('KIMERU_PUSH_'))))"
+        with mock.patch.dict(os.environ, env):
+            out = writer._run([sys.executable, "-c", code], "", 30)
+        names = json.loads(out)
+        self.assertNotIn("TYPESAFE_API_KEY", names)
+        self.assertFalse([n for n in names if n.startswith("KIMERU_PUSH_")])
+        self.assertIn("PATH", [n.upper() for n in names])

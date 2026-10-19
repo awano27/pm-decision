@@ -222,12 +222,19 @@ def _parse_best(text, wanted):
     return best
 
 
+def child_env():
+    """A copy of the environment for a writer's child process, without kimeru's own secrets
+    (config.SECRET_ENV and every KIMERU_PUSH_*). A deny list on purpose: PATH, APPDATA, proxy and
+    certificate variables the CLIs need stay."""
+    return {k: v for k, v in os.environ.items() if k not in config.SECRET_ENV and not k.upper().startswith("KIMERU_PUSH_")}
+
+
 def _run(cmd, prompt, timeout):
     """Run a CLI with the prompt on stdin, in an empty folder; kill the whole tree on timeout
     (the npm .cmd shims start a child node process that a plain kill would leave running)."""
     with tempfile.TemporaryDirectory() as d:
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                             text=True, encoding="utf-8", errors="replace", cwd=d)
+                             text=True, encoding="utf-8", errors="replace", cwd=d, env=child_env())
         try:
             out, err = p.communicate(prompt, timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -551,7 +558,7 @@ class M365AutoWriter(M365PromptWriter):
             r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", self.script,
                                 "-Action", "ask", "-PromptFile", f, "-TimeoutSec", str(max(60, self.timeout - 30))],
                                capture_output=True, text=True,
-                               encoding="utf-8", errors="replace", timeout=self.timeout,
+                               encoding="utf-8", errors="replace", timeout=self.timeout, env=child_env(),
                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         out = _parse(r.stdout) or {}
         if not out.get("ok"):

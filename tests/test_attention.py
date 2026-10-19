@@ -1362,5 +1362,90 @@ class TestChaseDocs(unittest.TestCase):
         self.assertFalse([k for k in config.SETTINGS if "attention" in k or "chase" in k])
 
 
+class TestThePromotionPathInDailyCycles(Cycles):
+    """R37 in one run of daily cycles (every time injected, Teams and the push route are fakes): under interrupt=sittings an item of
+    田中 waits for the sitting; a later cycle's judge merges her chasing follow-up into it (the revision goes up), so she is listed; her
+    next item is announced at once while 佐藤's still waits; a Sev1 alert is never held, before or after the listing."""
+
+    def screen(self, *rows):
+        self.t.chat_list = [chat(preview, time, cid=cid, title=who) for preview, time, who, cid in rows]
+
+    def alert(self, name):
+        item = {"kind": "monitor.alert", "id": name, "rule": f"prod-db {name}", "severity": "Sev1", "condition": "Fired",
+                "description": f"Storage 92% used on {name}"}
+        self.inbox.mkdir(parents=True, exist_ok=True)
+        (self.inbox / f"{name}.json").write_text(json.dumps(item, ensure_ascii=False), encoding="utf-8")
+
+    def approvals(self):
+        return read_json_file(self.out / "approvals.json")
+
+    def test_a_chased_item_lists_the_sender_and_her_next_item_is_announced_at_once_and_a_severe_one_is_never_held(self):
+        self.sittings()
+        self.screen(("おはようございます", "9:00", "田中", CHAT_A))
+        self.cycle(9, 5)                                                                       # the baseline of the day
+        self.screen(("これは何ですか", "10:15", "田中", CHAT_A))
+        self.cycle(10, 20)
+        self.assertEqual((self.shown, self.sent), ([], []))                                    # item 1 waits for the 13:00 sitting
+        self.assertEqual(attention.waiting(self.out), {1})
+        self.assertEqual(self.approvals()["sitting_waited"], {"1": 1})
+        self.assertFalse((self.out / "attention.json").exists())                               # nobody is listed from one question
+        self.alert("s1")
+        self.cycle(10, 25)                                                                     # a Sev1 alert is not deferred
+        self.assertEqual(self.shown, [("kimeru: 確認待ち 1 件", "#2")])
+        self.assertEqual(self.sent, [("webhook", "kimeru: 確認待ち 1 件（#2）。Teams の自分とのチャットを確認してください")])
+        self.assertEqual(attention.waiting(self.out), {1})                                     # only the question waits, never the alert
+        self.shown.clear()
+        self.sent.clear()
+        self.screen(("まだですか", "10:40", "田中", CHAT_A))
+        self.cycle(10, 45)                                                                     # the judge merges the chase into item 1
+        item = self.approvals()["items"]["1"]
+        self.assertEqual(item["revision"], 2)
+        self.assertTrue(any("まだですか" in str(r.get("text")) for r in item["record"]["followups"]))
+        sender = read_json_file(self.out / "attention.json")["senders"]
+        self.assertEqual([(r["name"], r["why"]) for r in sender], [("田中", "words")])
+        self.assertEqual(attention.waiting(self.out), set())                                   # her item no longer waits for the sitting
+        self.assertEqual(self.shown, [("kimeru: 確認待ち 1 件", "#1")])                        # it is announced in the cycle that lists her
+        self.shown.clear()
+        self.sent.clear()
+        self.screen(("まだですか", "10:40", "田中", CHAT_A), ("これは何ですか", "11:35", "田中", CHAT_B))
+        self.cycle(11, 35)
+        self.assertEqual(self.shown, [("kimeru: 確認待ち 1 件", "#3")])                        # her next item: at once, before 13:00
+        self.assertEqual(self.sent, [("webhook", "kimeru: 確認待ち 1 件（#3）。Teams の自分とのチャットを確認してください")])
+        self.shown.clear()
+        self.sent.clear()
+        self.screen(("まだですか", "10:40", "田中", CHAT_A), ("これは何ですか", "11:35", "田中", CHAT_B),
+                    ("これは何ですか", "11:50", "佐藤", CHAT_D))
+        self.cycle(11, 50)
+        self.assertEqual((self.shown, self.sent), ([], []))                                    # another sender still waits
+        self.assertEqual(attention.waiting(self.out), {4})
+        self.alert("s2")
+        self.cycle(11, 55)                                                                     # a Sev1 alert is not held while she is listed either
+        self.assertEqual(self.shown, [("kimeru: 確認待ち 1 件", "#5")])
+        self.assertEqual(attention.waiting(self.out), {4})
+        for title, body in self.shown:
+            self.assertNotIn("田中", title + body)
+        for _, text in self.sent:
+            self.assertNotIn("田中", text)
+
+    def test_a_follow_up_without_a_chasing_word_is_announced_as_any_follow_up_but_lists_nobody_so_her_next_item_waits(self):
+        self.sittings()
+        self.screen(("おはようございます", "9:00", "田中", CHAT_A))
+        self.cycle(9, 5)
+        self.screen(("これは何ですか", "10:15", "田中", CHAT_A))
+        self.cycle(10, 20)
+        self.screen(("資料を追加しました", "10:21", "田中", CHAT_A))
+        self.cycle(10, 25)
+        self.assertEqual(self.approvals()["items"]["1"]["revision"], 2)
+        self.assertEqual(self.shown, [("kimeru: 確認待ち 1 件", "#1")])     # a follow-up is announced at once, as before R37
+        self.assertFalse((self.out / "attention.json").exists())          # but two quick lines are no chase: nobody is listed
+        self.shown.clear()
+        self.screen(("資料を追加しました", "10:21", "田中", CHAT_A), ("これは何ですか", "11:35", "田中", CHAT_B))
+        self.cycle(11, 35)
+        self.assertEqual(self.shown, [])                                    # her next item waits for the sitting
+        self.assertEqual(attention.waiting(self.out), {2})
+        self.cycle(13, 5)
+        self.assertEqual(self.shown, [("kimeru: 確認待ち 1 件（まとめ）", "#2")])
+
+
 if __name__ == "__main__":
     unittest.main()

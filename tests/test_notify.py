@@ -448,6 +448,22 @@ class TestManualRedraft(unittest.TestCase):
             self.assertGreater(len(b.posts), n)
             self.assertTrue(any(pasted in t and "短く" in t for t, _ in b.posts[n:]))
 
+    def test_the_manual_route_is_not_counted_against_redraft_max(self):
+        # writer=m365 calls no writer, so a second 修正 N still goes through with redraft_max=1
+        w = writer.M365PromptWriter()
+        with mock.patch.dict(os.environ, {"KIMERU_REDRAFT_MAX": "1"}), tempfile.TemporaryDirectory() as d:
+            write_queue(d, copy.deepcopy(HELD))
+            b = FakeBridge()
+            notify.notify(d, b, send=True)
+            notify.collect(d, TimelineBridge(["P:1", "R:下書き 1 ご連絡ありがとうございます。確認します。"]), writer=w)
+            notify.notify(d, b, send=True)
+            for point in ("短く", "もっと丁寧に", "さらに短く"):
+                ch = notify.collect(d, TimelineBridge(["P:1", f"R:修正 1 {point}"]), writer=w)
+                self.assertEqual([c["status"] for c in ch], ["redrafted"], point)
+                notify.notify(d, b, send=True)
+            it = json.loads((Path(d) / "approvals.json").read_text(encoding="utf-8"))["items"]["1"]
+            self.assertFalse(it.get("redraft_count"))
+
 
 REDRAFT_REC = {**CHAT_REC, "material_event": CHAT_REC["event"],
                "actions": [{"type": "teams.reply", "to": "山田", "text": "確認して今日中に返信します。",

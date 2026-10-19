@@ -1708,12 +1708,14 @@ def _redraft(it, instruction, writer, out=None, n=None, now=None):
         invalidate_measurement_post(it)
         rec["redraft_note"] = "修正できませんでした（writer が設定されていません）。前の下書きのままです"
         return {"status": "redraft_failed", "instruction": instruction}
-    limit = config.int_value("redraft_max")
+    calls_writer = not getattr(writer, "PROMPT_ONLY", False)   # writer=m365 (manual) only builds a request: no writer call, no count
+    limit = config.int_value("redraft_max") if calls_writer else 0
     if limit > 0 and int(it.get("redraft_count") or 0) >= limit:   # T9 (d): past the limit the writer is not called; the post says so
         invalidate_measurement_post(it)
         rec["redraft_note"] = f"修正は {limit} 回までです。前の下書きのままです"
         return {"status": "redraft_limit", "instruction": instruction}
-    it["redraft_count"] = int(it.get("redraft_count") or 0) + 1   # a call of the writer, whether it works or not
+    if calls_writer:
+        it["redraft_count"] = int(it.get("redraft_count") or 0) + 1   # a call of the writer, whether it works or not
     before = copy.deepcopy(rec)
     # the draft that was posted (its text, before the stale keys go): the writer gets it as data when redraft_prev=1 (R23)
     previous = {k: a[writer_mod.FIELD[a["type"]]] for k, a in writer_mod.targets(rec)

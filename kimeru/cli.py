@@ -16,6 +16,7 @@
 """
 import argparse
 import copy
+import hashlib
 import json
 import os
 import sys
@@ -30,6 +31,7 @@ from . import plan as planner
 from .backends import BackendUnavailable, ClmBackend, JevBackend, KevBackend, StubBackend, is_local_judge, judge_name
 
 HERE = paths.base()
+DEFAULT_GRAPHS = HERE / "graphs"
 DEFAULT_PLAYBOOKS = HERE / "playbooks"
 
 
@@ -159,7 +161,11 @@ def _judge_info(backend):
     seen = 0
     while hasattr(backend, "inner") and seen < 5:
         backend, seen = backend.inner, seen + 1
-    return {"name": judge_name(backend), "model": str(getattr(backend, "model", ""))[:60]}
+    model = getattr(backend, "model", "")
+    info = {"name": judge_name(backend), "model": model[:60] if isinstance(model, str) and model.strip() else ""}
+    if isinstance(model, str) and model.strip():
+        info["model_key"] = hashlib.sha256(model.encode("utf-8")).hexdigest()
+    return info
 
 
 def _graph_version(g):
@@ -183,12 +189,8 @@ def _acknowledgement(res):
 
 
 def _merge_into_pending(out, ev, res, source_event=None, source_request=None, source_key=None, source_material=None):
-    """A new message in a chat whose earlier message still waits for the PM joins that item (posted again under the same
-    number, or, for a thanks or OK, only as a followup line) instead of becoming a second one, but only when all of these
-    hold; otherwise it is a matter of its own: the same sender as the waiting item, a result that raises no notice, and a
-    result that goes to the same place as the waiting item or needs nothing. `res` is the judgment of the new message.
-    Returns True when it was merged. R32: a recurring alert (monitor.alert) joins its waiting item the same way at
-    merge_recurring=1 (notify.fold_recurring: the same case, a severity that does not rise, never Sev0/1)."""
+    """Explicit Teams corrections replace one matching pending source. Ordinary replies do not replace a case.
+    Recurring alerts retain the opt-in public-main folding contract (same case, no severity rise, never Sev0/1)."""
     from . import link as linking
     recurring = ev.get("kind") == "monitor.alert"
     if recurring:
@@ -249,71 +251,87 @@ def _fold_acknowledgement(out, it, ev, ap):
 
 
 def _merge_locked(out, ev, res, notify, source_event=None, source_request=None, source_key=None, source_material=None):
+    supersedes = ev.get("supersedes_event_id")
+    if not isinstance(supersedes, str) or not supersedes.strip():
+        return False
+    graph_name = res.get("graph")
+    if not isinstance(graph_name, str) or not graph_name.strip():
+        return False
+    matches = []
     ap = notify.Approvals(out)
     for it in ap.data["items"].values():
         rec = it["record"]
         old = rec.get("event") or {}
-        if it.get("status") not in ("pending", "held") or old.get("chat_id") != ev["chat_id"]:
+        old_id = rec.get("event_id") if "event_id" in rec else old.get("id")
+        if it.get("status") not in ("pending", "held"):
             continue
-        if old.get("author") != ev.get("author"):
+        if (old_id != supersedes or not old.get("chat_id") or old.get("chat_id") != ev.get("chat_id")
+                or not old.get("author") or old.get("author") != ev.get("author")):
+            continue
+        if not isinstance(rec.get("graph"), str) or not rec.get("graph") or rec.get("graph") != graph_name:
             continue
         old_severity = _severity_rank(old.get("severity"))
         new_severity = _severity_rank((res.get("event") or {}).get("severity") or ev.get("severity"))
         if old_severity is not None and new_severity is not None and new_severity > old_severity:
             continue
-        if res.get("node") != rec.get("node") and _acknowledgement(res):
-            return _fold_acknowledgement(out, it, ev, ap)   # a thanks or OK is only one more followup line
         if not (_no_action(res) or res.get("node") == rec.get("node")):
             continue
-        revision = int(it.get("revision") or rec.get("revision") or 1)
-        updated = copy.deepcopy(res)
-        updated["revision"] = revision + 1
-        followup_limit = _record_limit()
-        def safe_followup(row):
-            if not isinstance(row, dict):
-                return row
-            text = " ".join(str(row.get("text", "")).split())
-            if len(text) > followup_limit:
-                text = _cut(text, followup_limit)
-            return {**row, "text": text} if "text" in row else row
-        followup_text = " ".join(str(ev.get("text", "")).split())
-        if len(followup_text) > followup_limit:
-            followup_text = _cut(followup_text, followup_limit)
-        updated["followups"] = [safe_followup(row) for row in (rec.get("followups") or [])] + [{
-            "text": followup_text,
-            "at": datetime.now(timezone.utc).isoformat(timespec="seconds")
-        }]
-        # R08: the first request stays with the item (120 characters, when it was judged), and a held item says so until the PM answers
-        updated["first_message"] = rec.get("first_message") or {"text": _short(old.get("text")), "at": rec.get("at")}
-        if it.get("status") == "held" or rec.get("held_before"):
-            updated["held_before"] = True
-        key = it["key"]
-        if source_event is not None:
-            from . import fulltext
-            fulltext.drop_safe(out, key)
-            fulltext.save(out, key, source_event, request=source_request, material=source_material)
-        elif source_key and source_key != key:
-            from . import fulltext
-            latest = fulltext.load(out, source_key)
-            fulltext.drop_safe(out, key)  # remove the superseded source even if no new full text was staged
-            if latest:
-                fulltext.save(out, key, latest, request=latest.get("request"), material=latest.get("material"))
-            fulltext.drop_safe(out, source_key)
-        preserve = {name: it[name] for name in notify.FOLLOWUP_KEEP if name in it}   # R09: the hold marks carry over (notify.FOLLOWUP_KEEP)
-        if it.get("delivery_unknown") and "delivery_unknown_revision" not in preserve:
-            preserve["delivery_unknown_revision"] = revision
-        it.clear()
-        it.update(preserve)
-        it.update({"revision": revision + 1, "status": "pending", "posted": False, "toasted": False,
-                   "request_posted": False, "record": updated})
-        notify.next_measurement(it, ready_at=res.get("measurement", {}).get("ready_at"),
-                                source=res.get("measurement", {}).get("source"))
-        res["measurement"] = dict(it["measurement"])
-        ap.save(compact=True)  # no backup of the stale draft or frozen execution body
-        _append(out / "merged.jsonl", {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                                       "into": key, "event_id": ev.get("id"), "revision": revision + 1})
-        return True
-    return False
+        matches.append(it)
+    if len(matches) != 1:
+        return False
+    it = matches[0]
+    rec = it["record"]
+    old = rec.get("event") or {}
+    if res.get("node") != rec.get("node") and _acknowledgement(res):
+        return _fold_acknowledgement(out, it, ev, ap)
+    revision = int(it.get("revision") or rec.get("revision") or 1)
+    updated = copy.deepcopy(res)
+    updated["revision"] = revision + 1
+    followup_limit = _record_limit()
+    def safe_followup(row):
+        if not isinstance(row, dict):
+            return row
+        text = " ".join(str(row.get("text", "")).split())
+        if len(text) > followup_limit:
+            text = _cut(text, followup_limit)
+        return {**row, "text": text} if "text" in row else row
+    followup_text = " ".join(str(ev.get("text", "")).split())
+    if len(followup_text) > followup_limit:
+        followup_text = _cut(followup_text, followup_limit)
+    updated["followups"] = [safe_followup(row) for row in (rec.get("followups") or [])] + [{
+        "text": followup_text,
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds")
+    }]
+    # R08: the first request stays with the item (120 characters, when it was judged), and a held item says so until the PM answers
+    updated["first_message"] = rec.get("first_message") or {"text": _short(old.get("text")), "at": rec.get("at")}
+    if it.get("status") == "held" or rec.get("held_before"):
+        updated["held_before"] = True
+    key = it["key"]
+    if source_event is not None:
+        from . import fulltext
+        fulltext.drop_safe(out, key)
+        fulltext.save(out, key, source_event, request=source_request, material=source_material)
+    elif source_key and source_key != key:
+        from . import fulltext
+        latest = fulltext.load(out, source_key)
+        fulltext.drop_safe(out, key)  # remove the superseded source even if no new full text was staged
+        if latest:
+            fulltext.save(out, key, latest, request=latest.get("request"), material=latest.get("material"))
+        fulltext.drop_safe(out, source_key)
+    preserve = {name: it[name] for name in notify.FOLLOWUP_KEEP if name in it}   # R09: the hold marks carry over (notify.FOLLOWUP_KEEP)
+    if it.get("delivery_unknown") and "delivery_unknown_revision" not in preserve:
+        preserve["delivery_unknown_revision"] = revision
+    it.clear()
+    it.update(preserve)
+    it.update({"revision": revision + 1, "status": "pending", "posted": False, "toasted": False,
+               "request_posted": False, "record": updated})
+    notify.next_measurement(it, ready_at=res.get("measurement", {}).get("ready_at"),
+                            source=res.get("measurement", {}).get("source"))
+    res["measurement"] = dict(it["measurement"])
+    ap.save(compact=True)  # no backup of the stale draft or frozen execution body
+    _append(out / "merged.jsonl", {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                   "into": key, "event_id": ev.get("id"), "revision": revision + 1})
+    return True
 
 
 CONTEXT_HOURS = 72          # R22: how far back the earlier messages of a chat are taken from decisions.jsonl
@@ -380,6 +398,8 @@ def _judge(g, ev, meter, playbooks, context=None, out=None, now=None, batch=None
         res = graph.run(g, ev, meter, playbooks=playbooks)
     else:
         res = graph.run(g, ev, meter, playbooks=playbooks, state=events.state_of(ev, context))
+    res["judge"] = _judge_info(meter)
+    res["calibration_key"] = graph.calibration_key(g, playbooks)
     # R33 (learn=1 only): a minutes line that a rule names is recorded only (learn.demote); `out` is the state folder
     return res if out is None else learn.demote(out, g, res, ev, now=now, batch=batch)
 
@@ -547,7 +567,6 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
             if ev_run.get("full") and res.get("material_event"):
                 res["material_event"] = {**res["material_event"], "text": kept["text"]}
                 res["material_event"].pop("直前のやり取り", None)
-            res["judge"] = _judge_info(backend)
             res["graph_key"] = key
             if sieve:   # T10: a new field only on a hit
                 res["prefilter"] = {"rule": sieve["rule"], "applied": sieve["applied"]}
@@ -709,7 +728,7 @@ def _main(argv=None):
     except config.ConfigError as e:
         broken = e   # decided after parsing: some commands must work without a readable config file
     ap = _Parser(prog="kimeru")
-    ap.add_argument("--graphs", default=str(HERE / "graphs"))
+    ap.add_argument("--graphs", default=str(DEFAULT_GRAPHS))
     ap.add_argument("--playbooks", default=str(DEFAULT_PLAYBOOKS))
     ap.add_argument("--out", default=None, help="records folder (default: out; the demo uses out\\demo)")
     ap.add_argument("--backend", type=lambda v: v.strip().lower(), choices=["stub", "jev", "kev", "clm"], default=config.value("backend"))
@@ -831,7 +850,8 @@ def _main(argv=None):
              "requirements": "build / approve / status of a local requirements draft (docs/requirements.md)"}
     helps["diagnose"] = "one sheet on unknown deliveries, judgment paths and cycle errors (numbers only; sends nothing)"
     helps["learn"] = "list the threshold cards, the not-needed rules and the writing preferences (learn=1) and their adoptions; revert L<n>, A<n> or S<sig> takes one back (learn.py)"
-    for name in ("onboarding", "trial", "requirements", "diagnose", "learn"):
+    helps["dataset"] = "local anonymization candidates and traceable evaluation datasets"
+    for name in ("onboarding", "trial", "requirements", "diagnose", "learn", "dataset"):
         passthrough = sub.add_parser(name, help=helps[name])
         passthrough.add_argument("args", nargs=argparse.REMAINDER)
     diag_args = None   # `diagnose` takes its own options (argparse.REMAINDER does not take a first word that starts with --)
@@ -881,6 +901,23 @@ def _main(argv=None):
             print("kimeru: fix it with `kimeru config set <setting> <value>` (or unset the environment variable)", file=sys.stderr)
             return 2
 
+    if a.cmd == "demo":
+        from . import demo
+        try:
+            demo.require_empty_output(out, fresh=a.fresh and not a.replay)
+        except ValueError as e:
+            print(f"kimeru demo: {e}", file=sys.stderr)
+            return 2
+        if a.replay:   # fallback for a live talk: same output, no model
+            rec = json.loads(Path(a.replay).read_text(encoding="utf-8"))
+            demo.replay(a.replay, pace=a.pace, step=a.step)
+            if rec.get("report_html"):
+                out.mkdir(parents=True, exist_ok=True)
+                page = out / "report.html"
+                page.write_text(rec["report_html"], encoding="utf-8")
+                print(f"    レポート: {page}")
+            return 0
+
     if a.cmd == "diagnose":
         from . import diagnose
         return diagnose.dispatch(a.args, Path(a.out))
@@ -908,9 +945,9 @@ def _main(argv=None):
         print(f"{a.name} を外しました（次からは、まとめの時刻を待ちます）")
         return 0
 
-    if a.cmd in ("onboarding", "trial", "requirements"):
-        from . import onboarding, requirements, trial
-        handler = {"onboarding": onboarding, "trial": trial, "requirements": requirements}[a.cmd]
+    if a.cmd in ("onboarding", "trial", "requirements", "dataset"):
+        from . import dataset, onboarding, requirements, trial
+        handler = {"onboarding": onboarding, "trial": trial, "requirements": requirements, "dataset": dataset}[a.cmd]
         return handler.dispatch(a.args, Path(a.out))
 
     if a.cmd == "work":
@@ -1039,9 +1076,12 @@ def _main(argv=None):
                     return 1
                 print(f"{'posted' if a.send else 'pasted (not sent)'}: {list(ids)}")
             else:
-                res = nt.collect(out, bridge, real=a.send, send=a.send)   # without --send an OK records only; the write waits for --send
+                res = nt.collect(out, bridge, real=a.send, send=a.send, interactive=True)   # without --send an OK records only; the write waits for --send
                 if getattr(res, "busy", False):
                     print(busy.format("nothing was read or applied"))
+                    return 1
+                if getattr(res, "deferred", None):   # not "no replies": nothing was read
+                    print(f"approval replies were not read ({res.deferred}); nothing was applied. Try again in a minute.")
                     return 1
                 for ch in res:
                     print(f"#{ch['id']} -> {ch['status']}" + (f" ({len(ch['executed'])} actions planned)" if "executed" in ch else ""))
@@ -1056,9 +1096,20 @@ def _main(argv=None):
               "clone したフォルダで python -m kimeru を実行するか、pip / uv tool install で入れ直すか、--graphs と --playbooks を指定してください",
               file=sys.stderr)
         return 2
-    pbs = planner.load_playbooks(a.playbooks)
+    if a.cmd == "validate" and any(not any(Path(d).glob("*.json")) for d in (a.graphs, a.playbooks)):
+        print(f"kimeru: 検査するものがありません（{a.graphs} と {a.playbooks} を確かめてください）", file=sys.stderr)
+        return 2
+    try:
+        pbs = planner.load_playbooks(a.playbooks)
+    except (OSError, ValueError) as e:
+        print(f"kimeru: cannot load playbooks: {e}", file=sys.stderr)
+        return 2
     if a.cmd == "validate":
-        gs = graph.load_dir(a.graphs, pbs)
+        try:
+            gs = graph.load_dir(a.graphs, pbs)
+        except (OSError, ValueError) as e:
+            print(f"kimeru: cannot load graphs: {e}", file=sys.stderr)
+            return 2
         if not gs or not pbs:
             print(f"kimeru: 検査するものがありません（判断グラフ {sum(len(v) for v in gs.values())} 件、進め方の型 {len(pbs)} 件。"
                   f"{a.graphs} と {a.playbooks} を確かめてください）", file=sys.stderr)
@@ -1126,7 +1177,11 @@ def _main(argv=None):
         print(page)
         return 0
 
-    gs = graph.load_dir(a.graphs, pbs)
+    try:
+        gs = graph.load_dir(a.graphs, pbs)
+    except (OSError, ValueError) as e:
+        print(f"kimeru: cannot load graphs: {e}", file=sys.stderr)
+        return 2
     if a.cmd == "review":
         if not sys.stdin.isatty():
             print("kimeru: review は対話用のコマンドです。端末（PowerShell など）で実行し、1 件ずつ答えてください", file=sys.stderr)
@@ -1136,7 +1191,7 @@ def _main(argv=None):
         return 0
     if a.cmd == "calibrate":
         from . import calibrate
-        calibrate.run(out, gs, min_questions=a.min_questions, allow_wider=a.allow_wider, do_apply=a.apply)
+        calibrate.run(out, gs, playbooks=pbs, min_questions=a.min_questions, allow_wider=a.allow_wider, do_apply=a.apply)
         return 0
     if a.cmd == "replay":
         from . import replay
@@ -1148,14 +1203,6 @@ def _main(argv=None):
     if a.cmd == "demo":
         from . import demo, report
         page = out / "report.html"
-        if a.replay:   # fallback for a live talk: same output, no model
-            rec = json.loads(Path(a.replay).read_text(encoding="utf-8"))
-            demo.replay(a.replay, pace=a.pace, step=a.step)
-            if rec.get("report_html"):
-                out.mkdir(parents=True, exist_ok=True)
-                page.write_text(rec["report_html"], encoding="utf-8")
-                print(f"    レポート: {page}")
-            return 0
         if not Path(a.scenario).is_file():
             print(f"kimeru: デモの台本が見つかりません（{a.scenario}）。clone したフォルダで python -m kimeru demo を実行するか、"
                   "--scenario を指定してください", file=sys.stderr)
@@ -1163,7 +1210,7 @@ def _main(argv=None):
         run = lambda: demo.run(a.scenario, gs, be, pbs, process, out, pace=a.pace, step=a.step, fresh=a.fresh)
         try:
             demo.record_to(a.record, run) if a.record else run()
-        except demo.RecordsInTheWay as e:
+        except (demo.RecordsInTheWay, ValueError) as e:
             print(e, file=sys.stderr)
             return 2
         except BackendUnavailable as e:

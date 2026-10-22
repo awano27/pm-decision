@@ -98,16 +98,25 @@ class PullError(RuntimeError):
     pass
 
 
-def http_json(method, url, token, body=None, retries=3):
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject redirects for requests that carry an authorization token."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def http_json(method, url, token, body=None, retries=3, content_type="application/json"):
+    # content_type: ADO's work item update takes "application/json-patch+json" (execute.py, ado.update)
     data = json.dumps(body).encode("utf-8") if body is not None else None
+    opener = urllib.request.build_opener(_NoRedirectHandler())
     delay = 1.0
     for attempt in range(retries):
         fsutil.heartbeat()   # a retry, a long Retry-After or a slow answer must not make the lock of the caller look unused
         req = urllib.request.Request(url, data=data, method=method, headers={
-            "Authorization": "Bearer " + token, "Content-Type": "application/json", "User-Agent": "kimeru/0.1",
+            "Authorization": "Bearer " + token, "Content-Type": content_type, "User-Agent": "kimeru/0.1",
             "X-TFS-FedAuthRedirect": "Suppress"})   # ADO: 401 instead of 203 + a sign-in page
         try:
-            with urllib.request.urlopen(req, timeout=60) as r:
+            with opener.open(req, timeout=60) as r:
                 raw = r.read().decode("utf-8", "replace")
                 try:
                     return json.loads(raw)
@@ -115,6 +124,7 @@ def http_json(method, url, token, body=None, retries=3):
                     raise PullError(f"not a JSON answer (HTTP {r.status}) from {url.split('?')[0]}: "
                                     "check the organization / project name and `az login`") from None
         except urllib.error.HTTPError as e:
+            e.close()
             if e.code in (429, 500, 502, 503, 504) and attempt < retries - 1:
                 fsutil.heartbeat()
                 time.sleep(float(e.headers.get("Retry-After") or delay))
@@ -127,7 +137,7 @@ def http_json(method, url, token, body=None, retries=3):
                 time.sleep(delay)
                 delay *= 2
                 continue
-            raise PullError(f"network error for {url.split('?')[0]}: {e.reason}") from None
+            raise PullError(f"network error for {url.split('?')[0]}") from None
 
 
 class State:
@@ -293,7 +303,7 @@ def pull_ado(org, project, inbox, out, http=http_json, token=None, now=None, fir
         items = http("GET", f"{base}/workitems?ids={','.join(map(str, chunk))}&fields={','.join(ADO_FIELDS)}&api-version=7.1", token)
         for wi in items.get("value", []):
             _drop(inbox, f"ado-{org}-{wi['id']}", {"eventType": "workitem.created",
-                                                   "resource": {"id": wi["id"], "fields": wi.get("fields", {})},
+                                                   "resource": {"id": wi["id"], "rev": wi.get("rev"), "fields": wi.get("fields", {})},
                                                    "kimeru_origin": {"org": org, "project": project},
                                                    "_kimeru": {"observed_at": _iso(now)}})
             sec["seen"].append(wi["id"])

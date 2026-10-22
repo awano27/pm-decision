@@ -29,8 +29,16 @@ class PlaybookError(ValueError):
 
 
 def load_playbooks(d):
+    directory = Path(d)
+    if not directory.exists():
+        raise PlaybookError(f"playbook directory does not exist: {directory}")
+    if not directory.is_dir():
+        raise PlaybookError(f"playbook path is not a directory: {directory}")
     pbs = {}
-    for p in sorted(Path(d).glob("*.json")):
+    paths = sorted(directory.glob("*.json"))
+    if not paths:
+        raise PlaybookError(f"no playbook JSON files found in: {directory}")
+    for p in paths:
         pb = json.loads(p.read_text(encoding="utf-8"))
         validate_playbook(pb)
         if pb["id"] in pbs:

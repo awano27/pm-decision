@@ -1,7 +1,7 @@
-"""Carry out an approved action for real: ADO comments only, and only for the kinds the PM switched on.
+"""Carry out an approved action for real: ADO comments and the priority of a work item, and only for the kinds the PM switched on.
 
-Default: nothing is executed (approving records a plan, as before). `config set execute ado.comment` turns on the one kind that is
-implemented here. The rules:
+Default: nothing is executed (approving records a plan, as before). `config set execute ado.comment` / `ado.update` turns on the
+kinds that are implemented here. The rules:
 
   - a switched-on kind is never executed by itself: even a decision the graph made automatically waits for an approval;
   - what is written is the text the approval post showed, word for word, signature line included: it is fixed when the post is made
@@ -27,6 +27,15 @@ implemented here. The rules:
     the chat fixed when the approval post was made (freeze, reply_text / reply_chat). Without --send the request is only recorded;
     the next --send run sends it. teams.post is never sent: approving one returns a post with the text alone, ready to copy.
 
+ado.update writes one field only, the priority (Microsoft.VSTS.Common.Priority, 1-4); any other field of the action stays a plan.
+The post shows the work item, the change (now -> new) and the revision the decision saw (`rev`, recorded by `pull ado`); OK approves
+exactly that (`exec_update`, with a digest of target + change + revision). Before writing, ADO is read: a priority that already has
+the new value is not written again (done, "existing"); a revision that moved since the post is not written either: the item goes
+back to waiting with the new revision and value and is posted again for a new OK ("stale"). The write itself is a JSON Patch that
+tests the revision first, so ADO refuses it if the work item changes in between. A response that does not show the new revision and
+value is "unknown", never a success; `再実行 N` reads ADO again first. Writing the priority is not the end of the work: the
+progress of the case (`work set`) stays the PM's.
+
 Authentication is the PM's own `az` sign-in, the token in memory only; organization and project come from the settings.
 Tokens, tenant ids and URL queries never reach a record or a message.
 """
@@ -42,7 +51,7 @@ from pathlib import Path
 
 from . import config, fsutil, pull
 
-SUPPORTED = ("ado.comment", "teams.reply")
+SUPPORTED = ("ado.comment", "ado.update", "teams.reply")
 SIGNATURE = "\n\n（kimeru が下書きし、本人が承認した文面です）"
 SIGNATURE_FIXED = "\n\n（kimeru の定型文を、本人が承認した文面です）"   # the graph's own sentence: nothing was drafted
 _OWN_SIGN_OFF = re.compile(r"\s*(?:—|--?)\s*kimeru\s*$")
@@ -53,6 +62,7 @@ REPLY_KEYS = ("reply_text", "reply_chat", "reply_to", "reply_skip")   # what fre
 # why a reply is not sent (the record keeps the word; the post says it in words)
 NOT_ENABLED, NOT_TARGET, NOT_FROZEN = "not_enabled", "not_target", "not_frozen"
 CHAT_ID = re.compile(r"^[0-9A-Za-z:@._\-]{3,120}$")   # the ids a chat list gives: nothing else is passed to the link or the script
+PRIORITY = "Microsoft.VSTS.Common.Priority"   # the one field ado.update writes
 
 
 def requested():
@@ -83,7 +93,47 @@ def gated_ok(action):
 
 def idem_key(item_key, index, action):
     body = f"{item_key}|{index}|{action.get('type')}|{action.get('id')}|{action.get('exec_text') or action.get(FIELD.get(action.get('type'), 'text'), '')}"
+    if action.get("exec_digest"):   # ado.update: the approved change (a new revision after a new OK is a new execution)
+        body += "|" + action["exec_digest"]
     return hashlib.sha1(body.encode("utf-8")).hexdigest()[:16]
+
+
+def frozen(action):
+    """True when the approval post fixed what OK carries out (a comment's text, or a priority change)."""
+    return bool(action.get("exec_text") or action.get("exec_update"))
+
+
+def _priority(v):
+    """A priority ADO accepts (1-4), or None."""
+    return v if type(v) is int and 1 <= v <= 4 else None
+
+
+def update_plan(rec, action):
+    """(plan, None) for an ado.update that can be carried out, or (None, why not). The plan is what the post shows and OK approves:
+    the work item, the priority now and the new one, and the revision the decision saw."""
+    fields = action.get("fields") if isinstance(action.get("fields"), dict) else {}
+    if PRIORITY not in fields:
+        return None, "優先度の変更を含まないため（kimeru が書けるのは優先度だけ）"
+    to = _priority(fields[PRIORITY])
+    if to is None:
+        return None, "優先度の値が 1〜4 の整数ではないため"
+    wid = str(action.get("id") or "").strip()
+    if not wid.isdigit():
+        return None, "作業項目の番号が分からないため"
+    seen = action.get("ado_seen") if isinstance(action.get("ado_seen"), dict) else None   # what ADO said when the change went stale
+    ev = rec.get("event") or {}
+    rev = seen["rev"] if seen else ev.get("rev")
+    if type(rev) is not int or rev < 1:
+        return None, "判断したときの作業項目の改訂番号が記録されていないため"
+    now = seen.get("priority") if seen else ev.get("priority")
+    return {"work_item": wid, "field": PRIORITY, "from": _priority(now), "to": to, "rev": rev,
+            "others": sorted(k for k in fields if k != PRIORITY)}, None
+
+
+def update_digest(org, project, plan):
+    body = json.dumps([str(org).strip().lower(), str(project).strip().lower(), plan.get("work_item"), plan.get("field"),
+                       plan.get("from"), plan.get("to"), plan.get("rev")], ensure_ascii=False)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
 
 
 def _clean(text):
@@ -168,16 +218,25 @@ def freeze(rec, real):
         if real and is_gated(a):
             org, project = current_target()
             a["exec_target"] = {"org": org, "project": project}
-            if o_org and o_project:
-                a["exec_text"] = comment_text(a)
-                a["exec_origin"] = {"org": o_org, "project": o_project}
-                a.pop("exec_skip", None)
-            else:   # nothing says where the work item came from: OK records the plan and writes nothing (and nothing needs closing)
-                a.pop("exec_text", None)
+            for k in ("exec_text", "exec_update", "exec_digest"):
+                a.pop(k, None)
+            if not (o_org and o_project):   # nothing says where the work item came from: OK records the plan and writes nothing
                 a.pop("exec_origin", None)
                 a["exec_skip"] = NO_ORIGIN
+                continue
+            a["exec_origin"] = {"org": o_org, "project": o_project}
+            a.pop("exec_skip", None)
+            if a.get("type") == "ado.update":
+                plan, why = update_plan(rec, a)
+                if plan:
+                    a["exec_update"] = plan
+                    a["exec_digest"] = update_digest(o_org, o_project, plan)
+                else:   # nothing kimeru can write: OK records the plan only (state "skipped": not a failure)
+                    a["exec_skip"] = why
+            else:
+                a["exec_text"] = comment_text(a)
         else:
-            for k in ("exec_text", "exec_target", "exec_origin", "exec_skip") + REPLY_KEYS:
+            for k in ("exec_text", "exec_update", "exec_digest", "exec_target", "exec_origin", "exec_skip") + REPLY_KEYS:
                 a.pop(k, None)
 
 
@@ -193,8 +252,14 @@ class _Refused(RuntimeError):
     """Stopped before anything was sent: a definite failure."""
 
 
+class _AmbiguousResponse(RuntimeError):
+    """The write may have reached ADO, but its response did not identify the created comment."""
+
+
 def ambiguous(e):
     """True when the write may have reached ADO although the call did not come back cleanly."""
+    if isinstance(e, _AmbiguousResponse):
+        return True
     if isinstance(e, (TimeoutError, ConnectionError, http.client.HTTPException, OSError)):   # URLError and socket.timeout are OSErrors
         return True
     msg = str(e)
@@ -295,6 +360,69 @@ class _CheckFailed(_Refused):
     """The read that asks whether the same text is already there failed: nothing was sent, and nothing more is known."""
 
 
+class _Stale(_Refused):
+    """ado.update: the work item changed since the approval post (another revision). Nothing was sent; a new OK is needed."""
+
+    def __init__(self, rev, priority):
+        super().__init__(f"承認の後に作業項目が更新されていました（改訂 {rev}）")
+        self.rev, self.priority = rev, priority
+
+
+def _check_target(action, item, org, project):
+    """The work item's recorded origin, the settings and the target the approval post showed must be one place."""
+    o_org, o_project = origin_of(item["record"])
+    if not o_org or not o_project:
+        raise _Refused("この作業項目の取り込み元（組織・プロジェクト）が記録されていないため、書きません")
+    if not _same_target((o_org, o_project), (org, project)):
+        raise _Refused(f"作業項目の取り込み元（{o_org}/{o_project}）と、設定の宛先（{org}/{project}）が違うため、書きません")
+    fz = action.get("exec_target") or {}
+    if fz and not _same_target((fz.get("org"), fz.get("project")), (org, project)):
+        raise _Refused("承認の投稿に示した宛先と、今の設定が違うため、書きません")
+
+
+def _write_ado_update(action, item, http, token_fn):
+    """ado.update: the approved priority change, only while ADO still has the revision the post showed. ADO is always read first,
+    so a run again (`再実行`) after an unknown result needs no other check. Returns the result, or
+    raises _Refused (nothing sent; _Stale when the work item moved on), _AmbiguousResponse (it may have been written)."""
+    org, project = current_target()
+    if not org or not project:
+        raise _Refused("ADO の組織とプロジェクトが設定されていません（config set ado_org / ado_project）")
+    plan = action.get("exec_update")
+    if not isinstance(plan, dict):
+        raise _Refused("承認の投稿で確定した変更内容がありません（書きません）")
+    _check_target(action, item, org, project)
+    wid = str(plan.get("work_item") or "")
+    if (not wid.isdigit() or wid != str(action.get("id") or "").strip() or plan.get("field") != PRIORITY
+            or _priority(plan.get("to")) is None or action.get("exec_digest") != update_digest(org, project, plan)):
+        raise _Refused("承認の投稿に示した変更内容と、記録が一致しないため、書きません")
+    to, rev = plan["to"], plan["rev"]
+    try:
+        token = token_fn(org)
+    except Exception as e:
+        raise _CheckFailed("作業項目の今の状態を確かめられなかったため、書きません: " + _clean(e)) from None
+    url = f"https://dev.azure.com/{urllib.parse.quote(org)}/{urllib.parse.quote(project)}/_apis/wit/workitems/{wid}"
+    try:   # a read first: the revision and the priority as they are now
+        fsutil.heartbeat()
+        cur = http("GET", f"{url}?fields={PRIORITY}&api-version=7.1", token, None)
+    except Exception as e:
+        raise _CheckFailed("作業項目の今の状態を確かめられなかったため、書きません: " + _clean(e)) from None
+    if not isinstance(cur, dict) or type(cur.get("rev")) is not int:
+        raise _CheckFailed("作業項目の今の状態を確かめられなかったため、書きません: 応答に改訂番号がありません")
+    now = (cur.get("fields") or {}).get(PRIORITY) if isinstance(cur.get("fields"), dict) else None
+    if _priority(now) == to:   # already so (an earlier try, or someone else): nothing to write
+        return {"existing": True, "work_item": wid, "to": to, "rev": cur["rev"], "org": org, "project": project}
+    if cur["rev"] != rev:
+        raise _Stale(cur["rev"], _priority(now))
+    patch = [{"op": "test", "path": "/rev", "value": rev},   # ADO refuses the whole patch if the work item changed meanwhile
+             {"op": "add", "path": f"/fields/{PRIORITY}", "value": to}]
+    fsutil.heartbeat()
+    res = http("PATCH", f"{url}?api-version=7.1", token, patch, retries=1, content_type="application/json-patch+json")
+    if (not isinstance(res, dict) or res.get("id") != int(wid) or type(res.get("rev")) is not int or res["rev"] <= rev
+            or not isinstance(res.get("fields"), dict) or res["fields"].get(PRIORITY) != to):
+        raise _AmbiguousResponse("ADO の更新応答を確認できませんでした")
+    return {"work_item": wid, "from": plan.get("from"), "to": to, "rev": res["rev"], "org": org, "project": project}
+
+
 def _write_ado_comment(action, item, http, token_fn, check_existing=False):
     org, project = current_target()
     if not org or not project:
@@ -305,14 +433,7 @@ def _write_ado_comment(action, item, http, token_fn, check_existing=False):
     text = action.get("exec_text")
     if not text:
         raise _Refused("承認の投稿で確定した文面がありません（書きません）")
-    o_org, o_project = origin_of(item["record"])
-    if not o_org or not o_project:
-        raise _Refused("この作業項目の取り込み元（組織・プロジェクト）が記録されていないため、書きません")
-    if not _same_target((o_org, o_project), (org, project)):
-        raise _Refused(f"作業項目の取り込み元（{o_org}/{o_project}）と、設定の宛先（{org}/{project}）が違うため、書きません")
-    fz = action.get("exec_target") or {}
-    if fz and not _same_target((fz.get("org"), fz.get("project")), (org, project)):
-        raise _Refused("承認の投稿に示した宛先と、今の設定が違うため、書きません")
+    _check_target(action, item, org, project)
     try:
         token = token_fn(org)
     except Exception as e:
@@ -330,7 +451,17 @@ def _write_ado_comment(action, item, http, token_fn, check_existing=False):
     url = f"{base}/{wid}/comments?api-version=7.1-preview.4"
     fsutil.heartbeat()
     res = http("POST", url, token, {"text": _escaped(text)}, retries=1)   # one try: a retry could write it twice
-    return {"comment_id": (res or {}).get("id"), "org": org, "project": project}
+    if not isinstance(res, dict):
+        raise _AmbiguousResponse("ADO の投稿応答を確認できませんでした")
+    has_id, has_comment_id = "id" in res, "commentId" in res
+    ids = [res[key] for key, present in (("id", has_id), ("commentId", has_comment_id)) if present]
+    if not ids or any(type(value) is not int or not 1 <= value <= 2**31 - 1 for value in ids):
+        raise _AmbiguousResponse("ADO の投稿応答を確認できませんでした")
+    if len(ids) == 2 and ids[0] != ids[1]:
+        raise _AmbiguousResponse("ADO の投稿応答を確認できませんでした")
+    if "workItemId" in res and (type(res["workItemId"]) is not int or res["workItemId"] != int(wid)):
+        raise _AmbiguousResponse("ADO の投稿応答を確認できませんでした")
+    return {"comment_id": ids[0], "org": org, "project": project}
 
 
 def _token(org):
@@ -366,6 +497,11 @@ def redo_hint(num, k, text):
 def _unknown_text(num, action):
     if action.get("type") in REPLY_KINDS:
         return _reply_result_text(num, "unknown", action.get("reply_to") or "相手")
+    if action.get("type") == "ado.update":
+        to = (action.get("exec_update") or {}).get("to")
+        return (f"[kimeru 実行 #{num}] {_target(action)} の優先度の変更は、反映されたかどうか分かりません。"
+                f"ADO で優先度を確かめてください。{to} になっていれば「済 {num}」、なっていなければ「再実行 {num}」と返信してください"
+                "（再実行の前に、kimeru も今の優先度と改訂番号を確かめます）")
     return (f"[kimeru 実行 #{num}] {_target(action)} へのコメントは、書けたかどうか分かりません。"
             f"ADO を確かめてください（作業項目を開いて、コメントがあるかどうか）。"
             f"あれば「済 {num}」、無ければ「再実行 {num}」と返信してください"
@@ -379,7 +515,7 @@ def run_approved(out, ap, num, item, post, http=None, token_fn=None, retry_only=
     token_fn = token_fn or _token
     http = http or pull.http_json   # looked up now, so a test (or a caller) can replace it
     state = item.setdefault("exec", {})
-    results = []
+    results, stale = [], False
     for i, action in enumerate(item["record"].get("actions", [])):
         t = action.get("type")
         if not gated_ok(action):                       # a reply is never sent by an OK (see reply_request)
@@ -389,11 +525,14 @@ def run_approved(out, ap, num, item, post, http=None, token_fn=None, retry_only=
         if cur and cur.get("state") in ("done", "closed", "skipped"):
             continue                                   # written (or closed by the PM, or never to be written) already: never again
         where = where_of(item, action)
-        if not all(origin_of(item["record"])):         # nothing says where it came from: recorded only, nothing to close
+        # nothing says where it came from, or (ado.update) nothing kimeru can write: recorded only, nothing to close
+        skip = NO_ORIGIN + "ため" if not all(origin_of(item["record"])) else action.get("exec_skip")
+        if skip:
             state[str(i)] = {"key": key, "state": "skipped", "at": _now()}
-            _log(out, {"id": num, "key": key, "type": t, "target": str(action.get("id")), "state": "skipped", "reason": NO_ORIGIN, **where})
+            _log(out, {"id": num, "key": key, "type": t, "target": str(action.get("id")), "state": "skipped",
+                       "reason": NO_ORIGIN if skip == NO_ORIGIN + "ため" else skip, **where})
             ap.save()
-            _tell(post, f"[kimeru 実行 #{num}] {_target(action)} には書いていません（{NO_ORIGIN}ため）。承認は記録しました")
+            _tell(post, f"[kimeru 実行 #{num}] {_target(action)} には書いていません（{skip}）。承認は記録しました")
             results.append({"index": i, "type": t, "state": "skipped"})
             continue
         was_unknown = bool(cur and not_known(cur))
@@ -410,7 +549,19 @@ def run_approved(out, ap, num, item, post, http=None, token_fn=None, retry_only=
         ap.save()                                      # before the call: a crash leaves a trace that says "not sure"
         _log(out, {"id": num, "key": key, "type": t, "target": str(action.get("id")), "state": "running", "retry": bool(retry_only), **where})
         try:
-            res = _write_ado_comment(action, item, http, token_fn, check_existing=bool(retry_only))
+            if t == "ado.update":
+                res = _write_ado_update(action, item, http, token_fn)
+            else:
+                res = _write_ado_comment(action, item, http, token_fn, check_existing=bool(retry_only))
+        except _Stale as e:                            # the work item moved on: nothing written, the change is shown again for a new OK
+            action["ado_seen"] = {"rev": e.rev, "priority": e.priority}
+            state[str(i)] = {"key": key, "state": "stale", "at": _now(), "rev_seen": e.rev}
+            _log(out, {"id": num, "key": key, "type": t, "target": str(action.get("id")), "state": "stale", "rev_seen": e.rev, **where})
+            stale = True
+            ap.save()
+            _tell(post, f"[kimeru 実行 #{num}] {_target(action)} は、承認の投稿のあとに更新されていました"
+                        f"（改訂 {(action.get('exec_update') or {}).get('rev')} → {e.rev}）。優先度は変更していません。"
+                        f"今の内容で #{num} を出し直すので、確かめてもう一度 OK と返信してください")
         except _Refused as e:                          # nothing was sent (the check failed, or the target changed): if the earlier try may
             # have written, that stays unknown (`済 N` keeps working); only a run that had no earlier try is a sure failure
             _finish(out, ap, state, i, num, key, t, action, post, "unknown" if was_unknown else "failed", error=_clean(e),
@@ -428,7 +579,18 @@ def run_approved(out, ap, num, item, post, http=None, token_fn=None, retry_only=
                     pass
                 _tell(post, _unknown_text(num, action) + "（書き込みは通りましたが、記録に失敗しました）")
         results.append({"index": i, "type": t, "state": state[str(i)]["state"]})
+    if stale:
+        reopen_for_approval(item)
+        ap.save()
     return results
+
+
+def reopen_for_approval(item):
+    """An approved change no longer matches ADO: the item waits again and is posted again (execute.freeze shows the new revision
+    and value); the earlier OK, above the new post, does not count. What was already carried out stays done."""
+    item["status"], item["posted"], item["request_posted"] = "pending", False, False
+    item["record"]["redraft_note"] = ("承認のあとに作業項目が更新されていたため、優先度を変更していません。"
+                                      "今の改訂と優先度で出し直します。確かめて、もう一度 OK と返信してください")
 
 
 def _finish(out, ap, state, i, num, key, t, action, post, outcome, error=None, result=None, where=None, unchecked=False):
@@ -448,7 +610,20 @@ def _finish(out, ap, state, i, num, key, t, action, post, outcome, error=None, r
         log["result"] = result
     _log(out, log)
     ap.save()
-    if outcome == "done":
+    if outcome == "done" and t == "ado.update":
+        r = result or {}
+        where_text = f"（{r['org']}/{r['project']}）" if r.get("org") else ""
+        if r.get("existing"):
+            _tell(post, f"[kimeru 実行 #{num}] {_target(action)} の優先度はすでに {r.get('to')} だったため、変更していません{where_text}")
+        else:
+            _tell(post, f"[kimeru 実行 #{num}] 実行しました。{_target(action)} の優先度を "
+                        f"{r.get('from') if r.get('from') is not None else '不明'} → {r.get('to')} に変更（改訂 {r.get('rev')}）{where_text}。"
+                        "作業の完了は別に記録してください")
+    elif outcome == "unknown" and unchecked and t == "ado.update":
+        _tell(post, f"[kimeru 実行 #{num}] {_target(action)} の今の優先度を確かめられませんでした（{error}）。"
+                    f"前の試行が反映されたかは分からないままです。ADO を確かめて、変わっていれば「済 {num}」、"
+                    f"変わっていなければ「再実行 {num}」と返信してください")
+    elif outcome == "done":
         if (result or {}).get("existing"):
             _tell(post, f"[kimeru 実行 #{num}] {_target(action)} には、同じ文面のコメント（{result.get('comment_id')}）がすでにあったため、書いていません")
         else:
@@ -461,7 +636,8 @@ def _finish(out, ap, state, i, num, key, t, action, post, outcome, error=None, r
     elif outcome == "unknown":
         _tell(post, _unknown_text(num, action) + f"（{error}）")
     else:
-        _tell(post, f"[kimeru 実行 #{num}] 実行できませんでした（書けていません）。{_target(action)}: {error}。直したら「再実行 {num}」と返信してください（承認は残っています）")
+        what = "変更していません" if t == "ado.update" else "書けていません"
+        _tell(post, f"[kimeru 実行 #{num}] 実行できませんでした（{what}）。{_target(action)}: {error}。直したら「再実行 {num}」と返信してください（承認は残っています）")
 
 
 def report_unknown(ap, post):
@@ -655,7 +831,7 @@ def close_unknown(out, ap, num, item):
             if act.get("type") in REPLY_KINDS:       # a reply: nothing about the other chat is read or written
                 _log(out, {"id": num, "key": st.get("key"), "type": act.get("type"), "state": "closed"})
             else:
-                _log(out, {"id": num, "key": st.get("key"), "type": "ado.comment", "target": str(act.get("id")), "state": "closed",
+                _log(out, {"id": num, "key": st.get("key"), "type": act.get("type") or "ado.comment", "target": str(act.get("id")), "state": "closed",
                            **where_of(item, act)})
             n += 1
     if n:

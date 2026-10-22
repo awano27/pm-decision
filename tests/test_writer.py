@@ -606,6 +606,60 @@ class TestM365AutoRest(unittest.TestCase):
         self.assertIn("休止中", res["writer_error"])
 
 
+    def test_the_rest_lasts_thirty_minutes_and_then_ends(self):
+        w = writer.M365AutoWriter()
+        self.assertEqual(writer.M365AutoWriter.COOLDOWN, 1800)
+        with mock.patch("kimeru.writer.time.time", return_value=1000.0):
+            w._rest("boom")
+        with open(w._state_file(), encoding="utf-8") as h:
+            self.assertEqual(json.load(h)["until"], 2800.0)
+        with mock.patch("kimeru.writer.time.time", return_value=1000.0 + 1799):
+            self.assertEqual(w._resting(), 1)
+        with mock.patch("kimeru.writer.time.time", return_value=1000.0 + 1800):
+            self.assertEqual(w._resting(), 0)
+            calls = []
+            with mock.patch.object(w, "_draft", side_effect=lambda *a, **k: calls.append(1) or {"a1": "x"}):
+                self.assertEqual(w.draft({}, {}), {"a1": "x"})      # the rest is over: Teams is tried again
+            self.assertEqual(len(calls), 1)
+
+    def test_a_script_that_refused_to_paste_starts_the_rest_and_falls_back_to_the_manual_request(self):
+        from types import SimpleNamespace
+        w = writer.M365AutoWriter()
+        runs = []
+
+        def refuse(*a, **k):   # what tools/teams-copilot.ps1 prints when the target cannot be confirmed
+            runs.append(1)
+            return SimpleNamespace(returncode=2, stderr="", stdout=json.dumps(
+                {"ok": False, "error": "compose box not found, or not the only one (candidates: 2); nothing pasted"}))
+
+        res = {"node": "n", "path": [], "actions": [{"type": "teams.reply", "to": "Sato", "text": "受領しました。"}]}
+        event = {"author": "Sato", "text": "確認をお願いします"}
+        with mock.patch("subprocess.run", refuse):
+            writer.apply(res, event, w)
+            self.assertEqual(len(runs), 1)
+            self.assertIn("not the only one", res["writer_error"])
+            self.assertIn("copilot_request", res)                     # the manual m365 paste-in request
+            self.assertEqual(res["actions"][0]["held_for"], "m365")
+            self.assertFalse(res["actions"][0].get("drafted_by"))
+            self.assertGreater(w._resting(), 0)
+            res2 = {"node": "n", "path": [], "actions": [{"type": "teams.reply", "to": "Sato", "text": "受領しました。"}]}
+            writer.apply(res2, event, w)                               # the next event does not touch Teams
+            self.assertEqual(len(runs), 1)
+            self.assertIn("休止中", res2["writer_error"])
+            self.assertIn("copilot_request", res2)
+
+    def test_garbage_or_empty_script_output_also_starts_the_rest(self):
+        from types import SimpleNamespace
+        for out in ("", "not json at all"):
+            with self.subTest(out=out):
+                w = writer.M365AutoWriter()
+                w._wake()
+                with mock.patch("subprocess.run", lambda *a, **k: SimpleNamespace(returncode=1, stderr="", stdout=out)):
+                    with self.assertRaises(RuntimeError):
+                        w.draft({"node": "n", "path": [], "actions": []}, {"text": "x"})
+                self.assertGreater(w._resting(), 0)
+
+
 class TestFindExe(unittest.TestCase):
     def test_env_var_wins_and_missing_is_none(self):
         with tempfile.TemporaryDirectory() as d:

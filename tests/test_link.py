@@ -112,6 +112,7 @@ class TestTheSettingIsOffAndTheTextsStayTheSame(unittest.TestCase):
             self.assertNotIn("link", res[0])
             self.assertEqual(notify.format_notice(rows(d, "notices.jsonl")[0]), GOLD_ALERT_NOTICE)
             record = rows(d, "decisions.jsonl")[0]
+            self.assertEqual(record.pop("calibration_key"), graph.calibration_key(GRAPHS["monitor.alert"][0], PBS))
             self.assertEqual(sorted(record), GOLD_ALERT_KEYS)
             self.assertNotIn("link", record)
             self.assertFalse((Path(d) / "merged.jsonl").exists())

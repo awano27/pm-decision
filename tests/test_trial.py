@@ -229,6 +229,70 @@ class TestTrialCountsSendsWithoutJev(unittest.TestCase):
             lines = "\n".join(trial.measurement_lines(trial.measurement_collect(d, [], share=True, now=self.NOW)))
             self.assertNotIn("sent after the OK", lines)
 
+class TrialNotificationReceiptTests(unittest.TestCase):
+    """The trial report keeps route acceptance, a person's receipt and the real-device verification apart."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.out = Path(self.temp.name) / "out"
+        self.out.mkdir()
+        clean = {k: v for k, v in os.environ.items() if not k.startswith("KIMERU_")}
+        clean["KIMERU_STATE_DIR"] = str(Path(self.temp.name) / "state")
+        self.env = mock.patch.dict(os.environ, clean, clear=True)
+        self.env.start()
+        config.apply([])
+
+    def tearDown(self):
+        self.env.stop()
+        self.temp.cleanup()
+
+    def write(self, challenges):
+        (self.out / "onboarding.json").write_text(json.dumps({"challenges": challenges}), encoding="utf-8")
+
+    def test_without_any_record_the_device_verification_is_not_run(self):
+        data = trial.collect(self.out)
+        self.assertIn("measurement", data)  # public-main timing evidence survives the route-receipt integration
+        self.assertEqual(data["measurement"], trial.measurement_collect(self.out, []))
+        self.assertEqual(data["device_verification"], "NOT_RUN")
+        self.assertIn("real-device verification: NOT_RUN", trial.render(data))
+        self.assertIn("real-device verification: NOT_RUN", trial.render(trial.collect(self.out, share=True), share=True))
+
+    def test_accepted_sends_and_unknown_route_confirmations_do_not_make_a_real_device_check(self):
+        self.write([
+            {"token_hash": "h0", "created_at": 1, "sender_accepted": True, "receipt_confirmed": True, "confirmed_at": 2},
+            {"version": 2, "created_at": 3, "sender_accepted": True, "receipt_confirmed": False,
+             "routes": {"webhook": {"token_hash": "h1", "sender_accepted": True, "receipt_confirmed": False},
+                        "outlook": {"token_hash": "h2", "sender_accepted": False, "receipt_confirmed": False}}}])
+        data = trial.collect(self.out)
+        self.assertEqual(data["notification_receipts"], 1)                  # the old record: at least one route, unknown which
+        self.assertEqual(data["device_verification"], "NOT_RUN")
+        self.assertEqual(data["receipt_routes"]["webhook"], {"accepted": 1, "confirmed": 0, "phone_confirmed": 0})
+        self.assertEqual(data["receipt_routes"]["outlook"], {"accepted": 0, "confirmed": 0, "phone_confirmed": 0})
+        text = trial.render(data)
+        self.assertIn("route unknown (older record): 1 confirmations, not counted for any route", text)
+        self.assertIn("route webhook: send accepted 1 / person confirmed 0 / on phone 0", text)
+        self.assertIn("real-device verification: NOT_RUN", text)
+
+    def test_a_phone_confirmation_of_a_route_is_counted_for_that_route_only(self):
+        os.environ["KIMERU_PUSH"] = "webhook"
+        os.environ["KIMERU_PUSH_WEBHOOK_URL"] = "https://example.invalid/hook"
+        config.apply([])
+        self.write([{"version": 2, "created_at": 3, "sender_accepted": True, "receipt_confirmed": True,
+                     "routes": {"webhook": {"token_hash": "h1", "sender_accepted": True, "receipt_confirmed": True,
+                                            "confirmed_at": 4, "device": "phone"},
+                                "outlook": {"token_hash": "h2", "sender_accepted": True, "receipt_confirmed": False}}}])
+        data = trial.collect(self.out)
+        self.assertEqual(data["receipt_routes"]["webhook"]["phone_confirmed"], 1)
+        self.assertEqual(data["receipt_routes"]["outlook"]["phone_confirmed"], 0)
+        self.assertEqual(data["device_verification"], "CONFIRMED_ON_PHONE")      # the only enabled route
+
+    def test_the_shared_report_has_route_names_and_counts_only(self):
+        self.write([{"version": 2, "created_at": 3, "sender_accepted": True, "receipt_confirmed": False,
+                     "routes": {"webhook": {"token_hash": "SECRETHASH", "sender_accepted": True, "receipt_confirmed": False}}}])
+        shared = trial.render(trial.collect(self.out, share=True), share=True)
+        self.assertNotIn("SECRETHASH", shared)
+        self.assertIn("route webhook: send accepted 1", shared)
+
 
 if __name__ == "__main__":
     unittest.main()

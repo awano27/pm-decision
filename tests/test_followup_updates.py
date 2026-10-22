@@ -111,7 +111,7 @@ class TestFollowupMerge(unittest.TestCase):
             long_source = "public " * 300 + "TAIL_PRIVATE_SECRET beyond the retained preview"
             safe_preview = ("public " * 30)[:119] + "…"
             new_event = {"kind": "teams.chat", "id": "new", "chat_id": "chat-1", "author": "A",
-                         "text": long_source}
+                         "text": long_source, "supersedes_event_id": "old"}
             new_result = {"graph": "g", "event_id": "new", "node": "n", "outcome": "decide",
                           "needs_human": False, "advice": "new decision", "summary": "new source",
                           "event": {**new_event, "text": safe_preview}, "material_event": {"text": safe_preview},
@@ -150,10 +150,12 @@ class TestFollowupMerge(unittest.TestCase):
             ap = notify.Approvals(out)
             event = {"kind": "teams.chat", "id": "old", "chat_id": "chat-1", "author": "A"}
             ap.data["items"]["7"] = {"key": "g:old:n", "status": "approved", "delivery_unknown": True,
-                                        "record": {"event": event, "node": "n", "actions": []}}
+                                        "record": {"graph": "g", "event_id": "old", "event": event,
+                                                   "node": "n", "actions": []}}
             ap.save()
-            new_event = {**event, "id": "new", "text": "follow-up"}
-            result = {"node": "n", "event": new_event, "actions": []}
+            new_event = {**event, "id": "new", "text": "follow-up", "supersedes_event_id": "old"}
+            result = {"graph": "g", "event_id": "new", "node": "n", "outcome": "advise",
+                      "event": new_event, "actions": [{"type": "ado.comment"}]}
             self.assertFalse(cli._merge_locked(out, new_event, result, notify, source_event=new_event))
 
     def test_a_recurring_sev3_alert_joins_the_waiting_item_across_cycles_under_its_number(self):
@@ -416,8 +418,9 @@ class TestAcknowledgementFold(unittest.TestCase):
         self.bridge, self.writer = FakeBridge(), FakeWriter()
 
     def ev(self, i, text, author="田中"):
+        # These scenarios explicitly link followups to the first waiting request.
         return {"kind": "teams.chat", "id": str(i), "chat_id": "19:same@thread.v2", "author": author, "text": text,
-                "mentions_me": True}
+                "mentions_me": True, **({"supersedes_event_id": "1"} if i != 1 else {})}
 
     def process(self, ev, backend):
         return cli.process(ev, GRAPHS, backend, self.out, PBS, writer=self.writer, dedup=True)[0]
@@ -515,8 +518,9 @@ class TestContinuedItem(unittest.TestCase):
         self.bridge, self.writer = FakeBridge(), FakeWriter()
 
     def ev(self, i, text, author="田中"):
+        # These scenarios explicitly link followups to the first waiting request.
         return {"kind": "teams.chat", "id": str(i), "chat_id": "19:same@thread.v2", "author": author, "text": text,
-                "mentions_me": True}
+                "mentions_me": True, **({"supersedes_event_id": "1"} if i != 1 else {})}
 
     def process(self, ev, backend):
         return cli.process(ev, GRAPHS, backend, self.out, PBS, writer=self.writer, dedup=True)[0]

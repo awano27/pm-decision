@@ -188,18 +188,22 @@ def main():
     if a.out:
         Path(a.out).write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
     n = len(rows)
-    count = lambda o: sum(r["outcome"] == o for r in rows)
+    count = lambda o: sum(r["outcome"] == o and not r["severe_miss"] for r in rows)
     print(f"backend={a.backend} events={n} ({time.time() - t0:.0f}s)")
+    if not n:   # no events is not 0% correct
+        print("NO_INPUT: no events to score; no accuracy is shown")
+        return
+    # the categories are disjoint: a severe miss is counted only as a severe miss, not also as wrong
     print(f"correct final action: {count('correct')}/{n}  to-human: {count('human')}  safe fallback: {count('fallback')}"
-          f"  wrong: {count('wrong')}  severe misses: {sum(r['severe_miss'] for r in rows)}")
+          f"  wrong (not severe): {count('wrong')}  severe misses: {sum(r['severe_miss'] for r in rows)}")
     by = {}
-    kinds = ["correct", "human", "fallback", "wrong"]
+    kinds = ["correct", "human", "fallback", "wrong", "severe"]
     for r in rows:
-        c = by.setdefault(r["graph"], [0] * 5)
-        c[kinds.index(r["outcome"])] += 1
-        c[4] += 1
-    for g, (c, h, f, w, tot) in sorted(by.items()):
-        print(f"  {g:<20} correct {c}/{tot}  human {h}  fallback {f}  wrong {w}")
+        c = by.setdefault(r["graph"], [0] * 6)
+        c[kinds.index("severe" if r["severe_miss"] else r["outcome"])] += 1
+        c[5] += 1
+    for g, (c, h, f, w, sv, tot) in sorted(by.items()):
+        print(f"  {g:<20} correct {c}/{tot}  human {h}  fallback {f}  wrong {w}  severe {sv}")
     for r in rows:
         if r["outcome"] == "wrong" or r["severe_miss"]:
             print(f"  {'SEVERE ' if r['severe_miss'] else ''}{r['id']}: model={r['model']} ideal={r['ideal']}  {' > '.join(r['path'])}")

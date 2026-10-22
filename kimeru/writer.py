@@ -528,7 +528,6 @@ class M365AutoWriter(M365PromptWriter):
     COOLDOWN = 1800   # seconds the automatic route rests after a failure (the manual paste-in request is used meanwhile)
 
     def __init__(self, timeout=280, script=None):
-        from pathlib import Path
         self.timeout = timeout
         self.script = script or str(paths.base() / "tools" / "teams-copilot.ps1")
 

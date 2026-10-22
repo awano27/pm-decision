@@ -86,8 +86,9 @@ class TestBriefStateViews(unittest.TestCase):
                     **original, "event": {"chat_id": "chat-1", "author": "PM"}}},
             }}), encoding="utf-8")
             incoming = decision("followup", "改訂後の計画", at=NOW - timedelta(days=8))
-            incoming["event"] = {"chat_id": "chat-1", "author": "PM"}
-            ev = {"id": "followup", "kind": "teams.chat", "chat_id": "chat-1", "author": "PM", "text": "補足"}
+            incoming["event"] = {"kind": "teams.chat", "id": "followup", "chat_id": "chat-1", "author": "PM"}
+            ev = {"id": "followup", "kind": "teams.chat", "chat_id": "chat-1", "author": "PM",
+                 "text": "補足", "supersedes_event_id": "first"}
             self.assertTrue(cli._merge_locked(Path(d), ev, incoming, notify))
             ap = notify.Approvals(d)
             ap.data["items"]["1"]["status"] = "approved"

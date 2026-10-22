@@ -64,8 +64,15 @@ def status_lines(out):
         lines.append(f"last cycle: {last.get('at')}  failed steps: {', '.join(failed) or 'none'}  "
                      f"files the judge could not take: {rep.get('waiting', 0)}  "
                      f"files left for the next cycle (time limit): {rep.get('left_for_next_cycle', 0)}")
+        if rep.get("brief_source_incomplete"):
+            lines.append("morning brief held: incomplete sources: " + ", ".join(rep["brief_source_incomplete"]))
     else:
         lines.append("last cycle: none recorded yet")
+    if last and (last.get("report") or {}).get("approvals_deferred"):
+        lines.append("approval replies not read in the last cycle (postponed, nothing applied; read in a later cycle): "
+                     + last["report"]["approvals_deferred"])
+    if last and (last.get("report") or {}).get("approvals_screen"):
+        lines.append("Teams screen after the approval read: not put back (" + last["report"]["approvals_screen"] + ")")
     if last and (last.get("report") or {}).get("busy"):
         lines.append("steps skipped in the last cycle because another run held approvals.lock (they are tried again next cycle): "
                      + ", ".join(sorted(last["report"]["busy"])))
@@ -296,6 +303,21 @@ def purge_inbox_done(inbox, now=None, days=None):
     return n
 
 
+def _screen_after_read(out, screen, report, toaster):
+    """The approval read changed the Teams screen and could not put it back: recorded (fixed words only) and told to the person.
+    When the person used the PC meanwhile, nothing was put back on purpose (their own choice is not undone): recorded, not alerted.
+    Told by the PC notification only: posting it would move the screen again (shown by `schedule status` either way)."""
+    if screen.get("returned"):
+        return
+    state = screen["restore"]
+    if state in ("none", "unchanged", "restored") and screen.get("foreground") not in ("unchanged", "restored"):
+        state = "foreground_not_restored"
+    report["approvals_screen"] = state
+    _log(out, {"step": "read_restore", "source": "approvals", **screen})
+    if state in ("failed", "left_self", "foreground_not_restored"):
+        _alert_left_open(out, ["self" if state == "left_self" else "failed"], toaster)
+
+
 def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=False,
           ado=None, subscription=None, brief_hour=8, now=None, toaster=None, budget=None, real=False):
     """Run one cycle. Returns a small report dict (also written to daily.log.jsonl).
@@ -336,17 +358,17 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
         try:
             chats = bridge.chats()
         except Exception as e:
-            _log(out, {"step": "control", "error": f"{type(e).__name__}: {str(e)[:120]}"})
+            _log(out, {"step": "control", "error": type(e).__name__})
         if chats is not None and control.line_of(chats) is None:   # the list has no self row: my line is read from the self chat itself
             try:   # one read-only read, stopped or not (so that 再開 is seen); a self chat that cannot be read decides nothing
-                own_timeline = bridge.read().get("timeline")
+                own_timeline = notify.read_replies(bridge).get("timeline")
             except Exception as e:
-                _log(out, {"step": "control", "error": f"{type(e).__name__}: {str(e)[:120]}"})
+                _log(out, {"step": "control", "error": type(e).__name__})
         try:
             mode = control.step(out, bridge, chats, now, send=send, toaster=toaster if toaster and notify.toast_enabled() else None,
                                 timeline=own_timeline)
         except Exception as e:
-            _log(out, {"step": "control", "error": f"{type(e).__name__}: {str(e)[:120]}"})
+            _log(out, {"step": "control", "error": type(e).__name__})
             mode = control.current(out)
     if mode != "run":   # "stop", or "busy" (the state is in use by another run): nothing is decided, posted or run in this cycle
         r["mode"], r["waiting"] = mode, 0
@@ -481,9 +503,20 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
     changes = []
 
     def do_collect():
-        got = notify.collect(out, bridge, real=real and send, send=send, now=now, brief_hour=brief_hour)   # R13: an OK on a run without --send writes nothing
+        try:
+            got = notify.collect(out, bridge, real=real and send, send=send, now=now, brief_hour=brief_hour)
+        except notify.BridgeError as e:   # the read broke: what it did to the screen is said before the error is recorded
+            if "restore" in (e.data or {}):
+                _screen_after_read(out, notify.screen_of(e.data), r, toaster)
+            raise
         if getattr(got, "busy", False):
             _busy(r, "approvals", "another run holds approvals.lock, nothing was applied this cycle")
+            return []
+        if got.screen:
+            _screen_after_read(out, got.screen, r, toaster)
+        if got.deferred:   # not read: neither "no replies" nor a failure. The replies stay on the screen for a later cycle
+            r["approvals_deferred"] = got.deferred
+            _log(out, {"step": "approvals", "status": "deferred", "reason": got.deferred})
             return []
         changes.extend(got)
         return [f"#{c['id']}:{c['status']}" for c in changes]
@@ -532,25 +565,32 @@ def cycle(out, inbox, graphs, backend, playbooks, process, bridge=None, send=Fal
             r["brief"] = "error: brief delivery_unknown; use delivery show/confirm/retry"
             _log(out, {"step": "brief", "status": "delivery_unknown_hold"})
         else:
-            def do_brief():
-                built_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-                text, ranked = brief_mod.build(out, backend, date=today, since=st.get("brief_at"))   # unknown: the last 24 hours
-                shown = brief_mod.named(ranked)   # the post names the first three; the history keeps every item
-                if len(shown) >= 2 and not brief_mod.is_desk():   # a one-line day needs no summary, and an empty one must not invent one; desk: no writer
-                    text = _with_key_points(text)
-                text = _with_attention(out, text)   # R37: after the writer's points, and only when a sender is listed (never given to the writer)
-                if config.value("weekly_report") == "1" and now.weekday() == 0:   # R24: after the writer, before the delivery
-                    text = _with_weekly(out, text, now)
-                result = notify.deliver_brief(out, bridge, text, send, today, built_at=built_at)
-                status = result["status"]
-                if status == "delivered":   # only a brief whose delivery was read back is recorded (not pasted, not unknown)
-                    _record_brief(out, r, today, backend, ranked)
-                if status in ("delivered", "pasted", "already_delivered"):
-                    return len(shown)
-                if status == "delivery_unknown":
-                    return "error: brief delivery_unknown; use delivery show/confirm/retry"
-                return f"error: brief delivery {status}"
-            _step(out, "brief", do_brief, r)
+            incomplete = [name for name in ("pull_teams", "pull_ado", "pull_alerts")
+                          if name in r and isinstance(r[name], str) and r[name].startswith("error:")]
+            if incomplete:
+                r["brief_source_incomplete"] = incomplete
+                r["brief"] = "error: brief source_incomplete; missing " + ", ".join(incomplete)
+                _log(out, {"step": "brief", "status": "source_incomplete", "missing_sources": incomplete})
+            else:
+                def do_brief():
+                    built_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                    text, ranked = brief_mod.build(out, backend, date=today, since=st.get("brief_at"))   # unknown: the last 24 hours
+                    shown = brief_mod.named(ranked)   # the post names the first three; the history keeps every item
+                    if len(shown) >= 2 and not brief_mod.is_desk():   # a one-line day needs no summary, and an empty one must not invent one; desk: no writer
+                        text = _with_key_points(text)
+                    text = _with_attention(out, text)   # R37: after the writer's points, and only when a sender is listed (never given to the writer)
+                    if config.value("weekly_report") == "1" and now.weekday() == 0:   # R24: after the writer, before the delivery
+                        text = _with_weekly(out, text, now)
+                    result = notify.deliver_brief(out, bridge, text, send, today, built_at=built_at)
+                    status = result["status"]
+                    if status == "delivered":   # only a brief whose delivery was read back is recorded (not pasted, not unknown)
+                        _record_brief(out, r, today, backend, ranked)
+                    if status in ("delivered", "pasted", "already_delivered"):
+                        return len(shown)
+                    if status == "delivery_unknown":
+                        return "error: brief delivery_unknown; use delivery show/confirm/retry"
+                    return f"error: brief delivery {status}"
+                _step(out, "brief", do_brief, r)
     if real and send and spot.enabled():   # R26 (spot_check_per_day, default 0): after the morning brief, the day's cards to confirm
         brief_done = fsutil.read_json(st_path, {}).get("brief_date") == today
         _step(out, "spot", lambda: spot.step(out, bridge, now=now, brief_done=brief_done, real=real, send=send), r)

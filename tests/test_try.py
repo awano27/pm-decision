@@ -252,7 +252,7 @@ class TestTryReachesNothing(unittest.TestCase):
         from kimeru import tryout as t
         with a_machine_with_everything_on(self.root):
             self.assertEqual(run("try")[0], 0)
-            self.assertEqual(run("--backend", "stub", "--out", "out/try", "demo", "--pace", "0")[0], 0)
+            self.assertEqual(run("--backend", "stub", "--out", "out/try", "demo", "--pace", "0", "--fresh")[0], 0)
         self.assertFalse((self.root / "out" / "try" / t.TRY_MARK).exists())
 
     def test_without_the_data_folders_it_says_where_to_run_in_one_line(self):

@@ -48,7 +48,7 @@ SETTINGS = {
     "cycle_budget_sec": ("KIMERU_CYCLE_BUDGET", ""),          # empty = the interval between cycles
     "plan_lean": ("KIMERU_PLAN_LEAN", "0"),                    # 1 = skip the deadline of a step judged unneeded (fewer calls; measure with Kev before turning on)
     "batch_questions": ("KIMERU_BATCH", "0"),                  # 1 = ask a graph's judge questions in one call
-    "execute": ("KIMERU_EXECUTE", ""),                         # kinds carried out after approval (implemented: ado.comment; teams.reply = sent by `送る N` only, S2)
+    "execute": ("KIMERU_EXECUTE", ""),                         # kinds carried out after approval (implemented: ado.comment, ado.update; teams.reply = sent by `送る N` only, S2)
     "execute_signature": ("KIMERU_EXECUTE_SIGNATURE", "1"),    # 0 = no signature line under an ADO comment
     "send_ready_post": ("KIMERU_SEND_READY", "1"),             # a reply is approved -> its text alone comes back to the self chat
     "open_chat_link": ("KIMERU_OPEN_CHAT_LINK", "0"),          # experimental: a link that opens the other person's chat

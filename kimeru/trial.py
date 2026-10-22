@@ -162,8 +162,8 @@ def collect(out, share=False, now=None):
     paired_cases = {r["case"] for r in rows if isinstance(r.get("before_minutes"), (int, float))}
     drafts = {k: sum(r.get("draft") == k for r in rows) for k in ("unchanged", "edited", "unused")}
     outcomes = {k: sum(r.get("outcome") == k for r in rows) for k in ("correct", "wrong", "unknown")}
-    challenges = onboarding._read(out).get("challenges", [])
-    receipt_count = sum(bool(c.get("receipt_confirmed")) for c in challenges)
+    receipts = onboarding.summary(out)
+    receipt_count = receipts["confirmed"]
     work = _work_evidence(out)
     if work is None:
         handoff = "Unknown (handoff evidence unavailable)"
@@ -188,6 +188,9 @@ def collect(out, share=False, now=None):
             "effect": "inconclusive" if len(paired_cases) < 5 else "observed",
             "approval_count": approved, "approval_to_handoff": handoff,
             "work_completion": completion, "notification_receipts": receipt_count,
+            "receipt_routes": {name: {"accepted": r["accepted"], "confirmed": r["confirmed"], "phone_confirmed": r["phone_confirmed"]}
+                               for name, r in receipts["routes"].items()},
+            "device_verification": receipts["device_state"],
             "measurement": measurement_collect(out, rows, share=share, now=now)}
 
 
@@ -427,6 +430,14 @@ def render(data, share=False):
     lines.append(f"notification receipt: {data['notification_receipts']} challenge confirmations (each confirms at least 1 route)")
     if data.get("measurement"):
         lines.extend(measurement_lines(data["measurement"]))
+
+    for name, r in sorted(data.get("receipt_routes", {}).items()):
+        if name == onboarding.UNKNOWN_ROUTE:
+            lines.append(f"  route unknown (older record): {r['confirmed']} confirmations, not counted for any route")
+        else:
+            lines.append(f"  route {name}: send accepted {r['accepted']} / person confirmed {r['confirmed']} / on phone {r['phone_confirmed']}")
+    lines.append("real-device verification: " + data.get("device_verification", onboarding.NOT_RUN)
+                 + " (NOT_RUN until a person confirms a route's own challenge on the phone; accepted sends do not count)")
     return "\n".join(lines)
 
 

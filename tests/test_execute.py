@@ -114,7 +114,7 @@ class Base(unittest.TestCase):
         config.apply([])
         self.calls = []
         # nothing in these tests may reach a network: any real HTTP call is a test failure
-        self.net = mock.patch("urllib.request.urlopen", side_effect=AssertionError("a real HTTP call was attempted"))
+        self.net = mock.patch("urllib.request.OpenerDirector.open", side_effect=AssertionError("a real HTTP call was attempted"))
         self.net.start()
 
     def tearDown(self):
@@ -320,15 +320,15 @@ class TestSecretsStayOut(Base):
 
 class TestOtherKinds(Base):
     def test_an_unsupported_kind_is_reported_and_stays_record_only(self):
-        os.environ["KIMERU_EXECUTE"] = "ado.update"   # teams.reply is implemented since S2 (tests/test_execute_teams_reply.py)
+        os.environ["KIMERU_EXECUTE"] = "oncall.page"
         config.apply([])
         self.assertEqual(execute.enabled_types(), set())
-        self.assertEqual(execute.unsupported(), ["ado.update"])
+        self.assertEqual(execute.unsupported(), ["oncall.page"])
         from contextlib import redirect_stdout
         import io
         buf = io.StringIO()
         with redirect_stdout(buf):
-            cli.main(["config", "set", "execute", "ado.update"])
+            cli.main(["config", "set", "execute", "oncall.page"])
         self.assertIn("未対応", buf.getvalue())
         bridge = self.decide_and_post()
         self.approve(bridge)

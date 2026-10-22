@@ -38,7 +38,7 @@
 
 この表の出力は、`try` と `demo`（簡易判定）で確かめたものです。足りない情報・選択肢・返信案の文面は、文章生成 AI（writer）を設定したときに相談の文面から書かれます。未設定なら、進め方の案と定型の返信文だけです。ADO のチケットや会議後の宿題などの利用例は [使い方の詳細](docs/usage.md#-利用例とできること) にあります。
 
----
+2026-10-15 に公開 main と v1.1.0 のソース ZIP を取得し、Python 3.11・追加パッケージなし・通信を禁止した環境で、9 件のデモ、1 件のサンプル、HTML 生成、作業一覧、要件案の Markdown / JSON 保存を確認しました。Teams・ADO・実モデルとの連携や、すべての Windows PC での動作を確認した結果ではありません。
 
 ## 🖼 実際の画面
 
@@ -77,7 +77,7 @@ Git が無ければ [Code → Download ZIP](https://github.com/awano27/pm-decisi
 
 > ルートにあるほかの .cmd ファイルは体験用ではありません。START.cmd と run-check.cmd は管理された PC での実機確認用で、Teams の起動や、確認を尋ねたうえでの自分とのチャットへの投稿・Azure のサインインを行います。run-auto-check.cmd は送信もサインインもしませんが、動いている Teams の画面を読みます。build-kev-bundle.cmd は開発 PC で Kev の持ち込み用フォルダを作ります（約 10GB を取得する前に確認します）。体験に使うのは try.cmd だけです。
 
-> **体験モードの約束**: この PC にある kimeru の設定ファイル・環境変数の設定・API キーは、体験の処理には使いません（終わると元に戻します）。AI モデル・外部 CLI・Teams・Azure DevOps には接続しません。Teams は模擬、判断は簡易判定、文面は台本に固定したうえで、処理中は Python からのプロセスの起動（`subprocess`・`os.system` など）とネットワーク接続（`socket`）を止めています。書き込むのは `out\try` と、終わると消す一時フォルダだけです。通常の記録フォルダ（`out` など）には書かず、記録を書くほかのコマンド（`run`・`daily`・`work` など）は `out\try` では止まります（`report` は体験のページを作り直し、`demo` はデモのフォルダに戻します。[回帰テスト](tests/test_try.py)・[しくみ](docs/design.md#7-体験モードpython--m-kimeru-tryの隔離)）。
+> **体験モードの約束**: この PC にある kimeru の設定ファイル・環境変数の設定・API キーは、体験の処理には使いません（終わると元に戻します）。AI モデル・外部 CLI・Teams・Azure DevOps には接続しません。Teams は模擬、判断は簡易判定、文面は台本に固定したうえで、処理中は Python からのプロセスの起動（`subprocess`・`os.system` など）とネットワーク接続（`socket`）を止めています。書き込むのは `out\try` と、終わると消す一時フォルダだけです。通常の記録フォルダ（`out` など）には書かず、記録を書くほかのコマンド（`run`・`daily`・`work` など）は `out\try` では止まります（`report` は体験のページを作り直し、`demo --fresh` は既知の記録を退避してデモのフォルダに戻します。[回帰テスト](tests/test_try.py)・[しくみ](docs/design.md#7-体験モードpython--m-kimeru-tryの隔離)）。
 
 **目安の時間**: Python があれば 3 分以内を目標にしています。作者の環境での実測は、clone が 1.7〜1.8 秒、`try` が 1.0〜1.7 秒でした（回線と PC で変わります。初めての人が README を読み始めてから結果を見るまでの時間は、まだ測っていません。[計測の記録](docs/try-verification.md)）。最後に `out\try\report.html` の場所が出るので、ブラウザで開きます。
 
@@ -101,6 +101,8 @@ Teams・アラート・ADO・議事録の 9 件を、規則と簡易判定で順
 ```powershell
 python -m kimeru --backend stub --out out/demo demo --pace 0
 ```
+
+`demo` は非空の出力先では、モデルの準備や記録の変更前に止まります。繰り返すときは新しい `--out` を指定してください。明示的な `--fresh` は既知の記録ファイルだけを `before-demo-<日時>` へ退避します。再生（`--replay`）も空の出力先を使います。
 
 `demo` の最後に、こう出ます。
 
@@ -155,12 +157,12 @@ flowchart TD
 | 規則を判断モデルの前に置く | 障害のような見逃せない件を、モデルの答えに左右させない | [graph.py](kimeru/graph.py) の `severe_hit`・`guard_hit` / [test_severe_guards.py](tests/test_severe_guards.py) |
 | 判断モデルは文章を書かず、型付きの答え（はい/いいえ・選択肢・段階）だけ返す | 経路をしきい値で決め、迷ったら人へ回すか、害の少ない行動で決められる | [graph.py](kimeru/graph.py) の `route` / [test_kimeru.py](tests/test_kimeru.py) の `test_low_confidence_choice_goes_to_human` |
 | 文章は writer が書き、承認まで外に出ない | 生成文の誤り・作り話を人が止められる | [cli.py](kimeru/cli.py) の `_draft` / [test_writer.py](tests/test_writer.py) |
-| 承認と実行を分ける | OK は記録だけ。実行は設定で有効にした種類だけで、ADO コメントは OK のあとの `--send` の実行で、相手への返信はさらに `送る N` で 1 回 | [execute.py](kimeru/execute.py) / [test_execute_safety.py](tests/test_execute_safety.py) |
+| 承認と実行を分ける | OK は記録だけ。実行は設定で有効にした種類だけで、ADO コメント・承認した優先度変更は OK のあとの `--send` の実行で、相手への返信はさらに `送る N` で 1 回 | [execute.py](kimeru/execute.py) / [test_execute_safety.py](tests/test_execute_safety.py) |
 | 結果不明の送信は自動で送り直さない | 二重送信より「本人が確認する」を選ぶ | [notify.py](kimeru/notify.py) の `_delivery_unknown` / [test_delivery_attempts.py](tests/test_delivery_attempts.py) |
 
 詳しい説明・図・未実装の課題は [設計と安全のしくみ](docs/design.md) にあります。
 
-**データの行き先（要点）**: 既定では判断はこの PC の中で行い、記録は `--out` のフォルダに残ります（判断の記録に残る元のメッセージは 120 文字まで。取り込んだ原本の全文は `daily` が 7 日で削除）。PC の外へ出るのは次のときだけです: Jev（TypeSafe のクラウド）を選んだとき、writer を設定したとき、Kev のリモート接続を明示許可したとき、スマホ通知（件数と番号だけ）を設定したとき、`--send` で自分とのチャットへ投稿するとき、ADO コメントの実行を有効にして承認したとき、相手への返信の実行を有効にして承認したあと `送る N` と返したとき。詳細は [使い方の詳細](docs/usage.md#-データの行き先) と [SECURITY.md](SECURITY.md)。
+**データの行き先（要点）**: 既定では判断はこの PC の中で行い、記録は `--out` のフォルダに残ります（判断の記録に残る元のメッセージは 120 文字まで。取り込んだ原本の全文は `daily` が 7 日で削除）。PC の外へ出るのは次のときだけです: Jev（TypeSafe のクラウド）を選んだとき、writer を設定したとき、Kev のリモート接続を明示許可したとき、スマホ通知（件数と番号だけ）を設定したとき、`--send` で自分とのチャットへ投稿するとき、ADO コメントまたは優先度変更の実行を有効にして承認したとき、相手への返信の実行を有効にして承認したあと `送る N` と返したとき。詳細は [使い方の詳細](docs/usage.md#-データの行き先) と [SECURITY.md](SECURITY.md)。
 
 Kev をこの PC で動かす場合の準備は [Kev の持ち込み用フォルダ](docs/kev-bundle.md) にあります。開発 PC では `build-kev-bundle.cmd` で作れます（前提は git と uv、ネットにつながる PC。Kev のメモリは bf16 で約 10GB、fp32 で約 14GB。bf16・fp32 は計算の精度で、fp32 のほうがメモリを使います）。
 
@@ -183,10 +185,18 @@ Kev をこの PC で動かす場合の準備は [Kev の持ち込み用フォル
 |---|---|
 | ✅ **実装済み** | 4 種類の入力の判断 / 手順・返信案 / 承認・修正・保留 / 作業進捗 / 要件ドラフト / HTML レポート。モデルなしの体験とデモで流れを試せる |
 | 🖥 **作者の環境で確認済み**（あなたの環境では未確認） | Teams のチャット一覧の読み取りと自分とのチャットの読み書き / 承認の流れ（OK・NG・修正・二重処理の防止）/ Kev と Jev による判断 / Copilot による下書き / ADO の取り込み / PC の通知 / `m365`（手動貼り付け）（[動作確認の状況](docs/evaluation.md#動作確認の状況)） |
-| 🔬 **テストのみ、または作者の環境での確認記録が無い** | 監視アラートの取り込み / Claude・Grok の下書き / 相手への返信の送信（`送る N`）/ スマホへの通知 / ADO コメントの実行 / 全文読み取り（`read_full`）/ 定期実行 / `停止`・`再開`・`休み` / 約束・返事待ち・前例・差分の朝まとめなどの opt-in 機能（どれも既定では無効） |
+| 🔬 **テストのみ、または作者の環境での確認記録が無い** | 監視アラートの取り込み / Claude・Grok の下書き / 相手への返信の送信（`送る N`）/ スマホへの通知 / ADO コメント・優先度変更の実行 / 全文読み取り（`read_full`）/ 定期実行 / `停止`・`再開`・`休み` / 約束・返事待ち・前例・差分の朝まとめなどの opt-in 機能（どれも既定では無効） |
 | 🧪 **実験的** | `m365-auto`（Teams 内の Microsoft 365 Copilot の画面操作。画面の作りに依存し、失敗すると 30 分休んで手動の依頼文に切り替わる） |
 | ⛔ **現在は使えない** | Codex による AI 下書き。選んでも定型文にフォールバックする |
 | ⏳ **これから** | 開発に使っていないデータでの評価 / 実データでの評価 / 初めての人による体験の確認 / スマホへの通知の実機確認 / `m365-auto` を複数環境で確認して実験的から外す |
+
+今回の統合では、上の実モデルの成績や作者の環境での過去の確認を再実施した結果として扱いません。実データ評価・スマホ受信・Teams 操作性・複数環境の `m365-auto` 確認は **NOT_RUN** です。実装と隔離したローカル検証の記録は [統合作業の計画](docs/tasks/integration-2026-10-23/PLAN.md) に分けて記録します。
+
+- **自動運転は、Teams の画面切り替えの問題を実機で確認するまで使わないでください。** 通常の承認読み取りは操作前の画面を保存し、利用者操作・復帰失敗・ロック競合を検出した回は延期します。延期を「返信なし」や承認として扱いません。合成 UI の成功だけで、この注意は外しません。
+- **実データ評価の準備**: 既存の `review` が保存する `fixtures_user.jsonl` から、`dataset anonymize` → 人の内容確認 → `mark-reviewed` → `split` / `check` へ進めます。匿名化候補は元ファイルを変更せずに作り、秘密や固有情報が残り得るため自動で匿名化済みとは保証しません。調整用・評価用の分割と来歴を記録します（[評価の手順](docs/evaluation.md)、[評価入力と採点](eval/README.md)）。Jev の評価結果の非公開・共有制限は継続します。
+- **スマホの実機確認**: 通知経路の受理と端末での受信を分け、経路ごとの challenge を本人が確認します。`onboarding device-check` で日時・経路・受信確認・未確認範囲を確認でき、旧形式の経路不明な確認を全経路の成功とは扱いません（[通知の手順](docs/push-notification.md)）。
+- **`m365-auto` は実験的のままです。** 入力先・フォーカス・本文一致・送信先が一意であることを確認し、失敗後 30 分の休止と手動 `m365` への切り替えを維持します。合成 UI と実際の複数環境の結果を分けます。
+- **外部実行は種類ごとの opt-in**: 公開 main の `teams.reply` / `送る N` を維持し、今回追加する `ado.update` は承認済みの優先度（1〜4）変更だけです。対象・値・改訂が変われば再承認し、結果不明は成功にせず自動再送しません。優先度を変更しても案件全体の作業完了にはなりません（[ADO 優先度変更](docs/execute-ado-update.md)）。
 
 **向いている使い方**: Windows 10/11 と Teams で働く PM・リーダーが、決める前に材料と選択肢を並べてほしいとき。管理者権限は要りません。
 
@@ -206,7 +216,7 @@ Kev をこの PC で動かす場合の準備は [Kev の持ち込み用フォル
 | コマンド・設定・入力形式・グラフを書く | [リファレンス](docs/reference.md) |
 | 判断モデルを持ち込む | [Kev の持ち込み用フォルダ](docs/kev-bundle.md) |
 | 下書き用の LLM を選ぶ | [writer](docs/writers.md) |
-| スマホ通知・ADO コメントを有効にする | [push 通知](docs/push-notification.md) / [ADO コメント](docs/execute-ado-comment.md) |
+| スマホ通知・ADO 実行を有効にする | [push 通知](docs/push-notification.md) / [ADO コメント](docs/execute-ado-comment.md) / [優先度変更](docs/execute-ado-update.md) |
 | 承認した返信を相手に送る（`送る N`）を有効にする | [相手への返信の送信](docs/execute-teams-reply.md) |
 | 要件ドラフトを作る・議事録を取り込む | [要件ドラフト](docs/requirements.md) / [議事録の形式](docs/minutes-format.md) |
 | 精度・評価データの来歴・動作確認 | [評価と既知の課題](docs/evaluation.md) / [eval/README.md](eval/README.md) |

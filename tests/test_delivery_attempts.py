@@ -100,7 +100,7 @@ class TestDurableDeliveryAttempts(unittest.TestCase):
     def test_recovery_shows_attempted_revision_body_after_case_is_revised(self):
         with tempfile.TemporaryDirectory() as directory:
             record = {**REC, "event": {"kind": "teams.chat", "id": "old", "chat_id": "chat-1",
-                                       "author": "A", "text": "old body"}}
+                                       "author": "A", "text": "old body"}, "event_id": "old"}
             write_queue(directory, record)
 
             class Interrupt:
@@ -114,7 +114,7 @@ class TestDurableDeliveryAttempts(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt):
                 notify.notify(directory, Interrupt(), send=True)
             new_event = {"kind": "teams.chat", "id": "new", "chat_id": "chat-1", "author": "A",
-                         "text": "follow-up"}
+                         "text": "follow-up", "supersedes_event_id": "old"}
             new_result = {"graph": "g", "event_id": "new", "node": "n", "outcome": "decide",
                           "needs_human": False, "event": new_event,
                           "advice": "new current decision", "actions": [{"type": "log.only"}]}

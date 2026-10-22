@@ -24,7 +24,7 @@ OK = "2026-01-01T00:01:10+00:00"
 def record(source="local"):
     return {"graph": "g", "event_id": "e", "node": "n", "event_kind": "teams.chat",
             "outcome": "advise", "needs_human": True, "advice": "review", "path": [],
-            "summary": "PRIVATE_MESSAGE", "event": {"kind": "teams.chat", "chat_id": "chat", "author": "A"},
+            "summary": "PRIVATE_MESSAGE", "event": {"kind": "teams.chat", "id": "e", "chat_id": "chat", "author": "A"},
             "actions": [{"type": "teams.reply", "text": "確認します。"}],
             "measurement": {"schema": 1, "source": source, "generation": 1, "ready_at": READY},
             "judge": {"name": "Kev"}, "at": READY}
@@ -96,6 +96,7 @@ class MeasurementTests(unittest.TestCase):
         self.post()
         result = record()
         result["event_id"] = "new"
+        result["event"].update(id="new", supersedes_event_id="e")
         with mock.patch("kimeru.notify.measurement_now", return_value=OK, create=True):
             self.assertTrue(cli._merge_locked(self.out, result["event"], result, notify))
         item = notify.Approvals(self.out).data["items"]["1"]
@@ -110,7 +111,7 @@ class MeasurementTests(unittest.TestCase):
                "notify": False, "advice": "", "actions": [{"type": "log.only"}],
                "path": [{"node": "critical_incident", "answer": {}, "edge": "no"},
                         {"node": "ack_only", "answer": {}, "edge": "yes"}],
-               "event": {"kind": "teams.chat", "id": "ack", "chat_id": "chat", "author": "A", "text": "ありがとうございます"}}
+               "event": {"kind": "teams.chat", "id": "ack", "chat_id": "chat", "author": "A", "text": "ありがとうございます", "supersedes_event_id": "e"}}
         self.assertTrue(cli._merge_locked(self.out, ack["event"], ack, notify))
         item = notify.Approvals(self.out).data["items"]["1"]
         self.assertEqual(item["measurement"], before)
@@ -201,6 +202,7 @@ class MeasurementTests(unittest.TestCase):
         ap.save()
         result = record()
         result["event_id"] = "new"
+        result["event"].update(id="new", supersedes_event_id="e")
         self.assertTrue(cli._merge_locked(self.out, result["event"], result, notify))
         notify.confirm_delivery(self.out, "case", "1", confirm_delivered=True)
         item = notify.Approvals(self.out).data["items"]["1"]
@@ -353,7 +355,7 @@ class MeasurementTests(unittest.TestCase):
         books = plan.load_playbooks(ROOT / "playbooks")
         graphs = graph.load_dir(ROOT / "graphs", books)
         # self.out holds a real record: the demo must refuse it, and writes to a folder of its own
-        with redirect_stdout(io.StringIO()), self.assertRaises(demo.RecordsInTheWay):
+        with redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, "empty --out"):
             demo.run(ROOT / "examples" / "demo_day.json", graphs, StubBackend(), books, cli.process, self.out, pace=0)
         self.assertEqual(json.loads((self.out / "decisions.jsonl").read_text(encoding="utf-8")), self.rec)
         out = self.out / "demo"
@@ -416,6 +418,7 @@ class ArrivalMeasurementTests(unittest.TestCase):
         self.post()
         result = record()
         result["event_id"] = "new"
+        result["event"].update(id="new", supersedes_event_id="e")
         result["measurement"].update({"arrived_at": "2026-01-02T00:00:00+00:00", "arrival_source": "observed", "arrival_window_s": 300})
         with mock.patch("kimeru.notify.measurement_now", return_value=OK, create=True):
             self.assertTrue(cli._merge_locked(self.out, result["event"], result, notify))

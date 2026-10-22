@@ -233,8 +233,15 @@ class Cycles(unittest.TestCase):
         self.shown.append((title, body))
         return "shown"
 
-    def cycle(self, h, m=0, toast=True):
-        return daily.cycle(self.out, self.inbox, GRAPHS, StubBackend(), PBS, process, bridge=self.t, send=True,
+    def cycle(self, h, m=0, toast=True, replace_case=None):
+        # Supply an explicit link at the normalized-input boundary only for the intended correction.
+        def process_input(payload, *args, **kwargs):
+            if replace_case is not None:
+                record = read_json_file(self.out / "approvals.json")["items"][str(replace_case)]["record"]
+                if payload.get("kind") == "teams.chat" and payload.get("chat_id") == record["event"]["chat_id"]:
+                    payload = {**payload, "supersedes_event_id": record["event_id"]}
+            return process(payload, *args, **kwargs)
+        return daily.cycle(self.out, self.inbox, GRAPHS, StubBackend(), PBS, process_input, bridge=self.t, send=True,
                            now=datetime(2026, 9, 28, h, m), toaster=self.toaster if toast else None)
 
     def chat(self, preview, time):
@@ -1197,7 +1204,7 @@ class TestChaseGoldenAndCycles(Cycles):
         self.cycle(10, 59)
         self.assertEqual((self.shown, self.sent), ([], []))
         self.screen(("まだですか", "10:58", "田中", CHAT_A), ("これは何ですか", "10:59", "田中", CHAT_B))
-        return self.cycle(11, 0)
+        return self.cycle(11, 0, replace_case="1")
 
     def test_after_a_chase_no_text_of_the_cycle_or_the_week_digest_carries_the_senders_name(self):
         self.two_held_questions_then_a_chase()
@@ -1284,9 +1291,9 @@ class TestChaseGoldenAndCycles(Cycles):
         self.screen(("これは何ですか", "10:15", "田中", CHAT_A))
         self.cycle(10, 20)
         self.screen(("資料を追加しました", "10:21", "田中", CHAT_A))
-        self.cycle(10, 25)
+        self.cycle(10, 25, replace_case="1")
         self.screen(("修正版です", "10:26", "田中", CHAT_A))
-        self.cycle(10, 30)
+        self.cycle(10, 30, replace_case="1")
         self.assertEqual(read_json_file(self.out / "approvals.json")["items"]["1"]["revision"], 3)   # both follow-ups merged into item 1
         self.assertFalse((self.out / "attention.json").exists())
         self.assertEqual(attention.senders(self.out), set())
@@ -1403,7 +1410,7 @@ class TestThePromotionPathInDailyCycles(Cycles):
         self.shown.clear()
         self.sent.clear()
         self.screen(("まだですか", "10:40", "田中", CHAT_A))
-        self.cycle(10, 45)                                                                     # the judge merges the chase into item 1
+        self.cycle(10, 45, replace_case="1")                                                   # the judge merges the chase into item 1
         item = self.approvals()["items"]["1"]
         self.assertEqual(item["revision"], 2)
         self.assertTrue(any("まだですか" in str(r.get("text")) for r in item["record"]["followups"]))
@@ -1440,7 +1447,7 @@ class TestThePromotionPathInDailyCycles(Cycles):
         self.screen(("これは何ですか", "10:15", "田中", CHAT_A))
         self.cycle(10, 20)
         self.screen(("資料を追加しました", "10:21", "田中", CHAT_A))
-        self.cycle(10, 25)
+        self.cycle(10, 25, replace_case="1")
         self.assertEqual(self.approvals()["items"]["1"]["revision"], 2)
         self.assertEqual(self.shown, [("kimeru: 確認待ち 1 件", "#1")])     # a follow-up is announced at once, as before R37
         self.assertFalse((self.out / "attention.json").exists())          # but two quick lines are no chase: nobody is listed

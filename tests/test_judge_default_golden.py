@@ -1,7 +1,7 @@
 """R22 golden: with judge_context at its default (0) a local judge is asked the same questions with the same state, and the
 judgments, the decisions.jsonl rows and processed.txt are the same as before the setting existed. The digest below was taken
 from the code before R22 (a HEAD export); a change that alters the default path changes it. Only the clock-dependent fields
-(`at`, `measurement`, `perf`) are left out. No network: the judge is the real Kev class answering from the stub's keywords."""
+(`at`, `measurement`, `perf`) are left out. New provenance fields are checked separately and removed only for the legacy digest. No network: the judge is the real Kev class answering from the stub's keywords."""
 try:   # isolation from the real state folder, whichever way the tests are started
     from . import isolate  # noqa: F401
 except ImportError:
@@ -67,6 +67,13 @@ def scenario_digest():
                    "results": [[{k: v for k, v in r.items() if k not in CLOCK} for r in rs] for rs in results],
                    "decisions": rows,
                    "processed": (out / "processed.txt").read_text(encoding="utf-8")}
+    # Keep the pre-R22 golden unchanged; prove that only added provenance differs from that record format.
+    for result in [r for rs in payload["results"] for r in rs] + payload["decisions"]:
+        if "graph" in result:
+            assert result.pop("calibration_key").startswith("v1:")
+            model = result.get("judge", {}).get("model")
+            if model:
+                assert result["judge"].pop("model_key") == hashlib.sha256(model.encode("utf-8")).hexdigest()
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

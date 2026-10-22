@@ -182,10 +182,14 @@ def _score(answers_path, profile, fx_path):
             c[2] += edge == "unsure"
             if not ok:
                 misses.append(f"{fx['id']:<11} {key:<34} want={exp} got={detail} edge={edge}")
+    total = sum(c[1] for c in per_node.values())
+    if not total:   # nothing scored is not 0% correct
+        print("NO_INPUT: no labeled model question has a current answer; no accuracy is shown"
+              + (f" (not scored: {len(skipped)})" if skipped else ""))
+        return
     print("node                                   ok/n  unsure")
     for k, (ok, n, un) in sorted(per_node.items()):
         print(f"{k:<38} {ok}/{n}   {un}")
-    total = sum(c[1] for c in per_node.values())
     print(f"\nscored {total} labeled model questions; not scored (no current answer): {len(skipped)}"
           + (f" -> {', '.join(skipped[:10])}{' ...' if len(skipped) > 10 else ''}" if skipped else ""))
     print(f"\nmisses ({len(misses)}):")

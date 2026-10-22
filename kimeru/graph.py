@@ -34,6 +34,7 @@ A graph may set "severe": {"field", "pattern", "exempt": [node ids]}. When the e
 severity Sev0/Sev1), every outcome outside `exempt` reaches the PM: a decide is notified, an advise is queued,
 whichever path the model's answers took.
 """
+import copy
 import hashlib
 import json
 import re
@@ -44,6 +45,22 @@ from .backends import BackendAnswerError
 
 TERMINALS = ("decide", "advise")
 MAX_STEPS = 32
+
+
+def calibration_key(g, playbooks=None):
+    """Fingerprint the meaning of a graph, excluding only its routing thresholds."""
+    semantic = copy.deepcopy(g)
+    has_plan = False
+    for node in (semantic.get("nodes") or {}).values():
+        if node.get("kind") == "plan":
+            has_plan = True
+        for key in ("min_conf", "yes_at", "no_at", "first_min_conf", "due_min_conf"):
+            node.pop(key, None)
+    payload = {"graph": semantic}
+    if has_plan:
+        payload["playbooks"] = playbooks
+    encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return "v1:" + hashlib.sha256(encoded).hexdigest()
 
 
 class GraphError(ValueError):
@@ -710,8 +727,16 @@ def _plan_answers(ans):
 
 
 def load_dir(d, playbooks=None):
+    directory = Path(d)
+    if not directory.exists():
+        raise GraphError(f"graph directory does not exist: {directory}")
+    if not directory.is_dir():
+        raise GraphError(f"graph path is not a directory: {directory}")
     graphs = {}
-    for p in sorted(Path(d).glob("*.json")):
+    paths = sorted(directory.glob("*.json"))
+    if not paths:
+        raise GraphError(f"no graph JSON files found in: {directory}")
+    for p in paths:
         g = json.loads(p.read_text(encoding="utf-8"))
         validate(g, playbooks)
         graphs.setdefault(g["event"], []).append(g)

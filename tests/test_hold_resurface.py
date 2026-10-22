@@ -139,7 +139,8 @@ class TestTheHoldFollowsTheReplies(unittest.TestCase):
         ap.data["items"]["1"]["record"]["event"] = {"kind": "teams.chat", "id": "c1", "chat_id": "chat-1", "author": "A"}
         ap.save()
         before = item(self.out)
-        ev = {"kind": "teams.chat", "id": "c2", "chat_id": "chat-1", "author": "A", "text": "続きの依頼"}
+        ev = {"kind": "teams.chat", "id": "c2", "chat_id": "chat-1", "author": "A", "text": "続きの依頼",
+              "supersedes_event_id": before["record"]["event_id"]}
         res = {"graph": "workitem-intake", "event_id": "c2", "node": "triage_pm", "outcome": "advise", "needs_human": True,
                "advice": "続きの判断", "event": ev, "actions": []}
         self.assertTrue(cli._merge_locked(self.out, ev, res, notify, source_event=ev))   # the followup joins the held item

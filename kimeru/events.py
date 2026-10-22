@@ -151,6 +151,8 @@ def ado_workitem_created(p):
         "origin": p.get("kimeru_origin") if isinstance(p.get("kimeru_origin"), dict) else None,
         # only a Test Case has steps; for any other item the key is absent (the judge sees no extra empty field)
         **({"test_steps": steps} if (steps := _test_steps(f.get("Microsoft.VSTS.TCM.Steps"))) else {}),
+        # the work item's revision when it was pulled: an approved ado.update writes only while ADO still has this revision
+        **({"rev": r["rev"]} if type(r.get("rev")) is int else {}),
     }]
 
 
@@ -248,7 +250,7 @@ def summary(event, limit=120):
     return s if len(s) <= limit else s[:limit - 1] + "…"
 
 
-JUDGE_HIDDEN = ("raw", "thread", "full", "chat_title", "origin", "_kimeru")   # origin: where `pull ado` took it from (execute.py), not for the judge;
+JUDGE_HIDDEN = ("raw", "thread", "full", "chat_title", "origin", "rev", "_kimeru")   # origin: where `pull ado` took it from (execute.py), not for the judge;
 # _kimeru: when the PC saw the event (pull.arrival_of), a measurement that the judge never reads
 
 

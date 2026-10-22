@@ -625,7 +625,7 @@ class TestTheApprovalsCommand(Safety):
         with mock.patch.object(notify, "PowerShellBridge") as pb, mock.patch.object(notify, "collect", return_value=[]) as col:
             self.assertEqual(cli.main(["--out", str(self.out), "approvals"]), 0)
             self.assertEqual(cli.main(["--out", str(self.out), "approvals", "--send"]), 0)
-        self.assertEqual([c.kwargs for c in col.call_args_list], [{"real": False, "send": False}, {"real": True, "send": True}])
+        self.assertEqual([c.kwargs for c in col.call_args_list], [{"real": False, "send": False, "interactive": True}, {"real": True, "send": True, "interactive": True}])
 
 
 class TestAVerdictIsNotAnApproval(Safety):

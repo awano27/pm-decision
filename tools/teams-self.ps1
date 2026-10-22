@@ -21,6 +21,11 @@
   read                 -> JSON {posts:[...], replies:[...]} extracted from the self chat only:
                           posts   = ids N of "[kimeru #N]" posts (no other text)
                           replies = "OK 3" / "NG 3" / "保留 3" style lines
+                          screen  = {restore, returned, foreground}: what was operated and whether it was put back.
+                          Unattended by default: reads without operating when the self chat is already open; otherwise opens it
+                          only by UI Automation patterns (no keys, no clicks, no link), while the person is away from Teams, and
+                          puts the chat that was open back. Anything unsafe -> {ok:false, deferred:true, reason:<fixed code>}.
+                          -Interactive: the person ran it; the self chat is opened the earlier way and left open.
   testreply -Text <s> -Numbers <n[,n]>
                        -> a check run's short reply ("OK 529", "停止"...) typed into the SELF chat only. The same self-chat
                           checks as post + send (48:notes, an empty compose box, the idle wait, the readback), but the text
@@ -47,6 +52,7 @@ param(
   [int]$PriorCount = 0,
   [string]$Preview = '',     # readchat: the start of the chat's list preview (a screen that reports no selection is checked against it)
   [switch]$Send,
+  [switch]$Interactive,      # read: the person ran the command and expects the self chat to open (the earlier way; nothing is put back)
   [string]$SelfMarker = $env:KIMERU_SELF_MARKER   # e.g. "自分" if your Teams shows another word
 )
 $ErrorActionPreference = 'Stop'
@@ -747,6 +753,7 @@ if ($Action -eq 'test-container') {
   $snapshot = Get-Content -Raw -Encoding UTF8 -LiteralPath $TestRows | ConvertFrom-Json
   Out-Json @{ identity = (Select-MessageContainerId $snapshot.ancestors ([string]$snapshot.fallback)) }; exit 0
 }
+$SafeRead = ($Action -eq 'read' -and -not $Interactive)   # the unattended approval read (the daily cycle): see Start-SafeRead
 if ($Action -eq 'testreply') {
   # before anything touches Teams: the text is on the whitelist, has no line break or backslash, and its number is one this run just posted
   if ($TextFile) { $Text = [IO.File]::ReadAllText($TextFile, (New-Object Text.UTF8Encoding $false)) }
@@ -761,7 +768,7 @@ if ($Action -eq 'testreply') {
   $script:ReplyText = $Text
   $Send = [switch]$true
 }
-if ($Action -in 'open', 'post', 'send', 'testreply', 'read', 'readchat') { Enter-UiLock $(if ($Action -eq 'readchat') { 60000 } else { 180000 }) }
+if ($Action -in 'open', 'post', 'send', 'testreply', 'read', 'readchat' -and -not $SafeRead) { Enter-UiLock $(if ($Action -eq 'readchat') { 60000 } else { 180000 }) }
 if ($Action -eq 'sendto') { Enter-UiLock 180000 }   # S2: one Teams operation at a time, as the others
 if ($Action -eq 'probe') { Enter-UiLock 180000 }   # the read the approvals step makes: one Teams operation at a time
 if ($Action -in 'post', 'send', 'testreply') { Wait-UserIdle 3 60 }   # writing moves the screen: not while the person works. readchat does not wait: it checks and postpones
@@ -963,9 +970,172 @@ if ($Action -eq 'learn') {
 # N2: teams = the window (kept as it was); teams_process = a ms-teams process runs; teams_window = its window is on screen to read
 # N5: self_open = the self chat is open now (the same test as selfChatOpen); the automatic check reads it before T3 and opens nothing
 if ($Action -eq 'status') { $so = [bool](Test-SelfOpen $w); Out-Json @{ ok = $true; teams = [bool]$w; teams_process = [bool](@(Get-TeamsPids).Count); teams_window = [bool]$w; selfChatOpen = $so; self_open = $so }; exit 0 }
-if (-not $w) { Fail 'Teams window not found' }
-$w = Open-SelfChat $w
-Ensure-Learned $w
+# ---- the unattended approval read: never in the person's way ----
+# Before: the person has been away from the keyboard / mouse, Teams is not in front, no Teams input box has the focus, and the chat
+# list is on screen. Opening: only the self chat's own entry (48:notes) by UI Automation patterns: no keys, no clicks, no link, so
+# Teams is not brought to the front. After reading: the chat that was open is put back, but only while the screen is still the one
+# kimeru left and the person has not touched the keyboard / mouse since kimeru began (their own choice is never undone).
+# Every stop has a fixed reason (no chat text): the caller tells "postponed" apart from "read, no replies".
+$script:ReadCtx = $null
+function Test-SelfHeader($w) {
+  # newer Teams builds keep "チャット | Microsoft Teams" as the window title whatever chat is open; the header of the open chat
+  # carries the chat id instead: "chat-header-48:notes" is the self chat's fixed id, which no colleague's chat has
+  if (-not $w) { return $false }
+  $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'chat-header-48:notes')
+  $h = $w.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
+  [bool]($h -and $h.Current.BoundingRectangle.Height -gt 0)
+}
+function Test-SelfOpenStrict($w) {
+  # the open chat's header names the self chat by its fixed id; or (older builds) the window title names the self chat AND the
+  # chat list does not say another chat is selected (a selection alone has been seen to change without the message pane
+  # following it; a list that reports no selection leaves the title to decide)
+  if (Test-SelfHeader $w) { return $true }
+  if (-not (Test-SelfTitle $w)) { return $false }
+  $sel = @(Get-ChatItems $w | Where-Object { Test-Selected $_ } | ForEach-Object { Get-ChatId $_ } | Where-Object { $_ })
+  if (-not $sel.Count) { return $true }
+  [bool](@($sel | Where-Object { $_ -eq '48:notes' }).Count)
+}
+function Test-AwayFromPc {
+  # the unattended read's own gate: 10 s without keyboard / mouse, or idle_sec (KIMERU_IDLE_SEC) when that is longer.
+  # 0 there switches off the wait before a post, never this check
+  $need = 10; $n = 0
+  if ([int]::TryParse("$env:KIMERU_IDLE_SEC", [ref]$n) -and $n -gt $need) { $need = $n }
+  (Get-IdleSeconds) -ge $need
+}
+function Test-InputSince($tick) { $null -ne $tick -and (Get-LastInputTick) -ne $tick }
+function Out-SafeRead([string]$reason, [string]$restore, [string]$fg) {
+  # a postponed read: nothing was used. restore: none | unchanged | restored | left_self | failed | skipped_user_input | screen_changed
+  Out-Json ([ordered]@{ ok = $false; deferred = $true; reason = $reason; error = "approval read postponed ($reason)"
+                        restore = $restore; returned = [bool](($restore -in 'none', 'unchanged', 'restored') -and ($fg -in 'unchanged', 'restored')); foreground = $fg })
+  exit 2
+}
+function Restore-ReadOriginal($ctx) {
+  # the chat that was open, by the same patterns (never a click, a key or the link): restored | left_self | failed | skipped_user_input
+  if (-not ($ctx.OrigId -or $ctx.OrigTitle)) { return 'left_self' }   # nothing was open to go back to
+  $w = Get-TeamsWindow
+  $target = $null
+  if ($ctx.OrigId) { $target = Get-ChatItems $w | Where-Object { (Get-ChatId $_) -eq $ctx.OrigId } | Select-Object -First 1 }
+  if (-not $target -and $ctx.OrigTitle) {
+    $m = @(Get-ChatItems $w | Where-Object { (Get-ChatTitle $_) -eq $ctx.OrigTitle })
+    if ($m.Count -eq 1) { $target = $m[0] }
+  }
+  if (-not $target) { return 'left_self' }
+  $acted = $false
+  foreach ($how in 'select', 'invoke') {
+    if (Test-InputSince $ctx.Tick) { return 'skipped_user_input' }
+    if ($acted -and -not (Test-SelfOpenStrict (Get-TeamsWindow))) { return 'screen_changed' }
+    try {
+      switch ($how) {
+        'select' { $target.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() }
+        'invoke' { $target.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
+      }
+      $acted = $true
+    } catch { continue }
+    for ($i = 0; $i -lt 20; $i++) {
+      Start-Sleep -Milliseconds 300
+      if (Test-InputSince $ctx.Tick) { return 'skipped_user_input' }
+      if (Test-OrigOpen (Get-TeamsWindow) $ctx.OrigId $ctx.OrigTitle) { return 'restored' }
+    }
+  }
+  if ($acted -and -not (Test-SelfOpenStrict (Get-TeamsWindow))) { return 'failed' }   # moved, but not to a screen that could be confirmed
+  'left_self'
+}
+function Restore-SafeRead($ctx, [bool]$Opened = $true) {
+  # -> @(restore, foreground). Puts back only what kimeru changed, only while nothing else has moved since: no keyboard / mouse
+  # use since kimeru began, and (when the self chat had opened) the self chat still on screen
+  if (-not $ctx.Acted) { return @('none', 'unchanged') }
+  try {
+    if (Test-InputSince $ctx.Tick) { return @('skipped_user_input', 'not_restored') }
+    $now = Get-TeamsWindow
+    if (-not $now -or ($Opened -and -not (Test-SelfOpenStrict $now))) { return @('screen_changed', 'not_restored') }
+  } catch { return @('failed', 'not_restored') }
+  $restore = 'failed'
+  try { $restore = Restore-ReadOriginal $ctx } catch {}
+  $fg = 'unchanged'
+  try {
+    $cur = [K.W]::GetForegroundWindow()
+    if ($cur -ne $ctx.Foreground) {
+      $fg = 'not_restored'
+      $teams = Get-TeamsWindow
+      # Teams came to the front during the read (nothing of kimeru's asks for that, but Teams may): give the front back, never with keys
+      if (-not (Test-InputSince $ctx.Tick) -and $teams -and $cur -eq [IntPtr]$teams.Current.NativeWindowHandle -and $ctx.Foreground -ne [IntPtr]::Zero) {
+        [void][K.W]::SetForegroundWindow($ctx.Foreground); Start-Sleep -Milliseconds 200
+        if ([K.W]::GetForegroundWindow() -eq $ctx.Foreground) { $fg = 'restored' }
+      }
+    }
+  } catch { $fg = 'not_restored' }
+  @($restore, $fg)
+}
+function Enter-ReadLock {
+  # the same lock as every other Teams operation, waited for less: a busy lock postpones the read instead of failing it
+  $script:UiMutex = New-Object Threading.Mutex($false, 'Local\kimeru-ui')
+  try { return [bool]$script:UiMutex.WaitOne(30000) } catch [Threading.AbandonedMutexException] { return $true }
+}
+function Start-SafeRead($w) {
+  $script:InRead = $true   # Fail throws inside the read: every stop goes through Out-SafeRead
+  $ctx = [pscustomobject]@{ Acted = $false; Tick = $null; OrigId = $null; OrigTitle = ''; Foreground = [IntPtr]::Zero }
+  if (-not (Enter-ReadLock)) { Out-SafeRead 'ui_lock_busy' 'none' 'unchanged' }
+  try {
+    $w = Get-TeamsWindow
+    if (-not $w) { Out-SafeRead 'teams_not_found' 'none' 'unchanged' }
+    $ctx.Tick = Get-LastInputTick
+    if (-not $ctx.Tick) { Out-SafeRead 'input_state_unknown' 'none' 'unchanged' }
+    if (Test-SelfOpenStrict $w) { return $ctx }   # already open (the person's choice, or a post): read without touching anything
+    if (-not (Test-AwayFromPc)) { Out-SafeRead 'user_active' 'none' 'unchanged' }
+    if (Test-TeamsInUse $w) { Out-SafeRead 'teams_in_use' 'none' 'unchanged' }
+    if (-not @(Get-ChatItems $w).Count) { Out-SafeRead 'chat_list_not_shown' 'none' 'unchanged' }   # another page: never switched
+    $items = @(Get-NotesItems $w)   # the fixed id only: a name match could be a feed entry or a colleague's chat
+    if (-not $items.Count) { Out-SafeRead 'self_chat_not_in_list' 'none' 'unchanged' }
+    $ctx.OrigId = Get-SelectedChatId $w
+    $ctx.OrigTitle = Get-WinChatTitle $w
+    if (-not ($ctx.OrigId -or $ctx.OrigTitle)) { Out-SafeRead 'original_chat_unknown' 'none' 'unchanged' }
+    $ctx.Foreground = [K.W]::GetForegroundWindow()
+    # Keep the input baseline from before enumeration: activity during that read cancels navigation too.
+    if (Test-InputSince $ctx.Tick) { Out-SafeRead 'user_input_during_read' 'none' 'unchanged' }
+  } catch { Out-SafeRead 'unexpected_error' 'none' 'unchanged' }
+  $opened = $false
+  try {
+    foreach ($item in $items) {
+      foreach ($how in 'select', 'invoke') {
+        if (Test-InputSince $ctx.Tick) { $rs = Restore-SafeRead $ctx; Out-SafeRead 'user_input_during_read' $rs[0] $rs[1] }
+        try {
+          $ctx.Acted = $true
+          switch ($how) {
+            'select' { $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() }
+            'invoke' { $item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
+          }
+          $ctx.Acted = $true
+        } catch { continue }
+        for ($i = 0; $i -lt 20; $i++) {
+          Start-Sleep -Milliseconds 300
+          $now = Get-TeamsWindow
+          if ($now -and (Test-SelfOpenStrict $now)) { $opened = $true; break }
+        }
+        if ($opened) { break }
+      }
+      if ($opened) { break }
+    }
+    if ($opened) {
+      if (Test-InputSince $ctx.Tick) { $rs = Restore-SafeRead $ctx; Out-SafeRead 'user_input_during_read' $rs[0] $rs[1] }
+      try { Ensure-Learned (Get-TeamsWindow) } catch {}
+      return $ctx
+    }
+  } catch { $rs = Restore-SafeRead $ctx $false; Out-SafeRead 'unexpected_error' $rs[0] $rs[1] }
+  $rs = Restore-SafeRead $ctx $false
+  Out-SafeRead 'self_chat_not_opened' $rs[0] $rs[1]
+}
+
+if ($SafeRead) {
+  $script:ReadCtx = Start-SafeRead $w
+  try { $w = Get-TeamsWindow } catch {
+    $rs = Restore-SafeRead $script:ReadCtx
+    Out-SafeRead 'unexpected_error' $rs[0] $rs[1]
+  }
+} else {
+  if (-not $w) { Fail 'Teams window not found' }
+  $w = Open-SelfChat $w
+  Ensure-Learned $w
+}
 if ($Action -eq 'open') { Out-Json @{ ok = $true; selfChatOpen = $true }; exit 0 }
 if ($Action -eq 'probe') {
   # read only (nothing is typed, pasted or sent): the messages exactly as the send readback compares them (the first node of each
@@ -1275,130 +1445,163 @@ if ($Action -eq 'sendto') {
 }
 
 if ($Action -eq 'read') {
-  $posts = New-Object System.Collections.Generic.List[string]
-  $replies = New-Object System.Collections.Generic.List[string]
-  $seen = @{}
-  # timeline: posts ("P:N"), result posts ("X:N:k") and replies ("R:OK N") in screen order (oldest first). One message is
-  # exposed by several UIA nodes, so consecutive duplicates are collapsed.
-  $timeline = New-Object System.Collections.Generic.List[string]
-  $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
-  function Walk($el, $d) {
-    if ($d -gt 40) { return }
-    $isPost = ([string]$el.Current.Name).TrimStart().StartsWith('[kimeru')   # our post: only its first line counts
-    $li = -1
-    foreach ($line in ([string]$el.Current.Name) -split "`n") {
-      $li++
-      if ($isPost -and $li -gt 0) { continue }
-      $l = $line.Trim()
-      $entry = $null
-      if ($l -match '^\[kimeru #(\d+)\]') {
-        $entry = "P:" + $Matches[1]
-        if (-not $posts.Contains($Matches[1])) { $posts.Add($Matches[1]) }
+  $walkFailed = $true
+  try {
+    $posts = New-Object System.Collections.Generic.List[string]
+    $replies = New-Object System.Collections.Generic.List[string]
+    $seen = @{}
+    # timeline: posts ("P:N"), result posts ("X:N:k") and replies ("R:OK N") in screen order (oldest first). One message is
+    # exposed by several UIA nodes, so consecutive duplicates are collapsed.
+    $timeline = New-Object System.Collections.Generic.List[string]
+    $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+    function Walk($el, $d) {
+      if ($d -gt 40) { return }
+      # Exclusion markers are never evidence of a trusted message identity. Prune the
+      # whole subtree before reading Names: drafts and quoted replies are not consent.
+      $kind = [string]$el.Current.ControlType.ProgrammaticName
+      $aid = [string]$el.Current.AutomationId
+      $class = [string]$el.Current.ClassName
+      if ($kind -eq 'ControlType.Edit' -or $aid -like 'new-message-*' -or
+          ($aid + ' ' + $class) -match '(?i)(^|[^a-z])(blockquote|quote|quoted)([^a-z]|$)') { return }
+      $first = $walker.GetFirstChild($el)
+      $isPost = ([string]$el.Current.Name).TrimStart().StartsWith('[kimeru')   # our post: only its first line counts
+      # A parent's Name can aggregate a composer/quotation/own-post descendant.
+      # Only leaf reply text is read, and never individual lines from a mixed body.
+      $readName = [string]$el.Current.Name
+      if (-not $isPost -and ($first -or $readName.Trim() -match '[\r\n]')) { $readName = '' }
+      $li = -1
+      foreach ($line in $readName -split "`n") {
+        $li++
+        if ($isPost -and $li -gt 0) { continue }
+        $l = $line.Trim()
+        $entry = $null
+        if ($l -match '^\[kimeru #(\d+)\]') {
+          $entry = "P:" + $Matches[1]
+          if (-not $posts.Contains($Matches[1])) { $posts.Add($Matches[1]) }
+        }
+        elseif ($l -match '^\[kimeru 詳細 #(\d+)\]') {
+          # the answer to `詳細 N` (full details): not an approval post and not a result post; it only closes the `詳細 N` replies above it
+          $entry = "D:" + $Matches[1]
+        }
+        elseif ($l -match '^\[kimeru 未送信((?:\s+#\d+)+)\]') {
+          # the nudge of an approved reply that was not seen (R28, sent.py): "U:3,5" for "[kimeru 未送信 #3 #5]". Not an approval post: a `送った N`
+          # below it counts (notify.fresh_sent); the numbers are the only thing kept
+          $nums = @([regex]::Matches($Matches[1], '\d+') | ForEach-Object { $_.Value })
+          $entry = 'U:' + ($nums -join ',')
+        }
+        elseif ($l -match '^\[kimeru 期限((?:\s+#\d+)+)\]') {
+          # the deadline post of the day (R30, work.py): "K:3,5" for "[kimeru 期限 #3 #5]". Not an approval post: a work reply below it counts
+          # (notify.fresh_work); the numbers are the only thing kept
+          $nums = @([regex]::Matches($Matches[1], '\d+') | ForEach-Object { $_.Value })
+          $entry = 'K:' + ($nums -join ',')
+        }
+        elseif ($l -match '^\[kimeru 試験 #(\d+)\]') {
+          # a post of tools/check.ps1 (a test): it is not an approval post and not a boundary for the real reader (notify.scoped_timeline)
+          $entry = "T:" + $Matches[1]
+        }
+        elseif ($l -match '^\[kimeru 試験 実行 #(\d+)(?:\s+(\d+))?\]') {
+          $entry = 'TX:{0}:{1}' -f $Matches[1], $(if ($Matches[2]) { [int]$Matches[2] } else { 0 })
+        }
+        elseif ($l -match '^\[kimeru 確認 S(\d+)\]') {
+          # a card of the spot check (spot.py, R26): "S:k" is its own number, never an approval post; a reply below it is answered
+          $entry = 'S:' + $Matches[1]
+        }
+        elseif ($l -match '^\[kimeru 実行 #(\d+)(?:\s+(\d+))?\]') {
+          # a result post about #N, the k-th one ("[kimeru 実行 #N k]"; 0 for a post of an earlier version that has no count):
+          # replies to #N before it were answered (notify.fresh_entries). The count keeps two result posts from being folded into one line.
+          $entry = 'X:{0}:{1}' -f $Matches[1], $(if ($Matches[2]) { [int]$Matches[2] } else { 0 })
+        }
+        elseif ($l.Normalize([Text.NormalizationForm]::FormKC).Trim() -match '^(停止|再開)$') {
+          # R20 (control.py): the control word of my own line, as the list shows it. It is neither a reply nor a boundary: kimeru reads the last one
+          $entry = 'C:' + $Matches[1]
+        }
+        elseif ($l.Normalize([Text.NormalizationForm]::FormKC).Trim() -match '^休み\s+(\S+)$') {
+          # R27: `休み <いつ>` (quiet_words): the whole line, normalized, is handed back as a control entry
+          $entry = 'C:休み ' + $Matches[1]
+        }
+        elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留|聞き返し|詳細|再実行|済|不要)\s*#?(\d+)\s*[.。!！]*$') {
+          # phones often send full-width or re-cased text ("ＯＫ　６７５", "Ok 675"): canonicalize
+          $c = '{0} {1}' -f $Matches[1].ToUpper(), $Matches[2]
+          $entry = "R:" + $c
+          if (-not $seen.ContainsKey($c)) { $seen[$c] = 1; $replies.Add($c) }
+        }
+        elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)保留\s*#?(\d+)\s+(\S{1,10})$') {
+          # `保留 N <いつ>` (R09, notify.parse_hold_until): the line is handed over as it is; kimeru reads the day word
+          $c = '保留 {0} {1}' -f $Matches[1], $Matches[2]
+          $entry = "R:" + $c
+          if (-not $seen.ContainsKey($c)) { $seen[$c] = 1; $replies.Add($c) }
+        }
+        elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(着手|完了)\s*#?(\d+)(?:\s+(\d+))?\s*[.。!！]*$') {
+          # R30 (notify.parse_work, promises=1): `着手 N`, `完了 N` and `完了 N k` (step k of the plan) are handed back as they are
+          $c = if ($Matches[3]) { '{0} {1} {2}' -f $Matches[1], $Matches[2], $Matches[3] } else { '{0} {1}' -f $Matches[1], $Matches[2] }
+          $entry = 'R:' + $c
+        }
+        elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^延期\s*#?(\d+)\s+(\S{1,10})\s*[.。!！]*$') {
+          # R30 `延期 N <いつ>`: the day word is handed back as it is (notify.parse_work reads it)
+          $entry = 'R:延期 {0} {1}' -f $Matches[1], $Matches[2].TrimEnd('.', '。', '!', '！')
+        }
+        elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^送る\s*#?(\d+)\s*[.。!！]*$') {
+          # `送る N` (S2, notify.parse_reply): the approved reply goes to its 1 対 1 chat, once; it counts only below the approval post of #N
+          $entry = 'R:送る {0}' -f $Matches[1]
+        }
+        elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^送った\s*#?(\d+)\s*[.。!！]*$') {
+          # `送った N` (R28, notify.parse_sent): the PM says the approved reply of #N was sent; it counts only below the approval post of #N
+          $entry = 'R:送った {0}' -f $Matches[1]
+        }
+        elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^違う\s*#?(\d+)(?:\s+(\d+))?$') {
+          # a verdict on a decision (notify.parse_label, learn=1): `違う N` (the final result was wrong) or `違う N k` (the k-th option of the question 詳細 N showed)
+          $c = if ($Matches[2]) { '違う {0} {1}' -f $Matches[1], $Matches[2] } else { '違う {0}' -f $Matches[1] }
+          $entry = "R:" + $c
+        }
+        elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(正しい|違う)\s*S(\d+)$') {
+          # an answer to a card of the spot check (spot.py, R26): `正しい S<k>` or `違う S<k>`; it counts only below the card's own S:k entry
+          $entry = 'R:{0} S{1}' -f $Matches[1], $Matches[2]
+        }
+        elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^再実行\s*#?(\d+)\s*[-ー−‐‑‒–—―─ｰ]\s*(\d+)\s*[.。!！]*$') {
+          # `再実行 N-k`: run again, under the k-th result post of #N (notify.parse_redo_k). Every dash a phone or an IME may type is read as "-"
+          $c = '再実行 {0}-{1}' -f $Matches[1], $Matches[2]
+          $entry = "R:" + $c
+          if (-not $seen.ContainsKey($c)) { $seen[$c] = 1; $replies.Add($c) }
+        }
+        elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^再実行\s*#?(\d+)(\s*[^\d\s.。!！]{1,6}\s*|\s+)(\d*)\s*[.。!！]*$') {
+          # begins like `再実行 N-k` but with something between N and k that is not a dash (a slash, a wave, a space, a letter...): handed back as
+          # "R:再実行形式 N <rest>" so that kimeru decides and records it (notify.redo_bad_kind); only a hash of its shape is ever kept
+          $c = '再実行形式 {0} {1}' -f $Matches[1], (($Matches[2] + $Matches[3]).Trim())
+          $entry = "R:" + $c
+          if (-not $seen.ContainsKey($c)) { $seen[$c] = 1; $replies.Add($c) }
+        }
+        elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^修正\s*#?(\d+)\s*[:：]?\s*(\S.*)$') {
+          # redraft request for a writer draft (notify.parse_redraft): keep the instruction text
+          $entry = 'R:修正 {0} {1}' -f $Matches[1], $Matches[2].Trim()
+        }
+        elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^下書き\s*#?(\d+)\s*[:：]?\s*(\S.*)$') {
+          # the PM pastes back what Microsoft 365 Copilot wrote, as one line (notify.parse_paste)
+          $entry = 'R:下書き {0} {1}' -f $Matches[1], $Matches[2].Trim()
+        }
+        if ($entry -and ($timeline.Count -eq 0 -or $timeline[$timeline.Count - 1] -ne $entry)) { $timeline.Add($entry) }
       }
-      elseif ($l -match '^\[kimeru 詳細 #(\d+)\]') {
-        # the answer to `詳細 N` (full details): not an approval post and not a result post; it only closes the `詳細 N` replies above it
-        $entry = "D:" + $Matches[1]
-      }
-      elseif ($l -match '^\[kimeru 未送信((?:\s+#\d+)+)\]') {
-        # the nudge of an approved reply that was not seen (R28, sent.py): "U:3,5" for "[kimeru 未送信 #3 #5]". Not an approval post: a `送った N`
-        # below it counts (notify.fresh_sent); the numbers are the only thing kept
-        $nums = @([regex]::Matches($Matches[1], '\d+') | ForEach-Object { $_.Value })
-        $entry = 'U:' + ($nums -join ',')
-      }
-      elseif ($l -match '^\[kimeru 期限((?:\s+#\d+)+)\]') {
-        # the deadline post of the day (R30, work.py): "K:3,5" for "[kimeru 期限 #3 #5]". Not an approval post: a work reply below it counts
-        # (notify.fresh_work); the numbers are the only thing kept
-        $nums = @([regex]::Matches($Matches[1], '\d+') | ForEach-Object { $_.Value })
-        $entry = 'K:' + ($nums -join ',')
-      }
-      elseif ($l -match '^\[kimeru 試験 #(\d+)\]') {
-        # a post of tools/check.ps1 (a test): it is not an approval post and not a boundary for the real reader (notify.scoped_timeline)
-        $entry = "T:" + $Matches[1]
-      }
-      elseif ($l -match '^\[kimeru 試験 実行 #(\d+)(?:\s+(\d+))?\]') {
-        $entry = 'TX:{0}:{1}' -f $Matches[1], $(if ($Matches[2]) { [int]$Matches[2] } else { 0 })
-      }
-      elseif ($l -match '^\[kimeru 確認 S(\d+)\]') {
-        # a card of the spot check (spot.py, R26): "S:k" is its own number, never an approval post; a reply below it is answered
-        $entry = 'S:' + $Matches[1]
-      }
-      elseif ($l -match '^\[kimeru 実行 #(\d+)(?:\s+(\d+))?\]') {
-        # a result post about #N, the k-th one ("[kimeru 実行 #N k]"; 0 for a post of an earlier version that has no count):
-        # replies to #N before it were answered (notify.fresh_entries). The count keeps two result posts from being folded into one line.
-        $entry = 'X:{0}:{1}' -f $Matches[1], $(if ($Matches[2]) { [int]$Matches[2] } else { 0 })
-      }
-      elseif ($l.Normalize([Text.NormalizationForm]::FormKC).Trim() -match '^(停止|再開)$') {
-        # R20 (control.py): the control word of my own line, as the list shows it. It is neither a reply nor a boundary: kimeru reads the last one
-        $entry = 'C:' + $Matches[1]
-      }
-      elseif ($l.Normalize([Text.NormalizationForm]::FormKC).Trim() -match '^休み\s+(\S+)$') {
-        # R27: `休み <いつ>` (quiet_words): the whole line, normalized, is handed back as a control entry
-        $entry = 'C:休み ' + $Matches[1]
-      }
-      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)(OK|NG|保留|聞き返し|詳細|再実行|済|不要)\s*#?(\d+)\s*[.。!！]*$') {
-        # phones often send full-width or re-cased text ("ＯＫ　６７５", "Ok 675"): canonicalize
-        $c = '{0} {1}' -f $Matches[1].ToUpper(), $Matches[2]
-        $entry = "R:" + $c
-        if (-not $seen.ContainsKey($c)) { $seen[$c] = 1; $replies.Add($c) }
-      }
-      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(?i)保留\s*#?(\d+)\s+(\S{1,10})$') {
-        # `保留 N <いつ>` (R09, notify.parse_hold_until): the line is handed over as it is; kimeru reads the day word
-        $c = '保留 {0} {1}' -f $Matches[1], $Matches[2]
-        $entry = "R:" + $c
-        if (-not $seen.ContainsKey($c)) { $seen[$c] = 1; $replies.Add($c) }
-      }
-      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(着手|完了)\s*#?(\d+)(?:\s+(\d+))?\s*[.。!！]*$') {
-        # R30 (notify.parse_work, promises=1): `着手 N`, `完了 N` and `完了 N k` (step k of the plan) are handed back as they are
-        $c = if ($Matches[3]) { '{0} {1} {2}' -f $Matches[1], $Matches[2], $Matches[3] } else { '{0} {1}' -f $Matches[1], $Matches[2] }
-        $entry = 'R:' + $c
-      }
-      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^延期\s*#?(\d+)\s+(\S{1,10})\s*[.。!！]*$') {
-        # R30 `延期 N <いつ>`: the day word is handed back as it is (notify.parse_work reads it)
-        $entry = 'R:延期 {0} {1}' -f $Matches[1], $Matches[2].TrimEnd('.', '。', '!', '！')
-      }
-      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^送る\s*#?(\d+)\s*[.。!！]*$') {
-        # `送る N` (S2, notify.parse_reply): the approved reply goes to its 1 対 1 chat, once; it counts only below the approval post of #N
-        $entry = 'R:送る {0}' -f $Matches[1]
-      }
-      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^送った\s*#?(\d+)\s*[.。!！]*$') {
-        # `送った N` (R28, notify.parse_sent): the PM says the approved reply of #N was sent; it counts only below the approval post of #N
-        $entry = 'R:送った {0}' -f $Matches[1]
-      }
-      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^違う\s*#?(\d+)(?:\s+(\d+))?$') {
-        # a verdict on a decision (notify.parse_label, learn=1): `違う N` (the final result was wrong) or `違う N k` (the k-th option of the question 詳細 N showed)
-        $c = if ($Matches[2]) { '違う {0} {1}' -f $Matches[1], $Matches[2] } else { '違う {0}' -f $Matches[1] }
-        $entry = "R:" + $c
-      }
-      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^(正しい|違う)\s*S(\d+)$') {
-        # an answer to a card of the spot check (spot.py, R26): `正しい S<k>` or `違う S<k>`; it counts only below the card's own S:k entry
-        $entry = 'R:{0} S{1}' -f $Matches[1], $Matches[2]
-      }
-      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^再実行\s*#?(\d+)\s*[-ー−‐‑‒–—―─ｰ]\s*(\d+)\s*[.。!！]*$') {
-        # `再実行 N-k`: run again, under the k-th result post of #N (notify.parse_redo_k). Every dash a phone or an IME may type is read as "-"
-        $c = '再実行 {0}-{1}' -f $Matches[1], $Matches[2]
-        $entry = "R:" + $c
-        if (-not $seen.ContainsKey($c)) { $seen[$c] = 1; $replies.Add($c) }
-      }
-      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^再実行\s*#?(\d+)(\s*[^\d\s.。!！]{1,6}\s*|\s+)(\d*)\s*[.。!！]*$') {
-        # begins like `再実行 N-k` but with something between N and k that is not a dash (a slash, a wave, a space, a letter...): handed back as
-        # "R:再実行形式 N <rest>" so that kimeru decides and records it (notify.redo_bad_kind); only a hash of its shape is ever kept
-        $c = '再実行形式 {0} {1}' -f $Matches[1], (($Matches[2] + $Matches[3]).Trim())
-        $entry = "R:" + $c
-        if (-not $seen.ContainsKey($c)) { $seen[$c] = 1; $replies.Add($c) }
-      }
-      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^修正\s*#?(\d+)\s*[:：]?\s*(\S.*)$') {
-        # redraft request for a writer draft (notify.parse_redraft): keep the instruction text
-        $entry = 'R:修正 {0} {1}' -f $Matches[1], $Matches[2].Trim()
-      }
-      elseif ($l.Normalize([Text.NormalizationForm]::FormKC) -match '^下書き\s*#?(\d+)\s*[:：]?\s*(\S.*)$') {
-        # the PM pastes back what Microsoft 365 Copilot wrote, as one line (notify.parse_paste)
-        $entry = 'R:下書き {0} {1}' -f $Matches[1], $Matches[2].Trim()
-      }
-      if ($entry -and ($timeline.Count -eq 0 -or $timeline[$timeline.Count - 1] -ne $entry)) { $timeline.Add($entry) }
+      # Every kimeru post, including briefs and notices, owns its entire UIA subtree.
+      # Teams may expose its body and line breaks as descendants; none is a human reply.
+      if ($isPost) { return }
+      $c = $first
+      while ($c) { Walk $c ($d + 1); $c = $walker.GetNextSibling($c) }
     }
-    $c = $walker.GetFirstChild($el)
-    while ($c) { Walk $c ($d + 1); $c = $walker.GetNextSibling($c) }
-  }
-  Walk $w 0
-  Out-Json @{ ok = $true; posts = @($posts); replies = @($replies); timeline = @($timeline) }; exit 0
+    Walk $w 0
+    $walkFailed = $false
+  } catch {}
+  $screen = $null
+  if ($script:ReadCtx) {
+    # the read counts only while the self chat is what is on screen: the person may have opened another chat during it
+    if ($walkFailed) { $rs = Restore-SafeRead $script:ReadCtx; Out-SafeRead 'unexpected_error' $rs[0] $rs[1] }
+    $still = $false
+    try { $now = Get-TeamsWindow; $still = [bool]($now -and (Test-SelfOpenStrict $now)) } catch { $rs = Restore-SafeRead $script:ReadCtx; Out-SafeRead 'unexpected_error' $rs[0] $rs[1] }
+    if (-not $still) { $rs = Restore-SafeRead $script:ReadCtx; Out-SafeRead 'screen_changed_during_read' $rs[0] $rs[1] }
+    if (Test-InputSince $script:ReadCtx.Tick) { $rs = Restore-SafeRead $script:ReadCtx; Out-SafeRead 'user_input_during_read' $rs[0] $rs[1] }
+    # the self chat holds kimeru's posts (an item waits only after its post): a pane with none of them may be another chat
+    if (-not @($timeline | Where-Object { -not ([string]$_).StartsWith('R:') }).Count) { $rs = Restore-SafeRead $script:ReadCtx; Out-SafeRead 'self_chat_not_confirmed' $rs[0] $rs[1] }
+    $rs = Restore-SafeRead $script:ReadCtx
+    if ($rs[0] -notin 'none', 'unchanged', 'restored' -or $rs[1] -notin 'unchanged', 'restored') { Out-SafeRead 'restore_failed' $rs[0] $rs[1] }
+    $screen = [ordered]@{ restore = $rs[0]; returned = [bool]($rs[0] -in 'none', 'unchanged', 'restored'); foreground = $rs[1] }
+  } elseif ($walkFailed) { Fail 'the self chat could not be read' }
+  Out-Json @{ ok = $true; posts = @($posts); replies = @($replies); timeline = @($timeline); screen = $screen }; exit 0
 }

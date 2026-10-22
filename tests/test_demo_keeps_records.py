@@ -78,14 +78,21 @@ class TestTheDefaultFolder(Base):
         self.assertEqual(after, before)
         self.assertIn(str(Path("out") / "demo" / "report.html"), text)
 
-    def test_a_second_demo_in_its_own_folder_starts_again_from_one(self):
+    def test_a_second_demo_requires_explicit_fresh_and_preserves_prior_records(self):
         self.assertEqual(self.demo()[0], 0)
-        self.assertEqual(self.demo()[0], 0)
-        ap = json.loads((self.work / "out" / "demo" / "approvals.json").read_text(encoding="utf-8"))
-        first = json.loads(json.dumps(ap))
-        self.assertEqual(self.demo()[0], 0)
-        again = json.loads((self.work / "out" / "demo" / "approvals.json").read_text(encoding="utf-8"))
-        self.assertEqual(sorted(again["items"]), sorted(first["items"]))   # same numbers each time, nothing carried over
+        folder = self.work / "out" / "demo"
+        before = snapshot(folder)
+        self.assertNotEqual(self.demo()[0], 0)
+        self.assertEqual(snapshot(folder), before)
+        ap = json.loads((folder / "approvals.json").read_text(encoding="utf-8"))
+        rc, _, err = self.cli("--backend", "stub", "demo", "--pace", "0", "--fresh")
+        self.assertEqual(rc, 0, err)
+        again = json.loads((folder / "approvals.json").read_text(encoding="utf-8"))
+        self.assertEqual(sorted(again["items"]), sorted(ap["items"]))
+        kept = list(folder.glob("before-demo-*"))
+        self.assertEqual(len(kept), 1)
+        for name, digest in snapshot(kept[0]).items():
+            self.assertEqual(before[name], digest)
 
     def test_other_commands_keep_out_as_their_default(self):
         self.real_records(self.work / "out")
@@ -139,14 +146,14 @@ class TestRealRecordsAreKept(Base):
         self.assertEqual(self.demo()[0], 2)
         self.assertEqual(snapshot(demo_dir), before)
 
-    def test_replay_touches_no_record(self):
+    def test_replay_refuses_existing_records_without_changes(self):
         self.real_records("rec")
         before = snapshot(self.work / "rec")
         recording = self.work / "talk.json"
         self.assertEqual(self.cli("--backend", "stub", "--out", "d", "demo", "--pace", "0", "--record", str(recording))[0], 0)
         rc, _, err = self.cli("--out", "rec", "demo", "--pace", "0", "--replay", str(recording))
-        self.assertEqual(rc, 0, err)
-        after = {k: v for k, v in snapshot(self.work / "rec").items() if k != "report.html"}
+        self.assertNotEqual(rc, 0, err)
+        after = snapshot(self.work / "rec")
         self.assertEqual(after, before)
 
 

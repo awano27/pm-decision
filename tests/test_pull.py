@@ -51,6 +51,11 @@ class TestAdoNames(unittest.TestCase):
     def test_sign_in_page_instead_of_json_is_a_clear_error(self):
         class Resp:
             status = 203
+            code = 203
+            msg = "Non-Authoritative Information"
+
+            def info(self):
+                return {}
 
             def read(self):
                 return b"<html>sign in</html>"
@@ -60,7 +65,7 @@ class TestAdoNames(unittest.TestCase):
 
             def __exit__(self, *a):
                 return False
-        with mock.patch("urllib.request.urlopen", return_value=Resp()):
+        with mock.patch("urllib.request.HTTPSHandler.do_open", return_value=Resp()):
             with self.assertRaises(pull.PullError) as c:
                 pull.http_json("GET", "https://dev.azure.com/x/_apis/wit", "t")
         self.assertIn("organization", str(c.exception))
@@ -175,12 +180,14 @@ class TestFailures(unittest.TestCase):
         import io
         import urllib.error
         from unittest import mock
-        err = urllib.error.HTTPError("https://x/a?b=1", 401, "unauth", {}, io.BytesIO(b""))
-        with mock.patch("urllib.request.urlopen", side_effect=err):
+        fp = io.BytesIO(b"")
+        err = urllib.error.HTTPError("https://x/a?b=1", 401, "unauth", {}, fp)
+        with mock.patch("urllib.request.HTTPSHandler.do_open", side_effect=err):
             with self.assertRaises(pull.PullError) as cm:
                 pull.http_json("GET", "https://x/a?secret=1", "t")
         self.assertIn("az login", str(cm.exception))
         self.assertNotIn("secret", str(cm.exception))
+        self.assertTrue(fp.closed)
 
 
 def chat(cid, kind, preview, time="10:00", mention=False, title="Sato"):

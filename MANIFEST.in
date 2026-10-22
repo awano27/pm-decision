@@ -1,0 +1,7 @@
+recursive-include graphs *.json
+recursive-include playbooks *.json
+recursive-include examples *.json
+include tools/teams-self.ps1
+include tools/teams-copilot.ps1
+include tools/toast.ps1
+include tools/outlook-mail.ps1

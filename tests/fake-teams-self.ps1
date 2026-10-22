@@ -10,7 +10,8 @@ param(
   [string]$Numbers = '',
   [string]$Preview = '',
   [int]$Count = 5,
-  [switch]$Send
+  [switch]$Send,
+  [switch]$Interactive   # read: accepted like the real script (the fake has no screen to open)
 )
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8

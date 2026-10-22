@@ -583,5 +583,84 @@ class TestEnabledMoment(Base):
         self.assertLess(src.index("push.begin_cycle(out)"), src.index("pull.pull_teams(inbox"))
 
 
+class TestChallenge(Base):
+    """The onboarding challenge: a route accepting the send is one fact, a person seeing it on a device is another."""
+
+    def setup_routes(self, names="webhook,teams_webhook"):
+        os.environ["KIMERU_PUSH"] = names
+        os.environ["KIMERU_PUSH_TEAMS_URL"] = SECRET_URL
+        os.environ["KIMERU_PUSH_WEBHOOK_URL"] = SECRET_URL + "2"
+        os.environ["KIMERU_PUSH_WEBHOOK_KEY"] = "SECRET-KEY-XYZ"
+        config.apply([])
+
+    def test_no_route_sends_nothing(self):
+        rec = Recorder()
+        self.assertEqual(push.send_challenge({"webhook": "c1"}, sender=rec), {"(none)": "no route"})
+        self.assertEqual(rec.calls, [])
+
+    def test_each_route_carries_its_own_code(self):
+        self.setup_routes()
+        rec = Recorder()
+        res = push.send_challenge({"webhook": "code-w", "teams_webhook": "code-t"}, sender=rec)
+        self.assertEqual(res, {"webhook": "accepted", "teams_webhook": "accepted"})
+        texts = dict(rec.calls)
+        self.assertEqual(texts["webhook"], "kimeru notification test challenge code-w")
+        self.assertEqual(texts["teams_webhook"], "kimeru notification test challenge code-t")
+
+    def test_a_route_without_a_code_is_skipped_not_accepted(self):
+        self.setup_routes()
+        rec = Recorder()
+        res = push.send_challenge({"webhook": "code-w"}, sender=rec)
+        self.assertEqual(res["teams_webhook"], "skipped")
+        self.assertEqual([r for r, _ in rec.calls], ["webhook"])
+
+    def test_a_failed_send_is_not_accepted_and_names_the_type_only(self):
+        self.setup_routes()
+
+        def sender(route, text):
+            if route == "webhook":
+                raise RuntimeError(f"cannot reach {SECRET_URL}")
+
+        res = push.send_challenge({"webhook": "a", "teams_webhook": "b"}, sender=sender)
+        self.assertEqual(res["webhook"], "failed (RuntimeError)")
+        self.assertEqual(res["teams_webhook"], "accepted")
+        self.assertNotIn("SECRET", json.dumps(res))
+
+    def test_the_real_payload_is_the_fixed_line_and_the_code_only(self):
+        self.setup_routes("webhook")
+        sent = []
+
+        class R:
+            status = 200
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        with mock.patch.object(push, "_urlopen", lambda req, timeout=0: (sent.append(req), R())[1]):
+            res = push.send_challenge({"webhook": "code-w"})
+        self.assertEqual(res, {"webhook": "accepted"})
+        self.assertEqual(json.loads(sent[0].data.decode("utf-8")), {"text": "kimeru notification test challenge code-w"})
+        for secret in (BODY, SENDER, SUBJECT, "SECRET"):
+            self.assertNotIn(secret, sent[0].data.decode("utf-8"))
+            self.assertNotIn(secret, json.dumps(res))
+
+    def test_an_http_error_is_a_failure_not_an_acceptance(self):
+        self.setup_routes("webhook")
+        err = urllib.error.HTTPError(SECRET_URL, 500, "x", {}, None)
+        with mock.patch.object(push, "_urlopen", side_effect=err):
+            res = push.send_challenge({"webhook": "code-w"})
+        self.assertEqual(res, {"webhook": "failed (PushError)"})
+
+    def test_a_single_string_still_goes_to_every_route(self):
+        self.setup_routes()
+        rec = Recorder()
+        push.send_challenge("same", sender=rec)
+        self.assertEqual({t for _, t in rec.calls}, {"kimeru notification test challenge same"})
+
+    def test_it_never_touches_the_cycle_state(self):
+        self.setup_routes()
+        push.send_challenge({"webhook": "a", "teams_webhook": "b"}, sender=Recorder())
+        self.assertFalse((self.out / "push_state.json").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 import unicodedata
 from pathlib import Path
 
-from . import actions, config, explain, fsutil, hold, labels, learn, paths
+from . import actions, config, explain, fsutil, hold, labels, learn, paths, resources
 from . import writer as writer_mod
 
 HERE = paths.base()
@@ -277,27 +277,30 @@ TEAMS_NOT_RUNNING = "Teams が起動していません"
 class PowerShellBridge:
     """Runs tools/teams-self.ps1 (built-in UI Automation, no downloads)."""
 
-    def __init__(self, script=HERE / "tools" / "teams-self.ps1"):
-        self.script = str(script)
+    def __init__(self, script=None):
+        self.script = str(script or resources.resource_path("tools", "teams-self.ps1"))
 
     def _run(self, *args):
         # readchat moves the screen, waits for a quiet keyboard and puts the chat back: it needs more than the others (its own limit is 90 s);
         # sendto does the same kind of work (opens one chat, pastes, sends once, puts the chat back)
         timeout = 300 if ("readchat" in args or "sendto" in args) else 120
+        moves = "readchat" in args or "read" in args
         try:
             r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", self.script, *args],
                                capture_output=True, text=True, encoding="utf-8", timeout=timeout)
         except subprocess.TimeoutExpired as e:   # killed: the script could not put the chat back itself
-            if "readchat" not in args:
+            if not moves:
                 raise
-            raise BridgeError("the script did not finish in time", {"restore": "failed"}) from e
+            raise BridgeError("the script did not finish in time", {"restore": "failed", "returned": False}) from e
         try:
             out = json.loads(r.stdout.strip().lstrip("﻿") or "{}")
         except ValueError as e:
-            if "readchat" not in args:
+            if not moves:
                 raise
-            raise BridgeError("the script's output could not be read", {"restore": "failed"}) from e
+            raise BridgeError("the script's output could not be read", {"restore": "failed", "returned": False}) from e
         if not out.get("ok"):
+            if "read" in args and "-Interactive" not in args and "restore" not in out:
+                out = {**out, "restore": "failed", "returned": False}   # broke without saying: the screen may be left changed
             raise BridgeError(out.get("error") or r.stderr.strip()[:300], out)
         return out
 
@@ -307,8 +310,10 @@ class PowerShellBridge:
             text = to_test_post(text)
         return self._run("-Action", "post", "-Text", text.replace("\n", "\\n"), *(["-Send"] if send else []))
 
-    def read(self):
-        return self._run("-Action", "read")
+    def read(self, interactive=False):
+        """Unattended (the daily cycle): reads only when it can do so out of the person's way, and puts the chat back; otherwise
+        BridgeError with data["deferred"]. interactive=True: the person ran `approvals` and expects the self chat to open."""
+        return self._run("-Action", "read", *(["-Interactive"] if interactive else []))
 
     def chats(self):
         try:
@@ -544,8 +549,19 @@ def format_post(n, rec, full=None, marks=None, precedent=None, promise=None, rel
         tg = writes[0].get("exec_origin") or writes[0].get("exec_target") or {}
         where = f"（{tg['org']} / {tg['project']}）" if tg.get("org") and tg.get("project") else ""
         lines.append(f"OK で ADO{where}の #{writes[0].get('id')} にコメントを書きます（上の文面そのまま）。--send 無しの実行では次の --send で書きます")
-    elif any(a.get("exec_skip") for a in actions):
+    elif any(a.get("exec_skip") and a.get("type") != "ado.update" for a in actions):
         lines.append("OK は記録だけです（ADO の取り込み元が記録されていません）")
+    for a in actions:
+        if a.get("exec_update"):   # fixed when this post was made: the one change OK will make, at the revision it was decided on
+            u, tg = a["exec_update"], a.get("exec_origin") or a.get("exec_target") or {}
+            now = u.get("from") if u.get("from") is not None else "不明"
+            lines.append(f"→ OK {n} で、作業項目 {u.get('work_item')}（取り込み元の組織 {tg.get('org')} / プロジェクト {tg.get('project')}）の"
+                         f"優先度を {now} → {u.get('to')} に変更します（判断したときの改訂 {u.get('rev')}）。"
+                         "ADO でこの改訂から変わっていれば変更せず、今の内容で確認し直しをお願いします。--send 無しの実行では次の --send で書きます")
+            if u.get("others"):
+                lines.append("　ほかの項目（" + ", ".join(u["others"]) + "）は書きません（記録のみ）")
+        elif a.get("type") == "ado.update" and a.get("exec_skip"):
+            lines.append(f"→ OK {n} では、作業項目 {a.get('id')} に書きません（{a['exec_skip']}）。承認は記録だけです")
     if any(a.get("reply_skip") for a in actions):   # S2 (teams.reply switched on): a reply that `送る N` cannot send
         lines.append("送れません（グループ／相手が特定できない）")
     if rec.get("copilot_request"):
@@ -584,6 +600,8 @@ def format_detail(n, rec, full=None, precedent=None, promise=None):
             effects.append("コピー用文面を自分チャットへ返す（相手には送信しない）")
         elif kind == "ado.comment" and action.get("exec_text"):
             effects.append("実行設定が有効なら、承認後に ADO へコメントを書き込む")
+        elif kind == "ado.update" and action.get("exec_update"):
+            effects.append("実行設定が有効なら、承認後に ADO の優先度を変更する（改訂が変わっていれば変更せず確認し直し）")
         else:
             effects.append("記録のみ")
     revision = rec.get("revision", 1)
@@ -680,6 +698,14 @@ def format_detail(n, rec, full=None, precedent=None, promise=None):
             lines.append(f"→ OK {n} で、作業項目 {a.get('id')}（取り込み元の組織 {tg.get('org')} / プロジェクト {tg.get('project')}）に、"
                          "次のコメントをそのまま書きます（末尾の 1 行も含みます）:")
             lines.append(a["exec_text"])
+        elif a.get("exec_update"):   # fixed when this post was made: the one change OK will make, at the revision it was decided on
+            u, tg = a["exec_update"], a.get("exec_origin") or a.get("exec_target") or {}
+            now = u.get("from") if u.get("from") is not None else "不明"
+            lines.append(f"→ OK {n} で、作業項目 {u.get('work_item')}（取り込み元の組織 {tg.get('org')} / プロジェクト {tg.get('project')}）の"
+                         f"優先度を {now} → {u.get('to')} に変更します（判断したときの改訂 {u.get('rev')}）。"
+                         "ADO でこの改訂から変わっていれば変更せず、今の内容で確認し直しをお願いします。--send 無しの実行では次の --send で書きます")
+            if u.get("others"):
+                lines.append("　ほかの項目（" + ", ".join(u["others"]) + "）は書きません（記録のみ）")
     if precedent:   # R16: the earlier decisions on the same chat, person or work item (at most three lines)
         lines.append("これまでの経緯:")
         lines.extend(precedent)
@@ -1290,7 +1316,7 @@ def show_toast(title, body):
     if config.value("toast") == "0":
         return "off"
     r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                        str(HERE / "tools" / "toast.ps1"), "-Title", title, "-Body", body],
+                        str(resources.resource_path("tools", "toast.ps1")), "-Title", title, "-Body", body],
                        capture_output=True, text=True, encoding="utf-8", timeout=30,
                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if r.returncode != 0:
@@ -1956,26 +1982,82 @@ def _after_approval(out, ap, num, it, bridge, real=False, send=False):
 
 
 class Changes(fsutil.BusyList):
-    """The applied changes. `busy` is True when another approvals run holds the lock: nothing was read or applied."""
+    """The applied changes. `busy` is True when another approvals run holds the lock: nothing was read or applied.
+    `deferred` is the fixed reason (READ_DEFERRED) when the self chat could not be read out of the person's way: nothing was read or
+    applied, which is not the same as "read, no replies". `screen` is what the read did to the Teams screen (restore / returned)."""
+    deferred = None
+    screen = None
 
+
+# the reasons a read is postponed (tools/teams-self.ps1 Out-SafeRead); anything else is logged as "other"
+READ_DEFERRED = ("ui_lock_busy", "teams_not_found", "user_active", "input_state_unknown", "teams_in_use", "chat_list_not_shown",
+                 "self_chat_not_in_list", "self_chat_not_opened", "user_input_during_read", "screen_changed_during_read",
+                 "self_chat_not_confirmed", "original_chat_unknown", "restore_failed", "unexpected_error")
+# what a read did to the screen; returned = the person sees what they saw before (or what they chose since, untouched)
+READ_RESTORE = ("none", "unchanged", "restored", "left_self", "failed", "skipped_user_input", "screen_changed")
+
+
+def screen_of(data):
+    """Only fixed words from the bridge's report about the screen (never chat text)."""
+    data = data or {}
+    restore = data.get("restore")
+    restore = restore if restore in READ_RESTORE else "failed"
+    fg = data.get("foreground") if data.get("foreground") in ("unchanged", "restored", "not_restored") else "unknown"
+    return {"restore": restore, "returned": restore in ("none", "unchanged", "restored") and fg in ("unchanged", "restored"), "foreground": fg}
 
 def _naive_now():
     return datetime.now()
 
 
-def collect(out, bridge, writer=None, real=False, send=False, now=None, brief_hour=None):
+
+class _ReadDeferred(Exception):
+    def __init__(self, reason, screen):
+        super().__init__(reason)
+        self.reason, self.screen = reason, screen
+
+
+def read_replies(bridge, interactive=False, screen_out=None):
+    """Read once; a deferred or unrestored screen never supplies replies."""
+    try:
+        read = bridge.read(interactive=True) if interactive else bridge.read()
+    except BridgeError as e:
+        if not e.data.get("deferred"):
+            raise
+        reason = e.data.get("reason")
+        raise _ReadDeferred(reason if reason in READ_DEFERRED else "other", screen_of(e.data)) from None
+    if isinstance(read.get("screen"), dict):
+        screen = screen_of(read["screen"])
+        if screen_out is not None:
+            screen_out["screen"] = screen
+        if not interactive and (not screen["returned"] or screen["foreground"] not in ("unchanged", "restored")):
+            reason = {"skipped_user_input": "user_input_during_read", "screen_changed": "screen_changed_during_read"}.get(
+                screen["restore"], "restore_failed")
+            raise _ReadDeferred(reason, screen)
+    return read
+
+
+def collect(out, bridge, writer=None, real=False, send=False, now=None, brief_hour=None, interactive=False):
     """Read replies from the self chat and apply them. Returns applied changes. Only one collect runs at a time (a lock file in
     the state folder): the daily cycle and a hand-typed `approvals` could otherwise approve the same "OK N" twice and write twice.
-    When the lock is held, nothing is done and the result has `busy` set. `brief_hour` (R09): the hour a day hold lasts until, the
-    one the cycle's brief runs at (None: the setting brief_hour)."""
+    When the lock is held, nothing is done and the result has `busy` set. When the read is postponed (the person is using Teams /
+    the PC, the screen cannot be put back...), nothing is applied and the result has `deferred` set; the replies stay on the screen
+    and are read in a later cycle (an approval is applied once: its status is already what the reply says).
+    interactive=True: the person ran `approvals` and the self chat is opened for them (the earlier way)."""
     with fsutil.exclusive(lock_path(out)) as got:
         if not got:
             res = Changes()
             res.busy = True
             return res
-        changes = _collect(out, bridge, writer, real, send, now, brief_hour)
-        learn.offer_style(out, changes, now or _naive_now())   # R34 (learn=1 only): a card for a wording another item used too; under this lock
-        return Changes(changes)
+        screen_out = {}
+        try:
+            res = Changes(_collect(out, bridge, writer, real, send, now, brief_hour, interactive, screen_out))
+        except _ReadDeferred as e:
+            res = Changes()
+            res.deferred, res.screen = e.reason, e.screen
+            return res
+        learn.offer_style(out, res, now or _naive_now())
+        res.screen = screen_out.get("screen")
+        return res
 
 
 def unwritten(it):
@@ -1983,11 +2065,11 @@ def unwritten(it):
     nothing was executed. The post had shown the text and the target, and `exec` is still empty. The first run with --send writes it."""
     from . import execute
     return bool(it.get("posted")) and it.get("status") == "approved" and not it.get("exec") and any(
-        execute.is_gated(a) and a.get("exec_text") for a in (it.get("record") or {}).get("actions", []))
+        execute.is_gated(a) and (a.get("exec_text") or a.get("exec_update")) for a in (it.get("record") or {}).get("actions", []))
 
 
-def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_hour=None):
-    """The body of collect (the lock is held).
+def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_hour=None, interactive=False, screen_out=None):
+    """The body of collect (the lock is held). `screen_out["screen"]`: what the read did to the Teams screen.
     real=True (the daily and approvals paths only): an approval carries out the switched-on kinds, and `再実行 N` / `済 N` work.
     send=True: what is posted while collecting (results, texts ready to copy) is sent; otherwise it is only pasted.
     real and send together (the first run with --send after an OK without it): the comments of such OKs are written now, once."""
@@ -2006,6 +2088,22 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
         return it["posted"] and (it["status"] in ("pending", "held") or (
             real and it["status"] == "approved" and (any(execute.unresolved(v) for v in (it.get("exec") or {}).values())
                                                      or (send and unwritten(it)))))
+    # Establish a safe read before any pending execution, outbox write or state change.
+    from . import spot
+    work_wait = real and send and work.awaiting(ap.data, clock)
+    case_wait = work_wait or any(waiting(it) for it in ap.data["items"].values())
+    spot_wait = real and send and spot.awaiting(out, clock)
+    read = None
+    if case_wait or spot_wait:
+        try:
+            read = read_replies(bridge, interactive, screen_out)
+        except (_ReadDeferred, BridgeError):
+            raise
+        except Exception as e:
+            if case_wait:
+                raise
+            spot._warn(out, f"read ({type(e).__name__})")
+            return []
     flushed = True
     if send and ap.data.get("outbox"):
         flushed = flush_outbox(ap, bridge, True)   # results that could not be posted last time
@@ -2022,11 +2120,9 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
         ap.save()
     # nothing is waiting for an answer: do not touch Teams at all (reading switches it to the self chat). The one exception is a card
     # of the day's spot check that waits for its answer (R26, spot.py): the reply is read for it, and nothing else is touched
-    work_wait = real and send and work.awaiting(ap.data, clock)   # R30 (promises=1): the deadline post is due, or a post of it is recent
-    if not work_wait and not any(waiting(it) for it in ap.data["items"].values()):
-        if real and send:
-            from . import spot
-            spot.answers(out, bridge, now or _naive_now())
+    if not case_wait:
+        if spot_wait:
+            spot.apply_safe(out, read, clock)
         return adopted
     post = make_post(ap, bridge, send)
     if real:
@@ -2043,7 +2139,6 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
                 got = execute.reply_request(out, ap, int(num), it, post, bridge, send=True)
                 if got:
                     changes.append({"id": int(num), "status": "reply_send", "real": got})
-    read = bridge.read()
     if real and send:   # R26: `正しい S<k>` / `違う S<k>` label their card's decision (spot.py); no approval item is touched by them
         from . import spot
         spot.apply_safe(out, read, now or _naive_now())
@@ -2110,7 +2205,8 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
         redo_done.add(num)
         it["redo_mark"] = int(it.get("x_seq", 0))   # the results made so far; those of this redo come after
         ap.save()   # saved before the run: a stop in the middle must not run the same reply again
-        changes.append({"id": int(num), "status": "redo", "real": execute.redo(out, ap, int(num), it, post, bridge=bridge, send=send)})
+        real_ = execute.redo(out, ap, int(num), it, post, bridge=bridge, send=send)
+        changes.append({"id": int(num), "status": "reapproval" if it["status"] == "pending" else "redo", "real": real_})
 
     def redo_candidate(num):
         it = ap.data["items"].get(num)
@@ -2244,7 +2340,7 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
         new = STATUS[word]
         if new == it["status"]:
             continue
-        if new == "approved" and real and any(execute.is_gated(a) and not (a.get("exec_text") or a.get("exec_skip") or a.get("reply_text") or a.get("reply_skip"))
+        if new == "approved" and real and any(execute.is_gated(a) and not (a.get("exec_text") or a.get("exec_update") or a.get("exec_skip") or a.get("reply_text") or a.get("reply_skip"))
                                               for a in it["record"].get("actions", [])):   # a reply that was not fixed in its post counts too (S2)
             # posted before execution was switched on: it never showed the text that would be written. Nothing is written;
             # the post is made again with the text and the target, and the PM answers again.
@@ -2278,6 +2374,8 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
             ch["real"] = _after_approval(out, ap, int(num), it, bridge, real=real, send=send)
             if learn.is_card(it):   # R21: written only with real and send (learn.adopt); otherwise it waits for such a run
                 ch["learn"] = learn.adopt(out, it, now=now, real=real, send=send)
+            if it["status"] == "pending":   # the change no longer matched ADO: it is posted again for a new OK (execute.reopen_for_approval)
+                ch["status"] = "reapproval"
         changes.append(ch)
     changes = adopted + changes
     ap.save(compact=learn.purge_all(ap.data))   # R34: a card answered in this run gives up its wording (compact: no .bak keeps it)

@@ -241,11 +241,12 @@ class TestDedupAndMerge(Base):
         self.assertEqual(pull.teams_events([{**chat, "time": "昨日"}], sec), [])
         self.assertEqual(len(pull.teams_events([{**chat, "preview": "確認をお願いします。急ぎです"}], sec)), 1)
 
-    def test_a_follow_up_in_the_same_chat_joins_the_waiting_item(self):
+    def test_an_explicitly_linked_correction_in_the_same_chat_joins_the_waiting_item(self):
         chat = "19:same@thread.v2"
         cli.process({**self.ev(1, "これは何ですか", chat), "author": "田中"}, GRAPHS, StubBackend(), self.out, PBS, dedup=True)
         notify.notify(self.out, self.teams, send=True)
-        cli.process({**self.ev(2, "あと、期限は今週です", chat), "author": "田中"}, GRAPHS, StubBackend(), self.out, PBS, dedup=True)
+        cli.process({**self.ev(2, "あと、期限は今週です", chat), "author": "田中", "supersedes_event_id": "1"},
+                    GRAPHS, StubBackend(), self.out, PBS, dedup=True)
         ap = notify.Approvals(self.out)
         self.assertEqual(len(ap.data["items"]), 1)                        # not a second item
         item = next(iter(ap.data["items"].values()))
@@ -257,11 +258,12 @@ class TestDedupAndMerge(Base):
         self.assertIn("続きのメッセージ", detail_of(self.out))
         self.assertEqual(len(self.decisions()), 2)                        # judged, not skipped; only the item is shared
 
-    def test_a_follow_up_is_still_judged_when_it_joins(self):
+    def test_an_explicitly_linked_correction_is_still_judged_when_it_joins(self):
         chat = "19:same@thread.v2"
         cli.process({**self.ev(1, "これは何ですか", chat), "author": "田中"}, GRAPHS, StubBackend(), self.out, PBS, dedup=True)
         notify.notify(self.out, self.teams, send=True)
-        res = cli.process({**self.ev(2, "あと、期限は今週です", chat), "author": "田中"}, GRAPHS, StubBackend(), self.out, PBS, dedup=True)
+        res = cli.process({**self.ev(2, "あと、期限は今週です", chat), "author": "田中", "supersedes_event_id": "1"},
+                          GRAPHS, StubBackend(), self.out, PBS, dedup=True)
         self.assertEqual(len(res), 1)                                     # the judge was asked
         self.assertTrue(res[0].get("merged"))
 
@@ -269,7 +271,8 @@ class TestDedupAndMerge(Base):
         chat = "19:group@thread.v2"
         cli.process({**self.ev(1, "これは何ですか", chat), "author": "田中"}, GRAPHS, StubBackend(), self.out, PBS, dedup=True)
         notify.notify(self.out, self.teams, send=True)
-        res = cli.process({**self.ev(2, "本番でエラーが出て、全ユーザーがログインできません", chat), "author": "鈴木"},
+        res = cli.process({**self.ev(2, "本番でエラーが出て、全ユーザーがログインできません", chat), "author": "鈴木",
+                           "supersedes_event_id": "1"},
                           GRAPHS, StubBackend(), self.out, PBS, dedup=True)
         self.assertFalse(res[0].get("merged"))
         self.assertTrue(res[0]["notify"])                                 # an incident: reaches the PM, is filed as a bug
@@ -277,21 +280,26 @@ class TestDedupAndMerge(Base):
         self.assertEqual(len(notify.Approvals(self.out).data["items"]), 1)   # the earlier item is not touched
         self.assertNotIn("followups", next(iter(notify.Approvals(self.out).data["items"].values()))["record"])
 
-    def test_a_thanks_from_the_same_person_joins_the_waiting_item(self):
+    def test_unlinked_thanks_from_the_same_person_does_not_replace_waiting_item(self):
         chat = "19:same@thread.v2"
         cli.process({**self.ev(1, "これは何ですか", chat), "author": "田中"}, GRAPHS, StubBackend(), self.out, PBS, dedup=True)
         notify.notify(self.out, self.teams, send=True)
+        before = json.loads((self.out / "approvals.json").read_text(encoding="utf-8"))
         res = cli.process({**self.ev(2, "ありがとうございます", chat), "author": "田中"}, GRAPHS, StubBackend(), self.out, PBS, dedup=True)
         self.assertTrue(_no_action(res[0]))
-        self.assertTrue(res[0].get("merged"))
-        item = next(iter(notify.Approvals(self.out).data["items"].values()))
-        self.assertEqual(item["record"]["followups"][0]["text"], "ありがとうございます")
+        self.assertFalse(res[0].get("merged"))
+        after = json.loads((self.out / "approvals.json").read_text(encoding="utf-8"))
+        self.assertEqual(after, before)
+        item = next(iter(after["items"].values()))
+        self.assertEqual(item["record"]["event_id"], "1")
+        self.assertEqual([a["type"] for a in item["record"]["actions"]], ["teams.reply", "ado.create"])
 
     def test_a_different_destination_from_the_same_person_is_a_matter_of_its_own(self):
         chat = "19:same@thread.v2"
         cli.process({**self.ev(1, "これは何ですか", chat), "author": "田中"}, GRAPHS, StubBackend(), self.out, PBS, dedup=True)
         notify.notify(self.out, self.teams, send=True)
-        res = cli.process({**self.ev(2, "本番でエラーが出て、全ユーザーがログインできません", chat), "author": "田中"},
+        res = cli.process({**self.ev(2, "本番でエラーが出て、全ユーザーがログインできません", chat), "author": "田中",
+                           "supersedes_event_id": "1"},
                           GRAPHS, StubBackend(), self.out, PBS, dedup=True)
         self.assertFalse(res[0].get("merged"))                            # it notifies: never folded into the earlier item
 
@@ -450,7 +458,7 @@ class TestScriptGuards(unittest.TestCase):
         self.assertIn("SetForegroundWindow($script:PrevFg)", self.funcs["Restore-Foreground"])
 
     def test_it_takes_the_lock_and_waits_for_a_quiet_keyboard(self):
-        lock = next(l for l in self.text.splitlines() if l.startswith("if ($Action -in 'open', 'post', 'send', 'testreply', 'read', 'readchat')"))
+        lock = next(l for l in self.text.splitlines() if l.startswith("if ($Action -in 'open', 'post', 'send', 'testreply', 'read', 'readchat'"))
         self.assertIn("Enter-UiLock", lock)
         idle = next(l for l in self.text.splitlines() if l.startswith("if ($Action -in 'post', 'send', 'testreply')"))
         self.assertIn("Wait-UserIdle", idle)

@@ -10,7 +10,7 @@ python -m kimeru config set ado_project "<プロジェクト>"
 python -m kimeru config set execute ado.comment
 ```
 
-- `execute` に書けるのは、実装済みの `ado.comment` と `teams.reply`（[相手への返信の送信](execute-teams-reply.md)）です。ほかの種類（`ado.update` など）を書くと、「未対応」と表示され、これまでどおり記録のみです。
+- `execute` に書けるのは、実装済みの `ado.comment` ・`teams.reply`（[相手への返信の送信](execute-teams-reply.md)）と `ado.update`（優先度だけ。[優先度の変更](execute-ado-update.md)）です。ほかの種類（`ado.create`・`oncall.page` など）を書くと、「未対応」と表示され、これまでどおり記録のみです。ADO の両方を有効にするときは `config set execute ado.comment,ado.update` です。
 - 認証は、あなた自身の `az` のサインイン（`az login`）です。トークンは記録も表示もしません。
 - 元に戻す: `python -m kimeru config unset execute`
 

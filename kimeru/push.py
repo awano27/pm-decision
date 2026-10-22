@@ -146,7 +146,7 @@ def send_webhook(url, text):
 
 def send_outlook(text):
     """The recipient is fixed inside outlook-mail.ps1: the address Outlook is signed in with. There is no -To."""
-    script = HERE / "tools" / "outlook-mail.ps1"
+    script = paths.base() / "tools" / "outlook-mail.ps1"
     try:
         r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script),
                             "-Subject", "kimeru", "-Body", text],
@@ -439,19 +439,27 @@ def test(sender=None):
 def send_challenge(challenge, sender=None):
     """Send an onboarding challenge through configured routes without touching push_state.json.
 
-    The challenge is the only variable content and is an opaque, freshly generated identifier; no case, person,
-    message body or sender is included. Results distinguish route acceptance from later human receipt confirmation.
+    `challenge` is a dict {route: code} (every route carries its own code, so a later confirmation names the route) or one
+    string (the same code to every route: a confirmation then cannot tell the routes apart). A code is the only variable
+    content and is an opaque, freshly generated identifier; no case, person, message body, sender or URL is included.
+    The result per route is "accepted" (the route took the send: HTTP accepted, or the mail handed to Outlook; that is NOT
+    proof that anything reached a device), "failed (ExceptionType)" or "skipped" (a dict without a code for the route).
+    Whether a person saw it on a device is recorded separately (onboarding confirm).
     """
     routes = enabled_routes()
     if not routes:
         return {"(none)": "no route"}
-    text = f"kimeru notification test challenge {challenge}"
     result = {}
     for route in routes:
+        code = challenge.get(route) if isinstance(challenge, dict) else challenge
+        if not code:
+            result[route] = "skipped"
+            continue
+        text = f"kimeru notification test challenge {code}"
         try:
             (sender(route, text) if sender else _sender(route)(text))
             result[route] = "accepted"
-        except Exception as exc:
+        except Exception as exc:   # the type only: the text of an error may hold the URL
             result[route] = f"failed ({type(exc).__name__})"
     return result
 

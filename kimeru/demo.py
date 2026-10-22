@@ -191,16 +191,15 @@ def probe(backend):
 
 
 def prepare(out, fresh=False):
-    """Clear only what an earlier demo wrote. Real records (no mark) stop the demo; with fresh=True they are moved,
-    never deleted, into before-demo-<time>/ next to them."""
+    """Prepare output: --fresh archives known records; tryout may clear its own marked records directly."""
     out = Path(out)
     present = [f for f in RECORDS if (out / f).exists()]
-    if present and not (out / MARK).exists():
+    if present and (fresh or not (out / MARK).exists()):
         if not fresh:
             raise RecordsInTheWay(
                 f"kimeru: {out} にデモ以外の記録があります（{', '.join(present)}）。消さずに止めました。"
                 f"デモは別の --out を指定するか（既定は out\\demo）、--fresh でこれらを {out}\\before-demo-<日時>\\ へ移してから実行します")
-        keep = out / ("before-demo-" + datetime.now().strftime("%Y%m%d-%H%M%S"))
+        keep = out / ("before-demo-" + datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
         keep.mkdir()
         for f in present:
             (out / f).replace(keep / f)
@@ -208,13 +207,24 @@ def prepare(out, fresh=False):
     else:
         for f in present:   # the previous demo's own files, .bak included, so its approvals start from #1
             (out / f).unlink()
-        (out / ".kimeru-try").unlink(missing_ok=True)   # a try run's folder (tryout.TRY_MARK) becomes a demo folder again
     out.mkdir(parents=True, exist_ok=True)
-    (out / MARK).write_text("kimeru demo output: this folder is cleared by the next demo\n", encoding="utf-8")
+    (out / ".kimeru-try").unlink(missing_ok=True)
+    (out / MARK).write_text("kimeru demo output: use --fresh to archive known records before another demo\n", encoding="utf-8")
+
+
+def require_empty_output(out, fresh=False):
+    """Refuse a nonempty demo destination unless explicit --fresh opts into prepare's record backup."""
+    out = Path(out)
+    if fresh and out.is_dir():
+        return
+    if out.exists() and (not out.is_dir() or next(out.iterdir(), None) is not None):
+        raise ValueError(f"demo output directory must be empty; choose a new empty --out or explicit --fresh: {out}（消さずに止めました）")
 
 
 def run(scenario, graphs, backend, playbooks, process, out, pace=1.5, step=False, fresh=False):
     global _PACE, _STEP
+    out = Path(out)
+    require_empty_output(out, fresh=fresh)
     _STEP = step
     _PACE, pace = pace, 1.0   # below, `pace` is one pause unit; _w converts units to seconds
     sc = json.loads(Path(scenario).read_text(encoding="utf-8"))

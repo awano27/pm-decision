@@ -6,6 +6,7 @@ except ImportError:
     import isolate  # noqa: F401
 
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -168,7 +169,9 @@ class TestNoJevNumbers(Reviewing):
         self.assertNotIn("秒", buf.getvalue())
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            demo.run(ROOT / "examples" / "demo_day.json", GRAPHS, StubBackend(), PBS, cli.process, self.out, pace=0)
+            stub_out = Path(self.dir.name) / "out-stub-demo"
+            stub_out.mkdir()
+            demo.run(ROOT / "examples" / "demo_day.json", GRAPHS, StubBackend(), PBS, cli.process, stub_out, pace=0)
         self.assertIn("秒", buf.getvalue())               # the offline judge still shows it
         from kimeru import daily
         inbox = Path(self.dir.name) / "inbox"
@@ -200,7 +203,8 @@ class TestCalibrateByJudge(Reviewing):
             node = {"kind": "judge", "question": {"type": "choice", "instructions": "x", "criteria": {"a": "A", "b": "B"}},
                     "routes": {"a": "n1", "b": "n2", "unsure": "n3"}}
             out.append({"key": f"{judge}{i}", "node": node, "node_id": "q", "ans": {"choice": "a", "confidence": 0.65 if wrong else 0.95},
-                        "label": "b" if wrong else "a", "judge": judge})
+                        "label": "b" if wrong else "a", "judge": judge, "model": "fixture-model",
+                        "model_key": hashlib.sha256(b"fixture-model").hexdigest()})
         return out
 
     def test_a_record_from_the_stub_is_not_applied_and_says_why(self):

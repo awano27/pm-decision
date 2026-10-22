@@ -41,6 +41,10 @@ python eval/run_eval.py tune answers_kev.jsonl           # grid search, never ad
 python eval/run_eval.py score answers_kev.jsonl --profile kev
 ```
 
+**The numbers below are historical measurements retained from public main**, including runs before and after C09.
+Real-model re-evaluation of this integrated version is **NOT_RUN**, as is evaluation on real (anonymized) data
+(see `docs/evaluation.md`). These records are not evidence of a new run on this version.
+
 Kev-4B (local; publishing Kev numbers is fine). First run (2026-09-26, 197 model questions before the
 rule-first nodes): 124 decided correctly, 70 sent to a human, 3 confidently wrong with Jev's thresholds;
 126 / 68 / 3 with the `kev` profile (1.0 / 0.95). Current fixtures ask the model 175 labeled questions
@@ -57,7 +61,7 @@ model's own answer, so an unlabeled question is never scored. "Correct" means th
 action, not that every question was answered right. An event with no labeled judgment on its path is always "correct", and
 "to-human" counts only the events that differ from the expected path and went to a person (e2e.py does not count the former yet).
 
-Current scoring (2026-10-06, commit cb13df1, Kev-4B, CPU bf16): 65 correct / 22 human / 10 fallback / 2 wrong / 0 severe on
+Post-C09 scoring record (2026-10-06, commit cb13df1, Kev-4B, CPU bf16): 65 correct / 22 human / 10 fallback / 2 wrong / 0 severe on
 the 99 events; 37 / 10 / 0 / 1 / 0 on the 48 held-out events. Details: docs/evaluation.md.
 
 Same weights on CPU fp32 (2026-10-13, commit f102813, all new roadmap settings at their defaults): 66 correct /
@@ -96,6 +100,39 @@ a backend: 26 / 44 / 14 / 15 wrong (2 severe misses) on the 99 events, 9 / 23 / 
 top-1 per question 49% vs Kev 85% in that comparison run (the 89% above is the 2026-09-27 run of the
 175 labeled questions). Its reference head is trained on coding-agent trajectories, and on these
 Japanese PM questions it collapses score answers to the middle. Not used.
+
+## Your own labeled decisions (`dataset_eval.py`, local only)
+
+`kimeru review` writes labeled rows to `<state folder>/fixtures_user.jsonl`. To evaluate on them without putting business
+data in the repository:
+
+```bash
+python -m kimeru dataset anonymize                       # candidate + review_PRIVATE.txt; the source is not changed
+python -m kimeru dataset mark-reviewed DIR --i-reviewed  # after a person read the review list (void if the bytes change)
+python -m kimeru dataset split DIR                        # deterministic tune / eval split, checks, data version
+python eval/dataset_eval.py run --dataset SPLIT_DIR --backend kev
+python eval/dataset_eval.py status --dataset SPLIT_DIR --result SPLIT_DIR/result-kev.json
+```
+
+- The anonymization output is a **candidate** (`status: candidate, human_review_required`), never "anonymized": secrets and
+  proper nouns written in free text can remain. `review_PRIVATE.txt` lists every replacement with the original value: keep
+  it on the PC and delete it after the review.
+- `split` excludes, with a reason per row id: missing fields, rows the current graphs cannot score, exact duplicates, one
+  event labeled two ways. Near-duplicates (normalized text) go to the same side; `kimeru dataset check TUNE EVAL` finds
+  leakage between files split some other way.
+- The result records the data version, the graph fingerprints, the model identity and the scoring method. A result that
+  does not match the dataset, graphs, model or scoring is `PROVENANCE_MISMATCH` and shows no numbers.
+- Six categories are kept apart: correct / human_confirmation / safe_fallback / wrong_decision / critical_miss /
+  undeterminable. `e2e.py` now prints severe misses apart from the other wrong decisions.
+- No dataset or no rows is `NO_INPUT`; no result is `NOT_RUN`. Neither is shown as 0%. `--backend stub` is a
+  `PIPELINE_CHECK` (the path works), not an accuracy.
+- Jev: the result file is marked not shareable and no counts are printed or summarized.
+- Results must use a new file outside the repository; existing inputs and results are never overwritten.
+  Use `--out NEW_RESULT` for a rerun. `NO_INPUT` returns exit code 1. Missing manifest fields, changed files,
+  and inconsistent row counts are `PROVENANCE_MISMATCH`, including before a result exists.
+- Use `dataset_eval.py status` to compare against the current graphs and scoring implementation.
+  `kimeru dataset status` checks dataset/result provenance and current graphs, without loading the current scorer;
+  it explicitly reports scoring as unchecked and cannot mark the roadmap DONE.
 
 ## Question-writing rules learned from this eval
 

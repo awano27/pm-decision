@@ -196,7 +196,11 @@ class TestTheQuestionAndItsOption(Base):
             self.assertNotIn(word, text)
 
     def test_the_numbered_option_becomes_the_expected_answer_and_calibration_reads_it(self):
-        self.queue(decision())
+        record = decision()
+        record["calibration_key"] = graph.calibration_key(GRAPHS["teams.chat"][0], PBS)
+        record["judge"] = {"name": "Kev", "model": "fictional-test-model",
+                           "model_key": hashlib.sha256(b"fictional-test-model").hexdigest()}
+        self.queue(record)
         self.say("詳細 1")
         self.say("違う 1 2")
         rows = self.fixtures()
@@ -207,6 +211,14 @@ class TestTheQuestionAndItsOption(Base):
         self.assertEqual((self.log()[-1]["verdict"], self.log()[-1]["k"]), ("no", 2))
         qs = calibrate.labeled_questions(self.out, GRAPHS)
         self.assertEqual([(q["graph"], q["node_id"], q["label"], q["key"]) for q in qs], [(GRAPH, "intent", "requirements", KEY)])
+        self.assertEqual(self.item()["status"], "pending")
+
+    def test_a_label_without_graph_and_model_provenance_is_not_reused_for_calibration(self):
+        self.queue(decision())
+        self.say("詳細 1")
+        self.say("違う 1 2")
+        self.assertEqual(self.fixtures()[0]["expect"], {"intent": "requirements"})
+        self.assertEqual(calibrate.labeled_questions(self.out, GRAPHS), [])
         self.assertEqual(self.item()["status"], "pending")
 
     def test_the_same_label_on_the_next_cycle_is_recorded_once(self):

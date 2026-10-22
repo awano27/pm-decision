@@ -331,6 +331,19 @@ function Show-CopilotPane($w) {
     }
   }
 }
+function Get-SendButton($w, $boxRect) {
+  # The Send button must belong to the Copilot composer. A meeting chat or another chat on screen has its own Send
+  # button, and the first one in tree order may carry somebody else's draft. A button counts only when it lies at the
+  # composer (not left of it; a little to the right, above or below) and is the only enabled Send button there. If the
+  # composer's rectangle is unknown or the button cannot be told apart, return $null: the caller then presses Enter
+  # inside the composer, after confirming that the keyboard focus is in it.
+  if (-not $boxRect -or $boxRect.Width -le 0) { return $null }
+  $near = New-Object System.Windows.Rect($boxRect.X, ($boxRect.Y - 200), ($boxRect.Width + 150), ($boxRect.Height + 400))
+  $c = @(Find-All $w $CT::Button | Where-Object {
+    $r = $_.Current.BoundingRectangle
+    $_.Current.Name -match '^(送信|Send)(\s*\(|$)' -and $_.Current.IsEnabled -and $r.Width -gt 0 -and $near.Contains(($r.X + $r.Width / 2), ($r.Y + $r.Height / 2)) })
+  if ($c.Count -eq 1) { $c[0] } else { $null }
+}
 function Get-Diag($w) {
   # everything needed to judge a failed run in one go, and none of the text: counts, flags, masked ids
   try {
@@ -453,7 +466,14 @@ if ($DryRun) {
   $script:DryInfo = "dpiMode=$script:DpiMode focus=[$($script:FocusTrace -join ' ; ')] boxType=$($box.Current.ControlType.ProgrammaticName -replace '^ControlType\.', '') how=$(if ($script:BoxHow) { $script:BoxHow } else { 'named' }) focus=ok removed=$($rest -le 2) sendButton=$([bool](Find-All $w $CT::Button | Where-Object { $_.Current.Name -match '^(送信|Send)' } | Select-Object -First 1))"
   return
 }
-$btn = Find-All $w $CT::Button | Where-Object { $_.Current.Name -match '^(送信|Send)(\s*\(|$)' -and $_.Current.IsEnabled } | Select-Object -First 1
+$btn = Get-SendButton $w $script:BoxRect   # only a Send button that sits at the Copilot composer; else null and Enter is pressed inside the (focus-checked) composer
+# Button discovery can outlive a layout change or a person's edit. Reconfirm the unique composer and its
+# contents immediately before sending. Do not clear, refocus or retry when that evidence changed.
+$currentBox = Find-Box (Get-TeamsWindow) -Strict
+if (-not $currentBox) { Fail 'Copilot target became ambiguous before send; nothing sent' }
+try { $sameBox = (($currentBox.GetRuntimeId() -join '.') -eq ($box.GetRuntimeId() -join '.')) } catch { $sameBox = $false }
+if (-not $sameBox) { Fail 'Copilot target changed before send; nothing sent' }
+if ((Squash (Read-Box $currentBox)) -ne (Squash $text)) { Fail 'Copilot text changed before send; nothing sent' }
 if ($btn) { try { $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch { $btn = $null } }
 if (-not $btn) { Assert-Foreground $w; if (-not (Focus-Box $box)) { Fail 'the keyboard focus left the Copilot compose box; nothing sent' }; [System.Windows.Forms.SendKeys]::SendWait('{ENTER}') }
 # the request must actually leave the box; if it is still there after a moment, press Enter once more, and

@@ -57,6 +57,7 @@ writer に渡す材料からアラートのリソース ID を外す、自動運
 
 - **run-check の T5 は、Teams が窓なしで動いているとき、原因を言って送らない。**何が起きていたか: T3 のあとに窓をトレイへ閉じると、T4/T5 が `NG Teams window not found` だけを残した。どう直したか: 送る前に `status` を読み、起動していて窓が無いときは「ウィンドウを開いてチャット一覧を表示してから `run-check.cmd T5` をやり直す」と記録して送らない。テストで固定した: `tests/test_auto_check.py`（文面と、`status` を `post` の前に読むこと）。
 - **run-check の T5 は、PC からの返信も案内し、待ち時間を 300 秒にして、遅れた返信も読む。**何が起きていたか: 「iPhone の Teams で返信してください」「iPhone から返信しましたか」とだけ案内していたので、PC で返信した人は n と答え、待っている間は何も表示されず、180 秒で `返信読取=NG(タイムアウト)` と記録したあとに、読み手は先の回の `OK` を読めていた（返信が窓のあとに届いていた）。どう直したか: 「PC か iPhone の Teams で…返信してください」「返信しましたか（PC でも iPhone でも）？」に変え、待っている間は 30 秒ごとに「返信を待っています… 残り N 秒」、読めたらすぐ「返信を読み取りました」と表示する。待ち時間は既定 300 秒で、環境変数 `KIMERU_T5_WAIT_SEC`（30〜900、不正なら既定）で変えられる。時間切れの直後にもう一度だけ読み、返信があれば `返信読取=OK(遅れて届いた)` と記録する（ほかの項目の記録の形は同じ）。テストで固定した: `tests/test_auto_check.py`（新しい案内の文、`KIMERU_T5_WAIT_SEC` の扱い、進み具合の表示、遅れた返信を読む文言と時間切れの後に読むこと）。
+- **CI で落ちていた試験を直した（製品の動きは変えていない）。**何が起きていたか: 合成した Teams で承認の読み取りを試す `tests/test_safe_approval_read.py` と `tests/test_approval_reader_isolation.py` は Windows の UI Automation の型を使うのに、Linux の `pwsh` でも動いて失敗していた。Windows の CI では PowerShell の起動が遅く、30 秒で時間切れになっていた。配布物の試験（`tests/test_distribution_assets.py`）は、ビルドに使う setuptools が CI に無く失敗していた。直したこと: 2 つの試験は Windows だけで動かし、時間切れを 180 秒にした。CI はテストの前に setuptools と wheel を入れ、setuptools が無い環境ではこの試験を理由付きで飛ばす。
 
 ### 承認した優先度の変更を実行する（`ado.update`、2026-10-21）
 

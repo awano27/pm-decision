@@ -84,7 +84,7 @@ $w = New-Node '' $nodes
         env = {"PATH": os.environ.get("PATH", ""), "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
                "WINDIR": os.environ.get("WINDIR", ""), "PYTHONUTF8": "1"}
         proc = subprocess.run([runner, "-NoProfile", "-NonInteractive", "-Command", code], input="",
-                              capture_output=True, text=True, encoding="utf-8", timeout=30,
+                              capture_output=True, text=True, encoding="utf-8", timeout=180,
                               env={**env, "InputNames": payload, "TEMP": d, "TMP": d})
     if proc.returncode:
         raise AssertionError(proc.stderr or proc.stdout)
@@ -107,7 +107,7 @@ def non_reply_subtrees():
     ]
 
 
-@unittest.skipUnless(POWERSHELL, "PowerShell not available")
+@unittest.skipUnless(os.name == "nt" and POWERSHELL, "needs Windows PowerShell (UI Automation types)")
 class TestApprovalReaderIsolation(unittest.TestCase):
     def test_document_container_preserves_timeline_and_legitimate_reply(self):
         timeline = synthetic_timeline([{

@@ -4,6 +4,7 @@ try:
 except ImportError:
     import isolate  # noqa: F401
 
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
@@ -85,6 +86,7 @@ class DistributionAssetsTests(unittest.TestCase):
             self.assertEqual(code, 0, output.getvalue())
             self.assertIn("alert-triage", output.getvalue())
 
+    @unittest.skipUnless(importlib.util.find_spec("setuptools"), "offline build needs setuptools installed")
     def test_offline_wheel_and_sdist_assets(self):
         with tempfile.TemporaryDirectory(prefix="kimeru-distribution-") as temp:
             base = Path(temp)

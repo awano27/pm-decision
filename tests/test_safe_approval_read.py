@@ -138,7 +138,7 @@ try {
         p = Path(d) / "case.ps1"
         p.write_text(code, encoding="utf-8-sig")
         proc = subprocess.run([POWERSHELL, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(p)],
-                              input="", capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
+                              input="", capture_output=True, text=True, encoding="utf-8", timeout=180, env=env)
     out_lines = [l for l in proc.stdout.splitlines() if l.startswith("{")]
     ops_lines = [l for l in proc.stderr.splitlines() if l.startswith("OPS ")]
     if not out_lines or not ops_lines:
@@ -146,7 +146,7 @@ try {
     return json.loads(out_lines[-1]), json.loads(ops_lines[-1][4:]), proc.returncode
 
 
-@unittest.skipUnless(POWERSHELL, "PowerShell not available")
+@unittest.skipUnless(os.name == "nt" and POWERSHELL, "needs Windows PowerShell (UI Automation types)")
 class TestSafeApprovalRead(unittest.TestCase):
     def test_self_chat_already_open_is_read_without_any_operation(self):
         out, log, rc = run_scenario(screen="48:notes", selected="48:notes", idle=False, in_use=True)

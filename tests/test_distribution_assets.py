@@ -185,7 +185,7 @@ import sys
 from kimeru import cli, graph, notify, paths, plan, push, resources, stats, writer
 from kimeru.backends import StubBackend
 root = Path(kimeru.__file__).resolve().parent
-assert root.is_relative_to(Path(sys.prefix))
+assert root.is_relative_to(Path(sys.prefix).resolve())
 assert paths.base() == Path(sys.prefix) / 'share' / 'kimeru'
 assert resources.resource_dir('graphs') == paths.base() / 'graphs'
 assert resources.resource_path('examples', 'demo_day.json').is_file()

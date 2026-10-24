@@ -164,6 +164,32 @@ python eval/draft_quality.py --fixtures fixtures_holdout.jsonl --per-kind 2
 
 下書きごとに、日本語・英語の混入・定型文の複製・不自然な言い回し・材料にない権限者や完了・具体性・材料にない日付や数値を数えます（判定は LLM ではなく決まった規則なので、プロンプトの変更の前後で比べられます）。`--show` で、定型文と下書きを並べて読めます。最終的な確認は、読んで行ってください。
 
+### 文脈の効果と事実照合率を測る（K01）
+
+文脈を writer に渡す設定（`writer_precedent` など）を既定にするかは、数値で決めます。`--settings` は設定の組ごとに同じ fixtures を回し、その実行の間だけ環境変数に置いて、終わったら戻します（繰り返し可、`a=b,c=d` で複数の設定を 1 組に）。
+
+```bash
+# writer を明示する（省くと既定の copilot を実際に呼ぶ）。固定の台本 writer なら外部へは何も送らない
+export KIMERU_WRITER_CMD="python /絶対パス/eval/scripted_writer.py"
+python eval/draft_quality.py --backend stub --writer cmd --fixtures fixtures_context.jsonl --kinds teams.chat --per-kind 12     --settings writer_precedent=0 --settings writer_precedent=1 --out q.jsonl
+python eval/revision_rate.py --out <状態フォルダ>     # PM の修正率を writer ごとに（件数と率だけ。本文・指示文は出さない）
+```
+
+1 下書きごとの記録（`--out` の JSONL）は、`grounded_rate`（下書きの日付・数値・人名のうち材料にある割合。同じ語は 1 つと数え、語が 0 なら null）、`tokens_total`、`tokens_unverified`、`flags`、`thread_given` / `precedent_given` / `style_given` / `today_given`（依頼文にそのブロックがあったか）です。`fixtures_context.jsonl` の 5 件目以降は `precedent`（前例の行）と `expect_facts`（返信に出てよい事実）を持ち、`expect_facts` にない語は `invented_vs_expect` に入ります（材料との照合より厳しい正解）。`revision_rate.py` の分子は `approvals.log.jsonl` の `修正` の行（`autorun.REPLY_NAMES`）、分母は `approvals.json` の `drafted_by` 付きの件数です。
+
+固定の台本 writer（`eval/scripted_writer.py`。依頼の中身を見ず、毎回同じ 1 文を返す）で回した結果です（2026-10-24、起点 f84bb0c、stub backend、`teams.chat` の 12 件のうち下書きが出た 11 件）。**これは依頼文の組み立ての確認で、文脈が文面を良くするかの結果ではありません。** 台本の文は日付・数値・人名を含まないので `grounded_rate` は出ず（-）、設定による差は `precedent_given` にだけ出ます。
+
+| 設定の組 | 種別 | 良い/全体 | grounded_rate | invented | precedent_given | thread_given |
+|---|---|---|---|---|---|---|
+| `writer_precedent=0` | teams.reply | 10/11 | - | 0 | 0/11 | 11/11 |
+| `writer_precedent=0` | ado.create | 10/10 | - | 0 | 0/10 | 10/10 |
+| `writer_precedent=0` | memo | 11/11 | - | 0 | - | - |
+| `writer_precedent=1` | teams.reply | 10/11 | - | 0 | 7/11 | 11/11 |
+| `writer_precedent=1` | ado.create | 10/10 | - | 0 | 6/10 | 10/10 |
+| `writer_precedent=1` | memo | 11/11 | - | 0 | - | - |
+
+`precedent_given` が設定 1 でも全部にならないのは、元の 4 件（ctx-1〜4）に `precedent` がなく、ctx-10（共有だけの件）に下書きが出ないためです。実際の writer（`--writer copilot` など）での数値は NOT_RUN です（契約の上限を使うので、回す前に残りを確認してください）。
+
 ## PM の 1 日（`day_run.py`）
 
 ```bash

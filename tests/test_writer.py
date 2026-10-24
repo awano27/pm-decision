@@ -10,6 +10,7 @@ except ImportError:
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 import sys
@@ -1350,6 +1351,85 @@ class TestWriterPrecedent(unittest.TestCase):
         self.assertEqual(sum(1 for line in ref.splitlines() if line.startswith("| `KIMERU_WRITER_PRECEDENT`")), 1)
         self.assertIn("writer_precedent=1", (ROOT / "SECURITY.md").read_text(encoding="utf-8"))
         self.assertIn("writer_precedent=1", (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+
+
+class TestWriterPrecedentText(unittest.TestCase):
+    """K02 (writer_precedent_text=1): the precedent lines carry the reply the PM approved. The heading says the reply lines are
+    wording only. With the setting at 0 the request is the one before K02; the check material and the paste-in request never change."""
+
+    LINES = ["・10/9 #12 OK: 佐藤さん: 仕様変更の可否", "　返信: 15 時に確認して返信します"]
+
+    def env(self, text):
+        return mock.patch.dict(os.environ, {"KIMERU_WRITER_PRECEDENT": "1", "KIMERU_WRITER_PRECEDENT_TEXT": text})
+
+    def test_with_the_text_setting_on_the_request_has_the_text_heading_and_both_lines(self):
+        spy = PromptSpy([{"a1": "確認して返信します。"}])
+        with self.env("1"):
+            writer.apply(reply_res(), REDRAFT_EVENT, spy, "もっと短く", precedent=self.LINES)
+        prompt = spy.prompts[0]
+        self.assertIn(writer.PRECEDENT_TEXT_HEAD, prompt)
+        self.assertNotIn(writer.PRECEDENT_HEAD, prompt)
+        self.assertIn(self.LINES[0], prompt)
+        self.assertIn(self.LINES[1], prompt)
+        self.assertLess(prompt.index(self.LINES[1]), prompt.index("出力形式:"))
+
+    def test_with_the_text_setting_off_the_request_is_the_one_before_k02(self):
+        spy = PromptSpy([{"a1": "確認して返信します。"}])
+        with self.env("0"):
+            writer.apply(reply_res(), REDRAFT_EVENT, spy, "もっと短く", precedent=self.LINES[:1])
+        base = PromptSpy([{"a1": "確認して返信します。"}])
+        with mock.patch.dict(os.environ, {"KIMERU_WRITER_PRECEDENT": "1"}):
+            writer.apply(reply_res(), REDRAFT_EVENT, base, "もっと短く", precedent=self.LINES[:1])
+        self.assertEqual(spy.prompts[0].encode("utf-8"), base.prompts[0].encode("utf-8"))
+        self.assertIn(writer.PRECEDENT_HEAD, spy.prompts[0])
+        self.assertNotIn(writer.PRECEDENT_TEXT_HEAD, spy.prompts[0])
+
+    def test_the_text_heading_is_used_only_when_a_reply_line_is_there(self):
+        spy = PromptSpy([{"a1": "確認して返信します。"}])
+        with self.env("1"):
+            writer.apply(reply_res(), REDRAFT_EVENT, spy, "もっと短く", precedent=self.LINES[:1])
+        self.assertIn(writer.PRECEDENT_HEAD, spy.prompts[0])
+        self.assertNotIn(writer.PRECEDENT_TEXT_HEAD, spy.prompts[0])
+
+    def test_a_date_that_only_the_earlier_reply_has_stays_unverified(self):
+        spy = PromptSpy([{"a1": "15 時に確認して返信します。"}])
+        res = reply_res()
+        with self.env("1"):
+            writer.apply(res, REDRAFT_EVENT, spy, precedent=self.LINES)
+        self.assertEqual(res["actions"][0]["unverified"], ["15 時"])
+        self.assertNotIn(self.LINES[1], writer._material(reply_res(), dict(REDRAFT_EVENT, precedent=self.LINES), "もっと短く"))
+        self.assertEqual(writer._material(reply_res(), dict(REDRAFT_EVENT, precedent=self.LINES), "もっと短く"),
+                         writer._material(reply_res(), REDRAFT_EVENT, "もっと短く"))
+
+    def test_the_paste_in_request_for_microsoft_365_does_not_change(self):
+        res = reply_res()
+        with self.env("1"):
+            writer.apply(res, REDRAFT_EVENT, writer.M365PromptWriter(), "もっと短く", precedent=self.LINES)
+        self.assertEqual(res["copilot_request"], writer.human_request(reply_res(), REDRAFT_EVENT, "もっと短く"))
+        self.assertNotIn("返信: 15", res["copilot_request"])
+
+    def test_the_first_draft_of_a_chat_gets_the_approved_reply_with_both_settings_on_and_nothing_with_precedent_off(self):
+        files = {}
+
+        def draft(env):
+            with mock.patch.dict(os.environ, env), tempfile.TemporaryDirectory() as d:
+                out = Path(d)
+                rec = precedent_chat("19:c1#m-12")
+                rec["actions"] = [{"type": "teams.reply", "text": "来週火曜に確認して返信します", "drafted_by": "copilot"}]
+                precedent_state(out, [(12, rec, "approved", 3)])
+                spy = PromptSpy([{"a1": "確認して返信します。", "memo": {"summary": "延期の可否"}}])
+                process(MSG, GRAPHS, StubBackend(), out, PBS, writer=spy, now=PRECEDENT_NOW)
+                files[(env["KIMERU_WRITER_PRECEDENT"], env["KIMERU_WRITER_PRECEDENT_TEXT"])] = {n: re.sub(rb'"(judge|writer)_sec": [0-9.]+|"[0-9]{4}-[0-9-]+T[0-9:.]+[+-][0-9:]+"', b"", (out / n).read_bytes())   # run times and clock stamps differ
+                                                              for n in ("approvals.json", "decisions.jsonl") if (out / n).exists()}
+                return spy.prompts[0]
+        on = draft({"KIMERU_WRITER_PRECEDENT": "1", "KIMERU_WRITER_PRECEDENT_TEXT": "1"})
+        self.assertIn("返信: 来週火曜に確認して返信します", on)
+        self.assertNotIn("返信: 来週火曜", draft({"KIMERU_WRITER_PRECEDENT": "1", "KIMERU_WRITER_PRECEDENT_TEXT": "0"}))
+        alone = draft({"KIMERU_WRITER_PRECEDENT": "0", "KIMERU_WRITER_PRECEDENT_TEXT": "1"})
+        self.assertNotIn(writer.PRECEDENT_TEXT_HEAD, alone)
+        self.assertNotIn("来週火曜", alone)
+        self.assertEqual(files[("1", "1")], files[("1", "0")])   # the text lines are read only: the state files are the same bytes
+        self.assertIn("approvals.json", files[("1", "1")])
 
 
 class ChildEnvTest(unittest.TestCase):

@@ -985,16 +985,9 @@ def style_for_request(writer_name, types):
 
 def _seen_on_other_item(out, sig, key, now):
     """True when another item's revision used this wording within STYLE_DAYS (approvals.log.jsonl keeps the fingerprint, not the words)."""
-    try:
-        lines = (Path(out) / "approvals.log.jsonl").read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return False
-    for line in lines:
-        try:
-            row = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(row, dict) or row.get("instruction_sig") != sig or row.get("key") == key or is_card_key(row.get("key")):
+    from . import memory   # lazily, as elsewhere in this module; the last 8 MB suffices because a row older than STYLE_DAYS is never used
+    for row in memory._tail_rows(Path(out) / "approvals.log.jsonl"):
+        if row.get("instruction_sig") != sig or row.get("key") == key or is_card_key(row.get("key")):
             continue
         when = _parse(row.get("at"))
         if when is not None and now - _naive(when) < timedelta(days=STYLE_DAYS):

@@ -2,6 +2,7 @@
 
 ## 未リリース
 
+- **前例の記録の読み方を軽くし、読めなかった範囲を `kimeru memory N` で言うようにした（表示・記録は変わらない）。** 承認と自動決定の記録は、ファイルが変わらない間は同じプロセスの中で読み直さない。スタイルの繰り返し検査も `approvals.log.jsonl` の末尾 8 MB だけを読む。`decisions.jsonl` が 8 MB を超えて、読めた最古の日が 60 日より新しいときだけ、`kimeru memory N` の末尾に `（自動決定は M/D 以降の分だけ読めました）` を足す。投稿・詳細・まとめ・トースト・push の文と、`approvals.json`・`decisions.jsonl` は同じ。テスト: `tests/test_memory.py`、`tests/test_style_memory.py`。
 - **文脈の効果と事実照合率を測る評価を足した。** `eval/draft_quality.py --settings a=b` で設定の組ごとに同じ fixtures を回し、下書きごとの事実照合率と依頼文に入ったブロックを記録する。PM の修正率は `eval/revision_rate.py` で writer ごとに数える。製品の動きは変えない。テストは `tests/test_eval_tools.py`。
 - **前例に PM が承認した返信の本文を添えられるようにした（設定 `writer_precedent_text=1`、既定 0）。**`writer_precedent=1` のときだけ効き、前例の各行の後ろに、その件で承認した返信の本文 200 字まで（最大 2 件）を「言い回しの手本」として writer の依頼文に足す。事実の根拠としては数えず、前回の返信にだけある日付は ⚠ のまま。`0` では依頼文・投稿・記録は同じ。テスト: `tests/test_memory.py`、`tests/test_writer.py`。
 - **承認の読み取りと優先度の変更の、記録と表示を直した。**

@@ -66,19 +66,21 @@ def _who(rec):
     return notify._who(rec, 40)
 
 
-def _tail_rows(path, max_bytes=TAIL_BYTES):
-    """The JSON objects of a JSON Lines file: its last `max_bytes` when it is longer (a line cut at the start is dropped).
-    A line that is not JSON is skipped; a missing file gives nothing."""
+def _tail_rows_and_cut(path, max_bytes=TAIL_BYTES):
+    """(rows, cut): the JSON objects of a JSON Lines file, and whether only its last `max_bytes` were read (a line cut at the start is
+    dropped). A line that is not JSON is skipped; a missing file gives ([], False)."""
     p = Path(path)
+    cut = False
     try:
         size = p.stat().st_size
         with p.open("rb") as f:
             if size > max_bytes:
+                cut = True
                 f.seek(size - max_bytes)
                 f.readline()
             data = f.read()
     except OSError:
-        return []
+        return [], False
     rows = []
     for line in data.decode("utf-8", errors="replace").splitlines():
         if not line.strip():
@@ -89,7 +91,64 @@ def _tail_rows(path, max_bytes=TAIL_BYTES):
             continue
         if isinstance(row, dict):
             rows.append(row)
-    return rows
+    return rows, cut
+
+
+def _tail_rows(path, max_bytes=TAIL_BYTES):
+    """The JSON objects of a JSON Lines file: its last `max_bytes` when it is longer (see _tail_rows_and_cut)."""
+    return _tail_rows_and_cut(path, max_bytes)[0]
+
+
+def _size(p):
+    try:
+        return p.stat().st_size
+    except OSError:
+        return None
+
+
+_cache = {}   # at most one entry per kind, {"logs": (key, value), "items": (key, value)}; a new key replaces it
+
+
+def _logs(out):
+    """{"log", "merged", "decisions", "decisions_cut"}: the tail rows of the three logs, read once per state of the files. The key is
+    their sizes (a missing file has None); approvals.json is not in it, so a save of approvals.json costs this no re-read. Callers
+    only read the result."""
+    out = Path(out)
+    key = (str(out.resolve()), _size(out / "approvals.log.jsonl"), _size(out / "decisions.jsonl"), _size(out / "merged.jsonl"))
+    hit = _cache.get("logs")
+    if hit and hit[0] == key:
+        return hit[1]
+    decisions, cut = _tail_rows_and_cut(out / "decisions.jsonl")
+    value = {"log": _tail_rows(out / "approvals.log.jsonl"), "merged": _tail_rows(out / "merged.jsonl"),
+             "decisions": decisions, "decisions_cut": cut}
+    _cache["logs"] = (key, value)
+    return value
+
+
+_UNREAD = object()
+
+
+def _items(out):
+    """approvals.json's items by number, read once per state of the file. The key is its (size, mtime_ns) because it is rewritten in
+    place; a missing file has None. A file that exists but could not be read is not kept, so the next call reads it again. Callers
+    only read the result."""
+    out = Path(out)
+    path = out / "approvals.json"
+    try:
+        st = path.stat()
+        akey = (st.st_size, st.st_mtime_ns)
+    except OSError:
+        akey = None
+    key = (str(out.resolve()), akey)
+    hit = _cache.get("items")
+    if hit and hit[0] == key:
+        return hit[1]
+    data = fsutil.read_json(path, _UNREAD)
+    items = data.get("items") if isinstance(data, dict) and isinstance(data.get("items"), dict) else {}
+    if data is _UNREAD and akey is not None:   # present but unreadable (a sharing violation): read_json gave its default
+        return items
+    _cache["items"] = (key, items)
+    return items
 
 
 def _line_sig(text):
@@ -126,6 +185,7 @@ def index(out, items, now=None):
     "who": the item's short name (40 characters), "auto": bool}. `items`: approvals.json's items by number. A decision older than
     DAYS is left out. Nothing is written."""
     out = Path(out)
+    loaded = _logs(out)
     since = _now(now) - timedelta(days=DAYS)
     by_key = {}
 
@@ -133,7 +193,7 @@ def index(out, items, now=None):
         for _, key in keys_of(rec):
             by_key.setdefault(key, []).append(entry)
 
-    for r in _tail_rows(out / "approvals.log.jsonl"):   # the PM's replies (OK, NG, 保留, 修正, 聞き返し), with their times
+    for r in loaded["log"]:   # the PM's replies (OK, NG, 保留, 修正, 聞き返し), with their times
         word = autorun.REPLY_NAMES.get(r.get("status"))
         t = _when(r.get("at"))
         if not word or t is None or t < since or autorun._key_is_sample(r.get("key")) or autorun._card_key(r.get("key")):
@@ -144,11 +204,11 @@ def index(out, items, now=None):
             add(rec, {"n": str(r.get("id")), "at": t, "label": word, "who": _who(rec), "auto": False})
 
     aliases = {}   # a follow-up merged into an item counts once, under the item's key
-    for m in _tail_rows(out / "merged.jsonl"):
+    for m in loaded["merged"]:
         if m.get("into") and m.get("event_id") is not None:
             aliases[str(m["event_id"])] = str(m["into"])
     seen = set()
-    for r in reversed(_tail_rows(out / "decisions.jsonl")):   # newest first: the first one of a case is the one kept
+    for r in reversed(loaded["decisions"]):   # newest first: the first one of a case is the one kept
         t = _when(r.get("at"))
         if r.get("needs_human") or t is None or t < since:
             continue
@@ -245,8 +305,7 @@ def writer_lines(out, rec, n=None, now=None):
         return []
     if writer_text_enabled():
         return writer_lines_with_text(out, rec, n, now=now)
-    data = fsutil.read_json(Path(out) / "approvals.json", {"items": {}})
-    items = data.get("items") if isinstance(data, dict) and isinstance(data.get("items"), dict) else {}
+    items = _items(out)
     return history(index(out, items, now=now), rec, n)[:WRITER_LINES]
 
 
@@ -279,8 +338,7 @@ def writer_lines_with_text(out, rec, n=None, now=None):
     source of facts. [] unless both settings are 1 (nothing is read)."""
     if out is None or not writer_text_enabled():
         return []
-    data = fsutil.read_json(Path(out) / "approvals.json", {"items": {}})
-    items = data.get("items") if isinstance(data, dict) and isinstance(data.get("items"), dict) else {}
+    items = _items(out)
     idx = index(out, items, now=now)
     lines, seen = [], set()
     for _, e in _earlier(idx, rec, n)[:HISTORY_MAX][:WRITER_LINES]:
@@ -294,17 +352,30 @@ def writer_lines_with_text(out, rec, n=None, now=None):
     return lines
 
 
-def show(out, n):
+def _cut_note(out, now=None):
+    """The one line `kimeru memory N` adds when decisions.jsonl was read from its last TAIL_BYTES only and the oldest row read is newer
+    than DAYS ago: the automatic decisions before that day were not read. "" otherwise (the posts, 詳細 N and the brief never show it)."""
+    loaded = _logs(out)
+    if not loaded["decisions_cut"]:
+        return ""
+    oldest = next((t for t in (_when(r.get("at")) for r in loaded["decisions"]) if t is not None), None)
+    if oldest is None or oldest <= _now(now) - timedelta(days=DAYS):
+        return ""
+    return f"（自動決定は {_md(oldest)} 以降の分だけ読めました）"
+
+
+def show(out, n, now=None):
     """`kimeru memory N` (read only, whatever memory is set to): the earlier decisions of item #N, as 詳細 N shows them."""
     out = Path(out)
-    data = fsutil.read_json(out / "approvals.json", {"items": {}})
-    items = data.get("items") if isinstance(data, dict) and isinstance(data.get("items"), dict) else {}
+    items = _items(out)
     it = items.get(str(n))
     if not isinstance(it, dict):
         return f"#{n} は承認の記録にありません"
     rec = it.get("record") if isinstance(it.get("record"), dict) else {}
-    lines = history(index(out, items), rec, n)
+    lines = history(index(out, items, now=now), rec, n)
     head = f"[kimeru 経緯 #{n}] {_who(rec)}"
+    note = _cut_note(out, now)
+    tail = [note] if note else []
     if not lines:
-        return head + f"\n同じチャット・相手・作業項目・規則の過去の件はありません（{DAYS} 日）"
-    return "\n".join([head, "これまでの経緯:", *lines])
+        return "\n".join([head + f"\n同じチャット・相手・作業項目・規則の過去の件はありません（{DAYS} 日）", *tail])
+    return "\n".join([head, "これまでの経緯:", *lines, *tail])

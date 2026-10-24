@@ -285,22 +285,26 @@ class PowerShellBridge:
         # sendto does the same kind of work (opens one chat, pastes, sends once, puts the chat back)
         timeout = 300 if ("readchat" in args or "sendto" in args) else 120
         moves = "readchat" in args or "read" in args
+        safe_read = "read" in args and "-Interactive" not in args
+        # readchat opens a colleague's chat: a silent break counts as "failed" (told to the person). The unattended approval read says
+        # what it did whenever it got that far; when it says nothing (stopped, blocked by policy, never started) the screen is "unknown"
+        silent = {"restore": "unknown", "returned": False} if safe_read else {"restore": "failed", "returned": False}
         try:
             r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", self.script, *args],
                                capture_output=True, text=True, encoding="utf-8", timeout=timeout)
         except subprocess.TimeoutExpired as e:   # killed: the script could not put the chat back itself
             if not moves:
                 raise
-            raise BridgeError("the script did not finish in time", {"restore": "failed", "returned": False}) from e
+            raise BridgeError("the script did not finish in time", dict(silent)) from e
         try:
             out = json.loads(r.stdout.strip().lstrip("﻿") or "{}")
         except ValueError as e:
             if not moves:
                 raise
-            raise BridgeError("the script's output could not be read", {"restore": "failed", "returned": False}) from e
+            raise BridgeError("the script's output could not be read", dict(silent)) from e
         if not out.get("ok"):
-            if "read" in args and "-Interactive" not in args and "restore" not in out:
-                out = {**out, "restore": "failed", "returned": False}   # broke without saying: the screen may be left changed
+            if safe_read and "restore" not in out:
+                out = {**out, **silent}
             raise BridgeError(out.get("error") or r.stderr.strip()[:300], out)
         return out
 
@@ -1300,6 +1304,7 @@ ACK = {"approved": "承認", "rejected": "却下", "held": "保留", "expired": 
        "redrafted": "書き直し", "redraft_failed": "書き直せず", "redraft_limit": "修正は上限まで", "redo": "再実行", "redo_ignored": "再実行（無視: 古い回数）", "redo_ahead": "再実行（回数が大きすぎます。その回数の結果が出たら 1 回だけ効きます）", "redo_malformed": "再実行（形が違います）", "closed": "済（閉じました）", "detail": "詳細を返信",
        "reply_ignored": "返信を読めませんでした（投稿が画面から流れたため、もう一度投稿します。承認はしていません）",
        "reposted": "文面を確認して OK し直してください",
+       "reapproval": "承認のあとに作業項目が更新されていたため変更せず、出し直します（OK し直してください）",
        "learned": "学習を採用しました（基準を変えました）", "learn_stale": "学習（基準が変わっていたため採用せず）",
        "sent_confirmed": "送った（催促を止めました）", "reply_send": "送る（結果は自分とのチャットへ）"}
 
@@ -1994,7 +1999,7 @@ READ_DEFERRED = ("ui_lock_busy", "teams_not_found", "user_active", "input_state_
                  "self_chat_not_in_list", "self_chat_not_opened", "user_input_during_read", "screen_changed_during_read",
                  "self_chat_not_confirmed", "original_chat_unknown", "restore_failed", "unexpected_error")
 # what a read did to the screen; returned = the person sees what they saw before (or what they chose since, untouched)
-READ_RESTORE = ("none", "unchanged", "restored", "left_self", "failed", "skipped_user_input", "screen_changed")
+READ_RESTORE = ("none", "unchanged", "restored", "left_self", "failed", "skipped_user_input", "screen_changed", "unknown")
 
 
 def screen_of(data):
@@ -2125,14 +2130,17 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
             spot.apply_safe(out, read, clock)
         return adopted
     post = make_post(ap, bridge, send)
+    reopened = []
     if real:
         execute.report_unknown(ap, post)
     if real and send:
         for num, it in ap.data["items"].items():
             if unwritten(it):   # the run's write: saved before each call, so a second run never writes it again
                 execute.run_approved(out, ap, int(num), it, post)
+                if it["status"] == "pending":   # an ado.update whose work item moved on: posted again for a new OK
+                    reopened.append({"id": int(num), "status": "reapproval"})
     writer = writer if writer is not None else writer_mod.get_writer()
-    changes = []
+    changes = list(reopened)
     if real and send:   # S2: a `送る N` read on a run without --send is sent now, once (the request was recorded; see execute.reply_request)
         for num, it in ap.data["items"].items():
             if execute.reply_requested(it):
@@ -2205,8 +2213,9 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
         redo_done.add(num)
         it["redo_mark"] = int(it.get("x_seq", 0))   # the results made so far; those of this redo come after
         ap.save()   # saved before the run: a stop in the middle must not run the same reply again
-        real_ = execute.redo(out, ap, int(num), it, post, bridge=bridge, send=send)
-        changes.append({"id": int(num), "status": "reapproval" if it["status"] == "pending" else "redo", "real": real_})
+        changes.append({"id": int(num), "status": "redo", "real": execute.redo(out, ap, int(num), it, post, bridge=bridge, send=send)})
+        if it["status"] == "pending":   # an ado.update whose work item moved on: posted again for a new OK
+            changes.append({"id": int(num), "status": "reapproval"})
 
     def redo_candidate(num):
         it = ap.data["items"].get(num)
@@ -2374,9 +2383,9 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
             ch["real"] = _after_approval(out, ap, int(num), it, bridge, real=real, send=send)
             if learn.is_card(it):   # R21: written only with real and send (learn.adopt); otherwise it waits for such a run
                 ch["learn"] = learn.adopt(out, it, now=now, real=real, send=send)
-            if it["status"] == "pending":   # the change no longer matched ADO: it is posted again for a new OK (execute.reopen_for_approval)
-                ch["status"] = "reapproval"
         changes.append(ch)
+        if new == "approved" and it["status"] == "pending":   # the OK is kept; the change no longer matched ADO: posted again for a new OK
+            changes.append({"id": int(num), "status": "reapproval"})
     changes = adopted + changes
     ap.save(compact=learn.purge_all(ap.data))   # R34: a card answered in this run gives up its wording (compact: no .bak keeps it)
     if send and flushed and ap.data.get("outbox"):

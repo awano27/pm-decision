@@ -152,7 +152,7 @@ function Probe($label, $keepAs = $null) {
 }
 $script:PostSeen = $false
 function ReplySeen($id, $word) {   # one read of the self chat: is my post T:id there, with R:word id below it?
-  $r = Self 'read'
+  $r = Self 'read' @('-Interactive')   # the person watches this check: the self chat is opened for them
   if ($r.ok -and $r.timeline) {
     $tl = @($r.timeline); $last = -1
     for ($i = 0; $i -lt $tl.Count; $i++) { if ($tl[$i] -eq "T:$id") { $last = $i; $script:PostSeen = $true } }
@@ -251,7 +251,7 @@ if ($uia) {
       Rec 'T3' $(if ($selfOk) { "OK read（開いていた自分とのチャットを読んだ。timeline=$(@($r.timeline).Count)件）" } else { "NG $($r.error)" })
     } else { Rec 'T3' 'SKIP（自動: 自分とのチャットが開いていない。手で開いてから再実行するか run-check.cmd T3）' }
   } else {
-    $s = Self 'open'; $r = Self 'read'
+    $s = Self 'open'; $r = Self 'read' @('-Interactive')
     $selfOk = [bool]($s.ok -and $r.ok)
     Rec 'T3' $(if ($selfOk) { "OK open/read（timeline=$(@($r.timeline).Count)件）" } else { "NG $($s.error) $($r.error)" })
   }
@@ -269,7 +269,7 @@ if ($uia) {
       Start-Sleep -Seconds 3
     }
     if ($l) {
-      $s = Self 'open'; $r = Self 'read'
+      $s = Self 'open'; $r = Self 'read' @('-Interactive')
       $selfOk = [bool]($l.ok -and $s.ok -and $r.ok)
       Rec 'T3-learn' $(if ($selfOk) { "OK 表示名を学習（一覧で発見=$($l.itemFound)）" } else { "NG $($l.error) $($s.error) $($r.error)" })
     }
@@ -709,7 +709,7 @@ if (Want 'T27') {
       }
       $began = Get-Date; $tl = @(); $at = -1; $readErr = $null
       while ((Get-Date) -lt $began.AddSeconds($replyWait)) {
-        $r = Self 'read'
+        $r = Self 'read' @('-Interactive')
         if (-not $r.ok) { $readErr = [string]$r.error; break }
         if ($r.timeline) {
           $tl = @($r.timeline)

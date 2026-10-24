@@ -26,6 +26,7 @@ LINE_MAX = 120                  # one history line
 PRECEDENT_MAX = 20              # the precedent on the arrow line, its brackets included
 HISTORY_MAX = 3                 # history lines in 詳細 N
 FINAL = ("OK", "NG")            # the decisions a precedent may name (a hold or a rewrite is only history)
+WRITER_TEXT_MAX = 200           # K02: the approved reply's text a precedent line may carry
 WRITER_LINES = 2                # R36: the earlier decisions the writer's request gets (writer_precedent=1), at most this many lines
 
 
@@ -186,17 +187,19 @@ def precedent(idx, rec, n=None):
     return None
 
 
+def _line(e):
+    """One line of 「これまでの経緯」 (history and writer_lines_with_text share it, so the two never drift apart)."""
+    if e["auto"]:
+        text = f"・{_md(e['at'])} {e['label']}"
+    else:
+        text = f"・{_md(e['at'])} #{e['n']} {e['label']}: {e['who']}"
+    return _clip(text, LINE_MAX)
+
+
 def history(idx, rec, n=None):
     """The lines of 「これまでの経緯」 in 詳細 N: at most HISTORY_MAX, in the order of _earlier. A decision of the PM:
     「・10/3 #12 OK: 佐藤さん: 仕様変更の可否」; an automatic one only its date and label: 「・10/2 自動: 障害対応」."""
-    lines = []
-    for _, e in _earlier(idx, rec, n)[:HISTORY_MAX]:
-        if e["auto"]:
-            text = f"・{_md(e['at'])} {e['label']}"
-        else:
-            text = f"・{_md(e['at'])} #{e['n']} {e['label']}: {e['who']}"
-        lines.append(_clip(text, LINE_MAX))
-    return lines
+    return [_line(e) for _, e in _earlier(idx, rec, n)[:HISTORY_MAX]]
 
 
 def same_person_count(items, n, rec, now=None):
@@ -236,12 +239,59 @@ def writer_enabled():
 def writer_lines(out, rec, n=None, now=None):
     """R36 (writer_precedent=1): the first WRITER_LINES lines of 「これまでの経緯」 for the writer's request, from the same lookup and in
     the same order as 詳細 N (history). `rec` is the case's record (event_kind, event_id, event); `n` is the item's own number, whose
-    entries are left out. [] when the setting is 0 (nothing is read) or there is no state folder. Read only."""
+    entries are left out. With writer_precedent_text=1 the lines carry the approved reply text (writer_lines_with_text), so the callers
+    need no switch of their own. [] when the setting is 0 (nothing is read) or there is no state folder. Read only."""
     if out is None or not writer_enabled():
         return []
+    if writer_text_enabled():
+        return writer_lines_with_text(out, rec, n, now=now)
     data = fsutil.read_json(Path(out) / "approvals.json", {"items": {}})
     items = data.get("items") if isinstance(data, dict) and isinstance(data.get("items"), dict) else {}
     return history(index(out, items, now=now), rec, n)[:WRITER_LINES]
+
+
+def writer_text_enabled():
+    """writer_precedent_text=1 (K02): effective only with writer_precedent=1; alone it reads nothing."""
+    return writer_enabled() and config.value("writer_precedent_text") == "1"
+
+
+def _approved_reply(items, n):
+    """The text of the reply the PM approved for item n (a drafted teams.reply / ado.comment), or None. A text that names an
+    Azure subscription path is left out, as the writer's thread is."""
+    from . import writer   # lazily: writer imports config and memory's callers
+    it = (items or {}).get(str(n))
+    if not isinstance(it, dict) or it.get("status") != "approved":
+        return None
+    rec = it.get("record") if isinstance(it.get("record"), dict) else {}
+    for a in rec.get("actions") or []:
+        if not isinstance(a, dict) or not a.get("drafted_by") or a.get("type") not in ("teams.reply", "ado.comment"):
+            continue
+        text = a.get(writer.FIELD[a["type"]])
+        if isinstance(text, str) and text.strip() and "/subscriptions/" not in text.lower():
+            return text
+    return None
+
+
+def writer_lines_with_text(out, rec, n=None, now=None):
+    """K02 (writer_precedent=1 and writer_precedent_text=1): the lines of writer_lines, an OK line followed by 「　返信: <the text the PM
+    approved, WRITER_TEXT_MAX characters>」 when that item is still approved and its reply was drafted by the writer. Only the OK line:
+    a 修正 line of the same item has no text, or one reply would fill both precedent slots. The text is a model of wording, never a
+    source of facts. [] unless both settings are 1 (nothing is read)."""
+    if out is None or not writer_text_enabled():
+        return []
+    data = fsutil.read_json(Path(out) / "approvals.json", {"items": {}})
+    items = data.get("items") if isinstance(data, dict) and isinstance(data.get("items"), dict) else {}
+    idx = index(out, items, now=now)
+    lines, seen = [], set()
+    for _, e in _earlier(idx, rec, n)[:HISTORY_MAX][:WRITER_LINES]:
+        lines.append(_line(e))
+        if e["auto"] or e["label"] != autorun.REPLY_NAMES["approved"] or e["n"] in seen:
+            continue
+        seen.add(e["n"])
+        text = _approved_reply(items, e["n"])
+        if text:
+            lines.append("　返信: " + _clip(text, WRITER_TEXT_MAX))
+    return lines
 
 
 def show(out, n):

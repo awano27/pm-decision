@@ -418,5 +418,90 @@ class TestTheDetailAndTheTerminal(unittest.TestCase):
         self.assertIn("memory=1", sec)
 
 
+class TestWriterLinesWithText(unittest.TestCase):
+    """K02 (writer_precedent=1 and writer_precedent_text=1): a precedent line is followed by the reply the PM approved then."""
+
+    BOTH = {"KIMERU_WRITER_PRECEDENT": "1", "KIMERU_WRITER_PRECEDENT_TEXT": "1"}
+
+    def drafted(self, eid, text, drafted_by="copilot", kind="teams.reply", **extra):
+        return chat(eid, actions=[{"type": kind, "text": text, "drafted_by": drafted_by}], **extra)
+
+    def lines(self, rows, env=None, n=13):
+        with mock.patch.dict(os.environ, env or self.BOTH), tempfile.TemporaryDirectory() as d:
+            numbered = [(m, rec, st) for m, rec, st, _ in rows]
+            log = [{"at": at(days), "key": key_of(rec), "id": m, "status": st} for m, rec, st, days in rows]
+            write_state(d, numbered, log=log)
+            return memory.writer_lines_with_text(d, chat("19:c1#m-13"), n, now=NOW)
+
+    def test_an_approved_reply_follows_its_line_and_is_cut_at_200_characters(self):
+        long = "確認して返信します。" * 30
+        lines = self.lines([(12, self.drafted("19:c1#m-12", long), "approved", 3)])
+        self.assertEqual(len(lines), 2)
+        self.assertIn("#12 OK", lines[0])
+        self.assertTrue(lines[1].startswith("　返信: 確認して"))
+        self.assertEqual(len(lines[1]), len("　返信: ") + 200)
+        self.assertTrue(lines[1].endswith("…"))
+
+    def test_only_an_approved_item_with_a_drafted_reply_gets_a_text_line(self):
+        rows = [(10, self.drafted("19:c1#m-10", "保留の文面"), "held", 4),
+                (11, self.drafted("19:c1#m-11", "修正中の文面"), "redrafted", 3),
+                (12, chat("19:c1#m-12"), "approved", 2)]   # approved, but the reply was not drafted by the writer
+        lines = self.lines(rows)
+        self.assertEqual(len(lines), 2)
+        self.assertFalse(any("返信:" in line for line in lines))
+
+    def test_an_ado_comment_counts_and_a_subscription_path_does_not(self):
+        ok = self.drafted("19:c1#m-11", "コメントを返しました", kind="ado.comment")
+        bad = self.drafted("19:c1#m-12", "/subscriptions/abc の件です")
+        lines = self.lines([(11, ok, "approved", 4), (12, bad, "approved", 3)])
+        self.assertEqual([line for line in lines if "返信:" in line], ["　返信: コメントを返しました"])
+
+    def test_with_the_text_setting_off_nothing_is_added_and_with_precedent_off_nothing_is_read(self):
+        rows = [(12, self.drafted("19:c1#m-12", "確認して返信します"), "approved", 3)]
+        self.assertEqual(len(self.lines(rows)), 2)
+        self.assertEqual(self.lines(rows, {"KIMERU_WRITER_PRECEDENT": "1", "KIMERU_WRITER_PRECEDENT_TEXT": "0"}), [])
+        with mock.patch.object(memory, "index", side_effect=AssertionError("read")), \
+                mock.patch.object(memory.fsutil, "read_json", side_effect=AssertionError("read")):
+            self.assertEqual(self.lines(rows, {"KIMERU_WRITER_PRECEDENT": "0", "KIMERU_WRITER_PRECEDENT_TEXT": "1"}), [])
+
+    def test_a_revised_then_approved_item_gets_its_reply_once_under_the_ok_line(self):
+        rec = self.drafted("19:c1#m-12", "確認して返信します")
+        lines = self.lines([(12, rec, "redrafted", 4), (12, rec, "approved", 3)])
+        self.assertEqual(len(lines), 3)
+        self.assertIn("#12 OK", lines[0])
+        self.assertEqual(lines[1], "　返信: 確認して返信します")
+        self.assertIn("#12 修正", lines[2])
+        self.assertEqual(sum(1 for line in lines if line.startswith("　返信:")), 1)
+
+    def test_reading_the_text_lines_changes_no_file_of_the_state_folder(self):
+        rows = [(12, self.drafted("19:c1#m-12", "確認して返信します"), "approved", 3)]
+        with mock.patch.dict(os.environ, self.BOTH), tempfile.TemporaryDirectory() as d:
+            write_state(d, [(m, rec, st) for m, rec, st, _ in rows],
+                        log=[{"at": at(days), "key": key_of(rec), "id": m, "status": st} for m, rec, st, days in rows],
+                        decisions=[{"at": at(3), "key": key_of(rows[0][1]), "id": 12}])
+            before = snapshot(d)
+            self.assertEqual(len(memory.writer_lines_with_text(d, chat("19:c1#m-13"), 13, now=NOW)), 2)
+            self.assertEqual(len(memory.writer_lines(d, chat("19:c1#m-13"), 13, now=NOW)), 2)
+            self.assertEqual(snapshot(d), before)
+            self.assertIn("approvals.json", before)
+            self.assertIn("decisions.jsonl", before)
+
+    def test_writer_lines_switches_on_the_text_setting_by_itself(self):
+        rows = [(12, self.drafted("19:c1#m-12", "確認して返信します"), "approved", 3)]
+        self.assertEqual(len(self.lines(rows)), 2)
+        with mock.patch.dict(os.environ, self.BOTH), tempfile.TemporaryDirectory() as d:
+            numbered = [(m, rec, st) for m, rec, st, _ in rows]
+            write_state(d, numbered, log=[{"at": at(days), "key": key_of(rec), "id": m, "status": st} for m, rec, st, days in rows])
+            self.assertEqual(len(memory.writer_lines(d, chat("19:c1#m-13"), 13, now=NOW)), 2)
+            with mock.patch.dict(os.environ, {"KIMERU_WRITER_PRECEDENT_TEXT": "0"}):
+                self.assertEqual(len(memory.writer_lines(d, chat("19:c1#m-13"), 13, now=NOW)), 1)
+
+    def test_the_setting_is_off_by_default_and_listed_like_the_others(self):
+        self.assertEqual(config.SETTINGS["writer_precedent_text"], ("KIMERU_WRITER_PRECEDENT_TEXT", "0"))
+        self.assertEqual(config.CHOICES["writer_precedent_text"], ("0", "1"))
+        self.assertIn("writer_precedent_text", config.LOGGABLE)
+        self.assertIn("writer_precedent_text", config.SHARE_VALUES)
+
+
 if __name__ == "__main__":
     unittest.main()

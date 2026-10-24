@@ -579,11 +579,12 @@ def format_post(n, rec, full=None, marks=None, precedent=None, promise=None, rel
     return "\n".join(lines)
 
 
-def format_detail(n, rec, full=None, precedent=None, promise=None):
+def format_detail(n, rec, full=None, precedent=None, promise=None, similar=None):
     """The full text of an item ("[kimeru 詳細 #N]", the answer to `詳細 N`). `full` is the full text kept while the item waits
     (fulltext.load): the post then shows it and the earlier messages. `precedent` (R16, memory.history): the lines of
     「これまでの経緯」, shown above the reply line; None or empty (memory=0) adds nothing. `promise` (R18, promises.detail_lines): the
-    chat's open promises, under 「この相手の約束」 above the reply line; None (promises=0) adds nothing."""
+    chat's open promises, under 「この相手の約束」 above the reply line; None (promises=0) adds nothing. `similar` (K07, memory.similar_lines):
+    the lines of 「似た件」, right after 「これまでの経緯」; None or empty (recall=0) adds nothing."""
     if learn.is_card(rec):   # R21: the numbers behind a card (learn.py)
         return learn.format_detail(n, rec)
     from . import execute
@@ -713,6 +714,9 @@ def format_detail(n, rec, full=None, precedent=None, promise=None):
     if precedent:   # R16: the earlier decisions on the same chat, person or work item (at most three lines)
         lines.append("これまでの経緯:")
         lines.extend(precedent)
+    if similar:   # K07: decided items of other chats with overlapping words (recall=1 and memory=1 only)
+        lines.append("似た件:")
+        lines.extend(similar)
     if promise:   # R18: the chat's open promises (promises=1 only; the lines are kept out of the reply line)
         lines.append("この相手の約束:")
         lines.extend(promise)
@@ -1753,15 +1757,17 @@ def _redraft(it, instruction, writer, out=None, n=None, now=None):
                 if a.get("drafted_by") and isinstance(a.get(writer_mod.FIELD[a["type"]]), str)}
     from . import memory   # local: memory loads notify lazily as well
     # R36 (writer_precedent=1 only; [] at 0, nothing read): the case's earlier decisions, from the record as it stands (n: this item)
-    precedent = memory.writer_lines(out, rec, n, now=now) if out is not None else []
+    from . import fulltext
+    full = fulltext.load(out, it["key"]) if out is not None else None
+    # K07: the same query as the first draft (the whole text kept while the item waits), so a 修正 N shows the same similar items
+    precedent = (memory.writer_lines(out, rec, n, now=now, text=(full or {}).get("text"), writer_name=getattr(writer, "NAME", ""))
+                 if out is not None else [])
     for a in rec.get("actions", []):
         for k in STALE_ACTION_KEYS:
             a.pop(k, None)
     for k in STALE_RECORD_KEYS:
         rec.pop(k, None)
     material = dict(rec["material_event"])
-    from . import fulltext
-    full = fulltext.load(out, it["key"]) if out is not None else None
     if full:   # the writer works from the whole text while the item waits
         material.update(full.get("material") or {})
         if full.get("text"):
@@ -2205,6 +2211,11 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
             past["idx"] = memory.index(out, ap.data["items"])
         return memory.history(past["idx"], it["record"], num)
 
+    def similar_of(num, it, full):   # K07 (memory=1 and recall=1 only): decided items of other chats with overlapping words
+        if not memory.enabled():
+            return None
+        return memory.similar_lines(out, it["record"], num, text=(full or {}).get("text"))
+
     def promise_of(num, it):   # R18 (promises=1 only): the chat's open promises in 詳細 N; None at promises=0 (nothing is read)
         from . import promises
         if not promises.enabled():
@@ -2312,8 +2323,9 @@ def _collect(out, bridge, writer=None, real=False, send=False, now=None, brief_h
             if it and it["posted"] and num not in redo_done:   # (redo_done doubles as "handled this step" for the numbers asked about)
                 redo_done.add(num)
                 from . import fulltext
-                text = format_detail(int(num), it["record"], fulltext.load(out, it["key"]), precedent=history_of(num, it),
-                                     promise=promise_of(num, it))
+                detail_full = fulltext.load(out, it["key"])
+                text = format_detail(int(num), it["record"], detail_full, precedent=history_of(num, it),
+                                     promise=promise_of(num, it), similar=similar_of(num, it, detail_full))
                 if real and labels.enabled():   # the question the route was unsure of, numbered: kept for `違う N k`
                     text = labels.attach(it, int(num), text)
                 post(text)

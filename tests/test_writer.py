@@ -1427,6 +1427,88 @@ class TestWriterPrecedent(unittest.TestCase):
         self.assertIn("writer_precedent=1", (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
 
 
+class TestWriterPrecedentSimilar(unittest.TestCase):
+    """K07 (recall=1 with writer_precedent=1): the 似た件 lines end the precedent block of the request, never the check material, and
+    with recall=0 the request and the post are the ones without K07."""
+
+    ENV = {"KIMERU_WRITER_PRECEDENT": "1", "KIMERU_RECALL": "1"}
+    NOW_TEXT = "QA 環境が止まっていてリリース日を動かしたい"
+    OLD_TEXT = "QA 環境の復旧待ちでリリースを 1 週ずらす"
+
+    def other(self, eid, chat, author):
+        rec = precedent_chat(eid, chat=chat, author=author)
+        rec["event"] = dict(rec["event"], text=self.OLD_TEXT)
+        return rec
+
+    def state(self, out, similar=True):
+        rows = [(9, precedent_chat("19:c1#m-9"), "approved", 5)]
+        if similar:
+            rows.append((12, self.other("19:c2#m-12", "19:c2", "田中"), "approved", 2))
+        precedent_state(out, rows + [(13, precedent_chat("19:c1#m-13"), "pending", 0)])
+
+    def lines(self, out, env=None, name="cmd"):
+        with mock.patch.dict(os.environ, env or self.ENV):
+            return memory.writer_lines(out, precedent_chat("19:c1#m-13"), 13, now=PRECEDENT_NOW, text=self.NOW_TEXT, writer_name=name)
+
+    def prompt(self, lines, text="延期の件、承知しました。順番に確認します。"):
+        spy = PromptSpy([{"a1": text}])
+        res = reply_res()
+        with mock.patch.dict(os.environ, {"KIMERU_WRITER_PRECEDENT": "1"}):
+            writer.apply(res, REDRAFT_EVENT, spy, precedent=lines)
+        return spy.prompts[0], res
+
+    def test_the_precedent_block_of_the_request_ends_with_the_similar_line(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.state(Path(d))
+            lines = self.lines(Path(d))
+            prompt, _ = self.prompt(lines)
+        self.assertEqual(lines[1], memory.SIMILAR_HEAD)
+        block = prompt[prompt.index(writer.PRECEDENT_HEAD):prompt.index("出力形式:")]
+        self.assertIn(memory.SIMILAR_HEAD, block)
+        self.assertIn("（別の相手）（似た点: QA, 環境）", block)
+        self.assertLess(block.index(lines[0]), block.index(memory.SIMILAR_HEAD))
+
+    def test_a_date_only_a_similar_line_has_stays_unverified_and_the_check_material_does_not_have_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.state(Path(d))
+            lines = self.lines(Path(d))
+        date = re.search(r"・(\d+/\d+) #12", lines[2]).group(1)
+        self.assertNotIn(date, lines[0])   # the date belongs to the similar item only
+        _, res = self.prompt(lines, f"{date} の件を踏まえて、可否を確認してお返事します。")
+        self.assertEqual(res["actions"][0]["unverified"], [date])
+        self.assertNotIn(lines[2], writer._material(reply_res(), dict(REDRAFT_EVENT, precedent=lines)))
+
+    def test_with_recall_off_the_request_is_the_same_byte_for_byte_whether_or_not_a_similar_item_exists(self):
+        with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
+            self.state(Path(a), similar=False)
+            self.state(Path(b), similar=True)
+            off = {"KIMERU_WRITER_PRECEDENT": "1", "KIMERU_RECALL": "0"}
+            without, with_ = self.prompt(self.lines(Path(a), off))[0], self.prompt(self.lines(Path(b), off))[0]
+            on = self.prompt(self.lines(Path(b)))[0]
+        self.assertEqual(with_.encode("utf-8"), without.encode("utf-8"))
+        self.assertNotEqual(on, with_)
+
+    def test_the_arrow_line_of_the_post_is_the_same_with_recall_on_and_off(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.state(Path(d))
+            posts = []
+            for recall in ("0", "1"):
+                with mock.patch.dict(os.environ, {"KIMERU_MEMORY": "1", "KIMERU_RECALL": recall}):
+                    items = memory._items(Path(d))
+                    rec = items["13"]["record"]
+                    idx = memory.index(Path(d), items, now=PRECEDENT_NOW)
+                    posts.append(notify.format_post(13, rec, precedent=memory.precedent(idx, rec, 13)))
+        self.assertEqual(posts[0], posts[1])
+        self.assertIn("→", posts[0])
+
+    def test_microsoft_365_auto_and_codex_get_no_similar_line_from_the_callers(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.state(Path(d))
+            for name in ("m365", "m365-auto", "codex"):
+                self.assertFalse(any("似た件" in x for x in self.lines(Path(d), name=name)), name)
+            self.assertTrue(any("似た件" in x for x in self.lines(Path(d), name="copilot")))
+
+
 class TestWriterPrecedentText(unittest.TestCase):
     """K02 (writer_precedent_text=1): the precedent lines carry the reply the PM approved. The heading says the reply lines are
     wording only. With the setting at 0 the request is the one before K02; the check material and the paste-in request never change."""

@@ -6,13 +6,17 @@ except ImportError:
 import copy
 import json
 import os
+import re
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
 from kimeru import config, diagnose, execute, notify, writer
-from tests.test_writer import PromptSpy
+from kimeru.backends import StubBackend
+from kimeru.cli import process
+from tests.test_writer import GRAPHS, MSG, PBS, PromptSpy
 
 
 class FakeBridge:
@@ -510,6 +514,67 @@ class TestRedraftMaterial(unittest.TestCase):
         self.assertIn("確認して今日中に返信します。", spy.prompts[0])
         self.assertNotIn("確認して今日中に返信します。",
                          writer._material(copy.deepcopy(REDRAFT_REC), REDRAFT_REC["material_event"], "もっと短く"))
+
+
+class TestRedraftToday(unittest.TestCase):
+    """K03 (writer_context=1): the 修正 N path hands the writer the cycle's own clock for today's date, never the system clock."""
+
+    def revise(self, env_value, now):
+        spy = PromptSpy([{"a1": "延期の件、承知しました。"}])
+        with mock.patch.dict(os.environ, {"KIMERU_WRITER_CONTEXT": env_value}), tempfile.TemporaryDirectory() as d:
+            write_queue(d, REDRAFT_REC)
+            b = FakeBridge()
+            notify.notify(d, b, send=True)
+            b.replies = ["修正 1 もっと短く"]
+            with mock.patch.object(writer, "apply", wraps=writer.apply) as apply:
+                notify.collect(d, b, writer=spy, now=now)
+            return spy, apply
+
+    def test_redraft_passes_the_injected_now_as_the_date(self):
+        spy, apply = self.revise("1", datetime(2026, 10, 24, 9, 0))
+        self.assertEqual(apply.call_args.kwargs["today"], "2026-10-24")
+        self.assertIn("今日: 2026-10-24（土曜）", spy.prompts[0])
+
+    def test_with_the_setting_off_the_request_has_no_today_line(self):
+        spy, _ = self.revise("0", datetime(2026, 10, 24, 9, 0))
+        self.assertNotIn("今日:", spy.prompts[0])
+
+
+class TestWriterContextCycle(unittest.TestCase):
+    """K03: one full round (judge, post, 修正 N, post) with writer_context=0 leaves approvals.json, decisions.jsonl, the writer's
+    requests and the posts as they were before K03 (the callers passing neither the date nor the replies); with 1 the date is kept."""
+
+    NOW = datetime(2026, 10, 24, 9, 0).astimezone()
+    STAMPS = re.compile(rb'"(judge|writer)_sec": [0-9.]+|"[0-9]{4}-[0-9-]+T[0-9:.]+[+-][0-9:]+"')   # run times and clock stamps differ
+
+    def round(self, env_value, before_k03=False):
+        spy = PromptSpy([{"a1": "確認して返信します。", "memo": {"summary": "延期の可否"}}])
+        with mock.patch.dict(os.environ, {"KIMERU_WRITER_CONTEXT": env_value}), tempfile.TemporaryDirectory() as d,                 mock.patch.object(writer, "today_of", (lambda now: None) if before_k03 else writer.today_of),                 mock.patch.object(writer, "self_replies", (lambda *a, **k: []) if before_k03 else writer.self_replies):
+            out = Path(d)
+            process(MSG, GRAPHS, StubBackend(), out, PBS, writer=spy, now=self.NOW)
+            b = FakeBridge()
+            notify.notify(d, b, send=True)
+            b.replies = ["修正 1 もっと短く"]
+            notify.collect(d, b, writer=spy, now=self.NOW)
+            notify.notify(d, b, send=True)
+            files = {n: self.STAMPS.sub(b"", (out / n).read_bytes()) for n in ("approvals.json", "decisions.jsonl")}
+            return files, spy.prompts, [p[0] for p in b.posts]
+
+    def test_with_the_setting_off_the_state_the_requests_and_the_posts_are_those_before_k03(self):
+        files, prompts, posts = self.round("0")
+        old_files, old_prompts, old_posts = self.round("0", before_k03=True)
+        self.assertEqual(len(prompts), 2)
+        self.assertEqual(files, old_files)
+        self.assertEqual(prompts, old_prompts)
+        self.assertEqual(posts, old_posts)
+        self.assertNotIn(b'"today"', files["approvals.json"] + files["decisions.jsonl"])
+        self.assertFalse([p for p in prompts if "今日:" in p])
+
+    def test_with_the_setting_on_the_date_is_in_the_request_and_the_records(self):
+        files, prompts, _ = self.round("1")
+        self.assertTrue(all("今日: 2026-10-24（土曜）" in p for p in prompts))
+        self.assertIn(b'"today": "2026-10-24"', files["approvals.json"])
+        self.assertIn(b'"today": "2026-10-24"', files["decisions.jsonl"])
 
 
 class TestRedraftHistory(unittest.TestCase):

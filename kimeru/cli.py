@@ -414,7 +414,10 @@ def _draft(res, ev, meter, writer, out=None, now=None):
     if out is not None and writer is not None and writer_mod.targets(res) and memory.writer_enabled():
         probe = {"event_kind": res.get("event_kind"), "event_id": res.get("event_id"), "event": _recorded_event(ev)}
         precedent = memory.writer_lines(out, probe, now=now)
-    drafted_any = writer_mod.apply(res, ev, writer, precedent=precedent)
+    replies = None
+    if out is not None and writer is not None and writer_mod.targets(res):   # K03: nothing is read without a writer or for an event with nothing to draft
+        replies = writer_mod.self_replies(out, now, ev.get("thread"))
+    drafted_any = writer_mod.apply(res, ev, writer, precedent=precedent, today=writer_mod.today_of(now), self_replies=replies)
     res["perf"] = {"calls": meter.calls, "questions": meter.questions, "judge_sec": round(meter.seconds, 2),
                    "writer_sec": round(time.perf_counter() - t_writer, 2)}
     if drafted_any:

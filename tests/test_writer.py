@@ -694,6 +694,34 @@ class TestQualityFlags(unittest.TestCase):
         self.assertNotIn("claim", f("経営判断を仰ぎます。", "", '{"text": "経営判断が必要"}'))
 
 
+class TestTitledNamesAndDoneClaims(unittest.TestCase):
+    """K04: a name with a courtesy title or a role is checked like one with さん, and a done-claim the material lacks is a claim flag."""
+
+    def test_a_titled_name_the_material_lacks_is_unverified(self):
+        for text, tok in (("山田様に確認します。", "山田様"), ("鈴木部長に共有します。", "鈴木部長"), ("田中課長から連絡します。", "田中課長"),
+                          ("高橋係長へ回します。", "高橋係長"), ("伊藤主任が見ます。", "伊藤主任"), ("渡辺殿へ送ります。", "渡辺殿"),
+                          ("木村マネージャーに聞きます。", "木村マネージャー"), ("中村リーダーが対応します。", "中村リーダー")):
+            self.assertEqual(writer.unverified(text, "確認をお願いします"), [tok], text)
+
+    def test_a_name_the_material_has_with_another_title_is_covered(self):
+        self.assertEqual(writer.unverified("山田様に確認します。", "山田さんから依頼"), [])
+        self.assertEqual(writer.unverified("山田さんに確認します。", "山田様から依頼"), [])
+
+    def test_courtesy_words_are_not_names(self):
+        for text in ("お客様へ共有します。", "皆様にお知らせします。", "担当者様へ送ります。", "ご担当者様へ送ります。", "お世話様です。",
+                     "プロジェクトマネージャーに確認します。", "チームリーダーに確認します。"):
+            self.assertEqual(writer.unverified(text, "確認をお願いします"), [], text)
+        for text, name in (("山本部長に聞きます。", "山本部長"), ("橋本様へ送ります。", "橋本様"), ("ミラー様へ送ります。", "ミラー様"),
+                           ("ウィリアム部長に聞きます。", "ウィリアム部長")):   # a real surname or a long-vowel name is still a name
+            self.assertEqual(writer.unverified(text, "確認をお願いします"), [name], text)
+
+    def test_a_done_claim_the_material_lacks_is_a_claim_flag(self):
+        f = writer.quality_flags
+        for word in ("対応済み", "手配済み", "確認済み", "連絡済み", "共有済み", "調整済み", "実施済み", "反映済み", "修正済み"):
+            self.assertIn("claim", f(word + "です。", "", '{"text": "状況を教えてください"}'), word)
+        self.assertNotIn("claim", f("対応済みです。", "", '{"text": "対応済みか教えてください"}'))
+
+
 class PolishWriter:
     """A CLI-style writer that first answers stiffly, then well when it is told what to fix."""
     NAME = "copilot"

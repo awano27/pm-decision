@@ -190,6 +190,8 @@ python eval/revision_rate.py --out <状態フォルダ>     # PM の修正率を
 
 `precedent_given` が設定 1 でも全部にならないのは、元の 4 件（ctx-1〜4）に `precedent` がなく、ctx-10（共有だけの件）に下書きが出ないためです。実際の writer（`--writer copilot` など）での数値は NOT_RUN です（契約の上限を使うので、回す前に残りを確認してください）。
 
+接地検査の対象を広げた前後（K04、`python eval/draft_quality.py --backend stub --writer cmd --fixtures fixtures_context.jsonl --kinds teams.chat --per-kind 20`、`KIMERU_WRITER_CMD="python eval/scripted_writer.py"`）は、`invented` 0 → 0、`claim` 0 → 0（台本の文は対象の語を含まない）です。実際の writer での数値は NOT_RUN です。
+
 ## PM の 1 日（`day_run.py`）
 
 ```bash

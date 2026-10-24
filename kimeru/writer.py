@@ -104,7 +104,11 @@ TOKENS = re.compile(
     r"\d+(?:\.\d+)?\s*(?:%|営業日|週間|時間|か月|ヶ月|カ月|件|日|人|円|万|回|個|名|分|台|秒|時)|"
     r"[一二三四五六七八九十]+\s*(?:営業日|週間|時間|件|日|人|円|万|回|個|名|分|台)|"
     r"[月火水木金土日]曜日?|(?:明後日|明日|本日|今日|再来週|来週|今週|来月|今月|月末|週明け|今夜|今朝)|"
-    r"(?:[一-龠ァ-ヶ][一-龠ァ-ヶA-Za-z]{0,7})さん")
+    r"(?:[一-龠ァ-ヶ][一-龠ァ-ヶA-Za-z]{0,7})さん|"
+    r"(?:[一-龠ァ-ヶ][一-龠ァ-ヶーA-Za-z]{0,7})(?:様|殿|部長|課長|係長|主任|マネージャー|リーダー)")   # ー only here: さん keeps its old reach
+TITLES = ("マネージャー", "リーダー", "部長", "課長", "係長", "主任", "さん", "様", "殿")
+# whole stems before a title that name a role or a courtesy, not a person (チームリーダー, お客様, 本部長); matched whole, so 山本部長 stays a name
+NOT_TITLED = ("客", "世話", "プロジェクト", "チーム", "本", "当", "貴", "御", "同")
 NOT_NAMES = ("皆", "みな", "お客", "各", "先方", "皆様", "担当者", "関係者", "お世話", "お疲れ", "ご担当", "どなた")
 
 
@@ -710,9 +714,12 @@ def _covered(token, mat):
     if re.fullmatch(r"\d{1,2}日", c):   # a bare day: any date ending in it (10/15) or the same day
         n = c[:-1]
         return bool(re.search(rf"(?<!\d){n}日|/{n}(?!\d)", mat))
-    if c.endswith("さん"):
-        stem = c[:-2]
-        return stem in NOT_NAMES or stem in mat or any(stem.endswith(x) for x in NOT_NAMES)
+    title = next((t for t in TITLES if c.endswith(t)), None)
+    if title and len(c) > len(title):
+        stem = c[:-len(title)]
+        if stem in NOT_NAMES or stem in mat or any(stem.endswith(x) for x in NOT_NAMES):
+            return True
+        return title != "さん" and stem in NOT_TITLED
     return bool(re.search(r"(?<!\d)" + re.escape(c) + r"(?!\d)", mat, re.I))
 
 
@@ -774,7 +781,8 @@ def strip_citations(v):
 
 AWKWARD = re.compile(r"発火|予定してください|ことを予定|幸いです|所存|お願い申し上げます|いたしまして")
 HUMBLE = re.compile(r"させていただ")
-CLAIM = re.compile(r"経営判断|経営層|役員|社長|上長の承認|承認を得(?:る|て)|承認済み|確定しました|完了しました|お約束|保証")
+CLAIM = re.compile(r"経営判断|経営層|役員|社長|上長の承認|承認を得(?:る|て)|承認済み|確定しました|完了しました|お約束|保証|"
+                   "対応済み|手配済み|確認済み|連絡済み|共有済み|調整済み|実施済み|反映済み|修正済み")
 ENGLISH_RUN = re.compile(r"(?<![A-Za-z0-9_-])[A-Za-z]{2,}(?:[ ,][A-Za-z]{2,}){2,}")
 POLISH_FIX = {
     "awkward": "不自然・堅すぎる言い回し（発火、予定してください、「させていただきます」の重複など）を、普通の業務の日本語に直す",

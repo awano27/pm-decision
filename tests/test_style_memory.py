@@ -316,5 +316,42 @@ class TestTheStyleFile(StyleCase):
             self.assertNotIn(STYLE_HEAD, spy.prompts[-1])
 
 
+class TestTheApprovalLogIsReadByItsTail(unittest.TestCase):
+    """K06: the check for a wording used on another item reads at most the last 8 MB of approvals.log.jsonl and never read_text."""
+
+    def log(self, d, rows, pad_mb=0):
+        p = Path(d) / "approvals.log.jsonl"
+        pad = json.dumps({"at": "2020-01-01T00:00:00", "key": "old", "status": "approved", "pad": "x" * 900}) + "\n"
+        with p.open("w", encoding="utf-8") as f:
+            for _ in range(int(pad_mb * 1024 * 1024 // len(pad.encode("utf-8"))) + 1 if pad_mb else 0):
+                f.write(pad)
+            for r in rows:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        return p
+
+    def test_a_9_mb_log_is_read_without_read_text_and_gives_the_same_answer(self):
+        now = datetime.now()
+        recent = {"at": (now - timedelta(days=3)).isoformat(timespec="seconds"), "key": "g:other:n", "instruction_sig": SIG,
+                  "status": "revised"}
+        with tempfile.TemporaryDirectory() as d:
+            p = self.log(d, [recent], pad_mb=9)
+            self.assertGreater(p.stat().st_size, 9 * 1024 * 1024)
+            with mock.patch.object(Path, "read_text", side_effect=AssertionError("read_text")):
+                self.assertTrue(learn._seen_on_other_item(d, SIG, "g:mine:n", now))
+                self.assertFalse(learn._seen_on_other_item(d, "no-such-sig", "g:mine:n", now))
+                self.assertFalse(learn._seen_on_other_item(d, SIG, "g:other:n", now))   # the same item is not another item
+            small = self.log(d, [recent])
+            self.assertLess(small.stat().st_size, 8 * 1024 * 1024)
+            self.assertTrue(learn._seen_on_other_item(d, SIG, "g:mine:n", now))
+
+    def test_a_row_older_than_30_days_or_a_missing_log_is_not_a_use(self):
+        now = datetime.now()
+        old = {"at": (now - timedelta(days=31)).isoformat(timespec="seconds"), "key": "g:other:n", "instruction_sig": SIG}
+        with tempfile.TemporaryDirectory() as d:
+            self.assertFalse(learn._seen_on_other_item(d, SIG, "g:mine:n", now))
+            self.log(d, [old])
+            self.assertFalse(learn._seen_on_other_item(d, SIG, "g:mine:n", now))
+
+
 if __name__ == "__main__":
     unittest.main()

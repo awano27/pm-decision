@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from kimeru import brief, cli, config, memory, notify, push
+from kimeru import brief, cli, config, fsutil, memory, notify, push
 from kimeru.backends import StubBackend
 
 try:
@@ -501,6 +501,161 @@ class TestWriterLinesWithText(unittest.TestCase):
         self.assertEqual(config.CHOICES["writer_precedent_text"], ("0", "1"))
         self.assertIn("writer_precedent_text", config.LOGGABLE)
         self.assertIn("writer_precedent_text", config.SHARE_VALUES)
+
+
+class TestTheIndexIsReadOnceAndTheTailIsSaid(unittest.TestCase):
+    """K06: the logs are read again only when a file changed; the same answers with and without the reuse; a decisions.jsonl cut at
+    8 MB says from which day it was read (only in `kimeru memory N`)."""
+
+    ON = {"KIMERU_WRITER_PRECEDENT": "1"}
+
+    def setUp(self):
+        memory._cache.clear()
+        self.addCleanup(memory._cache.clear)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.d = Path(self.tmp.name)
+
+    def state(self):
+        old = chat("19:c1#m-1")
+        auto = {"graph": "teams-chat-triage", "event_kind": "teams.chat", "event_id": "19:c1#m-5", "node": "plan_decision",
+                "at": at(4), "plan": {}, "event": {"chat_id": "19:c1", "author": "佐藤"}}
+        write_state(self.d, [(12, old, "approved"), (13, chat("19:c1#m-9"), "pending")],
+                    log=[{"at": at(2), "key": key_of(old), "id": 12, "status": "approved"}], decisions=[auto],
+                    merged=[{"into": "x", "event_id": "y"}])
+
+    def spy(self):
+        """(opened, read, patches): every Path.open and every fsutil.read_json call made while the patches are active."""
+        opened, read = [], []
+        real_open, real_read = Path.open, fsutil.read_json
+
+        def counting_open(p, *a, **k):
+            opened.append(str(p))
+            return real_open(p, *a, **k)
+
+        def counting_read(p, *a, **k):
+            read.append(str(p))
+            return real_read(p, *a, **k)
+        return opened, read, (mock.patch.object(Path, "open", counting_open), mock.patch.object(fsutil, "read_json", counting_read))
+
+    def lines(self):
+        return memory.writer_lines(self.d, chat("19:c1#m-9"), 13, now=NOW)
+
+    def test_a_second_writer_lines_for_the_same_records_opens_no_file(self):
+        self.state()
+        with mock.patch.dict(os.environ, self.ON):
+            first = self.lines()
+            opened, read, (p1, p2) = self.spy()
+            with p1, p2:
+                second = self.lines()
+        self.assertEqual(len(first), 2)
+        self.assertEqual(second, first)
+        self.assertEqual((opened, read), ([], []))
+
+    def test_one_more_byte_in_approvals_json_is_read_again(self):
+        self.state()
+        p = self.d / "approvals.json"
+        with mock.patch.dict(os.environ, self.ON):
+            self.lines()
+            p.write_bytes(p.read_bytes() + b" ")
+            opened, read, (p1, p2) = self.spy()
+            with p1, p2:
+                self.lines()
+        self.assertEqual(read, [str(p)])
+        self.assertNotIn(str(self.d / "approvals.log.jsonl"), opened)   # the logs have their own key
+
+    def test_a_rewrite_of_the_same_size_is_read_again_because_the_mtime_is_in_the_key(self):
+        self.state()
+        p = self.d / "approvals.json"
+        with mock.patch.dict(os.environ, self.ON):
+            self.assertEqual(len(self.lines()), 2)
+            before = p.stat()
+            text = p.read_text(encoding="utf-8")
+            p.write_text(text.replace('"approved"', '"approvee"', 1), encoding="utf-8")   # the same number of bytes
+            os.utime(p, ns=(before.st_atime_ns, before.st_mtime_ns + 5_000_000_000))
+            self.assertEqual(p.stat().st_size, before.st_size)
+            opened, read, (p1, p2) = self.spy()
+            with p1, p2:
+                self.lines()
+        self.assertEqual(read, [str(p)])
+
+    def test_a_save_of_approvals_json_alone_costs_index_no_read_json(self):
+        self.state()
+        p = self.d / "approvals.json"
+        with mock.patch.dict(os.environ, self.ON):
+            items = json.loads(p.read_text(encoding="utf-8"))["items"]
+            memory.index(self.d, items, now=NOW)
+            p.write_bytes(p.read_bytes() + b" ")
+            opened, read, (p1, p2) = self.spy()
+            with p1, p2:
+                memory.index(self.d, items, now=NOW)
+        self.assertEqual(read, [])
+        self.assertEqual(opened, [])
+
+    def test_an_approvals_json_that_exists_but_cannot_be_read_is_not_kept(self):
+        self.state()
+        with mock.patch.dict(os.environ, self.ON):
+            with mock.patch.object(fsutil, "read_json", lambda path, default: default):   # e.g. a sharing violation
+                self.assertEqual(len(self.lines()), 1)   # only the automatic line: no items
+            self.assertEqual(len(self.lines()), 2)
+
+    def test_index_history_and_writer_lines_are_the_same_with_and_without_the_reuse(self):
+        self.state()
+        rec = chat("19:c1#m-9")
+        items = json.loads((self.d / "approvals.json").read_text(encoding="utf-8"))["items"]
+        with mock.patch.dict(os.environ, self.ON):
+            cold = (memory.index(self.d, items, now=NOW), self.lines())
+            warm = (memory.index(self.d, items, now=NOW), self.lines())
+            memory._cache.clear()
+            again = memory.index(self.d, items, now=NOW)
+        self.assertEqual(cold, warm)
+        self.assertEqual(cold[0], again)
+        self.assertEqual(memory.history(cold[0], rec, 13), memory.history(again, rec, 13))
+        self.assertEqual(len(cold[0]["chat:19:c1"]), 2)
+
+    def test_missing_files_have_a_key_and_a_file_that_appears_is_read(self):
+        with mock.patch.dict(os.environ, self.ON):
+            self.assertEqual(self.lines(), [])
+            self.assertEqual(memory.index(self.d, {}, now=NOW), {})
+            self.state()
+            self.assertEqual(len(self.lines()), 2)
+
+    def pad(self, days_before, megabytes):
+        """decisions.jsonl rows of a decision that needs a human (the lookup skips them), dated days_before, `megabytes` MB in all."""
+        row = json.dumps({"at": at(days_before), "needs_human": True, "pad": "x" * 900}) + "\n"
+        with (self.d / "decisions.jsonl").open("a", encoding="utf-8") as f:
+            for _ in range(int(megabytes * 1024 * 1024 // len(row.encode("utf-8"))) + 1):
+                f.write(row)
+
+    def test_a_decisions_log_cut_at_8_mb_says_from_which_day_it_was_read(self):
+        self.state()
+        (self.d / "decisions.jsonl").unlink()
+        self.pad(20, 8.2)
+        self.assertGreater((self.d / "decisions.jsonl").stat().st_size, 8 * 1024 * 1024)
+        self.assertEqual(memory.TAIL_BYTES, 8 * 1024 * 1024)
+        lines = memory.show(self.d, 13, now=NOW).splitlines()
+        self.assertEqual(lines[-1], f"（自動決定は {md(at(20))} 以降の分だけ読めました）")
+        self.assertEqual(sum("自動決定は" in line for line in lines), 1)
+
+    def test_no_note_under_8_mb_or_when_the_oldest_row_read_is_older_than_60_days(self):
+        self.state()
+        (self.d / "decisions.jsonl").unlink()
+        self.pad(20, 0.1)
+        self.assertNotIn("自動決定は", memory.show(self.d, 13, now=NOW))
+        (self.d / "decisions.jsonl").unlink()
+        self.pad(70, 8.2)
+        self.assertGreater((self.d / "decisions.jsonl").stat().st_size, memory.TAIL_BYTES)
+        self.assertNotIn("自動決定は", memory.show(self.d, 13, now=NOW))
+
+    def test_the_note_is_not_in_the_detail_or_the_brief(self):
+        self.state()
+        (self.d / "decisions.jsonl").unlink()
+        self.pad(20, 8.2)
+        with mock.patch.dict(os.environ, MEMO_ON):
+            b = FakeBridge(replies=["詳細 13"])
+            notify.collect(self.d, b, send=True)
+            text, _ = brief.build(self.d, StubBackend(), now=NOW, date="2026-10-12")
+        self.assertFalse(any("自動決定は" in t[0] for t in b.posts) or "自動決定は" in text)
 
 
 if __name__ == "__main__":

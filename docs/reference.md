@@ -14,7 +14,7 @@ python -m kimeru demo [--pace 1.5] [--fresh]       # 既定の出力先は out/d
 python -m kimeru run <payload.json>...
 python -m kimeru watch inbox/                     # inbox/*.json と議事録 *.txt を常駐処理（処理済みは inbox/done/）
 python -m kimeru digest                           # 今日の判断件数と確認待ち
-python -m kimeru memory <N>                        # #N と同じ相手・チャット・作業項目・規則の前例と経緯（読むだけ。`KIMERU_MEMORY` の 0/1 によらず表示）
+python -m kimeru memory <N>                        # #N と同じ相手・チャット・作業項目・規則の前例と経緯（読むだけ。`KIMERU_MEMORY` の 0/1 によらず表示。`decisions.jsonl` が 8 MB を超えて古い分を読めていないときは、末尾に読めた最古の日を 1 行足す）
 python -m kimeru owed                              # 返事の借り: 自分が返事をまだ返していない件と、閉じた件の内訳（`KIMERU_SENT_WATCH=1` のときだけ。読むだけ）
 python -m kimeru pull teams|ado|alerts --inbox inbox    # ado: --org <組織 or URL> [--project <名前>] [--login]
 python -m kimeru brief [--post [--send]]

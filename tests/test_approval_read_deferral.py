@@ -196,10 +196,45 @@ class TestBridgeReport(unittest.TestCase):
         with mock.patch("kimeru.notify.subprocess.run", return_value=done):
             with self.assertRaises(notify.BridgeError) as e:
                 b.read()
-            self.assertEqual((e.exception.data.get("restore"), e.exception.data.get("returned")), ("failed", False))
+            # it said nothing about the screen (stopped, blocked, never started): "unknown", recorded but not told every cycle
+            self.assertEqual((e.exception.data.get("restore"), e.exception.data.get("returned")), ("unknown", False))
+            self.assertEqual(notify.screen_of(e.exception.data)["restore"], "unknown")
             with self.assertRaises(notify.BridgeError) as e:
                 b.read(interactive=True)   # the person ran it: the self chat is meant to stay open
             self.assertNotIn("restore", e.exception.data)
+
+    def test_a_readchat_that_breaks_silently_stays_failed(self):
+        b = notify.PowerShellBridge(script="x.ps1")
+        done = mock.Mock(stdout="not json", stderr="boom", returncode=1)
+        with mock.patch("kimeru.notify.subprocess.run", return_value=done):
+            with self.assertRaises(notify.BridgeError) as e:   # a colleague's chat may be left open: told, as before
+                b.readchat("19:x@unq.gbl.spaces")
+        self.assertEqual(e.exception.data.get("restore"), "failed")
+
+    def test_an_unknown_screen_is_recorded_without_an_alert(self):
+        with tempfile.TemporaryDirectory() as d:
+            shown, r = [], {}
+            daily._screen_after_read(Path(d), notify.screen_of({"restore": "unknown", "returned": False}), r,
+                                     lambda t, b: shown.append(t))
+            self.assertEqual(r.get("approvals_screen"), "unknown")
+            self.assertEqual(shown, [])
+            daily._screen_after_read(Path(d), notify.screen_of({"restore": "failed", "returned": False}), r,
+                                     lambda t, b: shown.append(t))
+            self.assertEqual(len(shown), 1)
+
+
+class TestCheckScriptReads(unittest.TestCase):
+    """run-check is watched by the person: its reads open the self chat as before. The automatic check (N5) opens nothing."""
+
+    def test_the_watched_reads_are_interactive_and_the_automatic_one_is_not(self):
+        text = (Path(__file__).resolve().parents[1] / "tools" / "check.ps1").read_text(encoding="utf-8-sig")
+        reply_seen = text[text.index("function ReplySeen"):].split("\n", 2)[1]
+        self.assertIn("Self 'read' @('-Interactive')", reply_seen)
+        self.assertEqual(text.count("$s = Self 'open'; $r = Self 'read' @('-Interactive')"), 2)
+        n5 = text[text.index("# N5: the automatic check opens no chat"):]
+        n5 = n5[:n5.index("} else {")]
+        self.assertIn("$r = Self 'read'", n5)
+        self.assertNotIn("-Interactive", n5)
 
 
 class TestDailyPostponed(unittest.TestCase):

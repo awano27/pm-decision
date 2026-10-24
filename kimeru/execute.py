@@ -108,12 +108,15 @@ def _priority(v):
     return v if type(v) is int and 1 <= v <= 4 else None
 
 
+NO_PRIORITY = "優先度の変更を含まないため（kimeru が書けるのは優先度だけ）"   # e.g. a tag only: recorded, and not reported after each OK
+
+
 def update_plan(rec, action):
     """(plan, None) for an ado.update that can be carried out, or (None, why not). The plan is what the post shows and OK approves:
     the work item, the priority now and the new one, and the revision the decision saw."""
     fields = action.get("fields") if isinstance(action.get("fields"), dict) else {}
     if PRIORITY not in fields:
-        return None, "優先度の変更を含まないため（kimeru が書けるのは優先度だけ）"
+        return None, NO_PRIORITY
     to = _priority(fields[PRIORITY])
     if to is None:
         return None, "優先度の値が 1〜4 の整数ではないため"
@@ -532,7 +535,8 @@ def run_approved(out, ap, num, item, post, http=None, token_fn=None, retry_only=
             _log(out, {"id": num, "key": key, "type": t, "target": str(action.get("id")), "state": "skipped",
                        "reason": NO_ORIGIN if skip == NO_ORIGIN + "ため" else skip, **where})
             ap.save()
-            _tell(post, f"[kimeru 実行 #{num}] {_target(action)} には書いていません（{skip}）。承認は記録しました")
+            if skip != NO_PRIORITY:
+                _tell(post, f"[kimeru 実行 #{num}] {_target(action)} には書いていません（{skip}）。承認は記録しました")
             results.append({"index": i, "type": t, "state": "skipped"})
             continue
         was_unknown = bool(cur and not_known(cur))
@@ -588,7 +592,9 @@ def run_approved(out, ap, num, item, post, http=None, token_fn=None, retry_only=
 def reopen_for_approval(item):
     """An approved change no longer matches ADO: the item waits again and is posted again (execute.freeze shows the new revision
     and value); the earlier OK, above the new post, does not count. What was already carried out stays done."""
+    from . import notify
     item["status"], item["posted"], item["request_posted"] = "pending", False, False
+    notify.next_measurement(item)   # a new proposal generation, as for a post made again before execution was switched on
     item["record"]["redraft_note"] = ("承認のあとに作業項目が更新されていたため、優先度を変更していません。"
                                       "今の改訂と優先度で出し直します。確かめて、もう一度 OK と返信してください")
 

@@ -145,7 +145,10 @@ class TestReapproval(UpdateBase):
         bridge = self.post()
         ado = FakeAdo(rev=9, priority=2)
         changes = self.reply(bridge, "OK 1", ado)
-        self.assertEqual([c["status"] for c in changes], ["reapproval"])
+        self.assertEqual([c["status"] for c in changes], ["approved", "reapproval"])   # the OK itself stays logged as an OK
+        self.assertEqual(len(self.item().get("measurement_history") or []), 1)   # the post made again is a new generation
+        logged = [json.loads(l)["status"] for l in (self.out / "approvals.log.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(logged[-2:], ["approved", "reapproval"])
         self.assertEqual(ado.methods(), ["GET"])
         self.assertEqual(self.state(), "stale")
         it = self.item()
@@ -259,6 +262,16 @@ class TestNotCarriedOut(UpdateBase):
                 self.assertEqual(ado.calls, [])
                 self.assertEqual(self.state(), "skipped")
                 self.assertEqual(self.item()["status"], "approved")
+                told = [p for p in bridge.posts if p.startswith(("[kimeru 実行 #1]", "[kimeru 実行 #1 "))]
+                self.assertEqual(len(told), 0 if name == "tags only" else 1)   # a tag-only change is a plan by design: no result post
+
+
+class TestLabels(UpdateBase):
+    def test_reapproval_and_stale_have_their_own_words(self):
+        from kimeru import report
+        self.assertIn("reapproval", notify.ACK)
+        self.assertIn("reapproval", report.LOGGED)
+        self.assertNotEqual(report._execution_label({"state": "stale"}), report._execution_label({"state": "unknown"}))
 
 
 class TestRevisionFromThePull(UpdateBase):

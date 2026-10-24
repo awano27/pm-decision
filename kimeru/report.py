@@ -246,7 +246,7 @@ def _execution_label(row):
     state = row.get("state")
     labels = {"done": "実行確認済み", "closed": "本人が確認して終了（API実行の確認ではない）",
               "skipped": "実行対象外・未実行", "failed": "実行失敗", "running": "結果不明（実行中記録）",
-              "unknown": "結果不明", "requested": "送信待ち（次の --send の実行で 1 回送る）"}
+              "unknown": "結果不明", "stale": "承認後に作業項目が更新されていたため未実行（確認し直し待ち）", "requested": "送信待ち（次の --send の実行で 1 回送る）"}
     label = labels.get(state, "結果不明")
     result = row.get("result") or {}
     if state == "done" and result.get("comment_id") is not None:
@@ -277,7 +277,7 @@ TRY_NOTICE = ("体験モードの記録です。判断はキーワード一致�
               "台本の固定文で、AI モデルの推論でも、あなたの操作でもありません。"
               "経路に出る 0.85・0.90 などの値は簡易ルールの固定値で、確率や正解率ではありません。Teams・ADO・AI モデルには接続しておらず、"
               "外へは何も送っていません。")
-LOGGED = {"redrafted": "修正を指示 → 返信案を書き直し", "redraft_failed": "修正を指示 → 書き直せず（元の案のまま）", "redraft_limit": "修正を指示 → 回数の上限（元の案のまま）",
+LOGGED = {"reapproval": "承認後に作業項目が更新されていたため出し直し（OK し直し待ち）", "redrafted": "修正を指示 → 返信案を書き直し", "redraft_failed": "修正を指示 → 書き直せず（元の案のまま）", "redraft_limit": "修正を指示 → 回数の上限（元の案のまま）",
           "approved": "承認", "rejected": "却下", "held": "保留", "ask_back": "聞き返しを指示", "detail": "全文（詳細）を確認",
           "closed": "済（本人が確認して閉じた）", "send": "送信を指示"}
 # how the case flow names the judgment points and answers of the shipped graphs (other ids are shown as they are)

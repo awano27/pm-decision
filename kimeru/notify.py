@@ -1725,7 +1725,7 @@ def instruction_sig(instruction, event=None):
 
 
 STALE_ACTION_KEYS = ("drafted_by", "held_for", "writer_warning", "variant", "ask_back", "ask_back_unverified", "unverified")
-STALE_RECORD_KEYS = ("writer_error", "copilot_request", "copilot_sources", "memo", "redraft_note", "style_used")
+STALE_RECORD_KEYS = ("writer_error", "copilot_request", "copilot_sources", "memo", "redraft_note", "style_used", "today")
 
 
 def _redraft(it, instruction, writer, out=None, n=None, now=None):
@@ -1770,7 +1770,9 @@ def _redraft(it, instruction, writer, out=None, n=None, now=None):
             material["thread"] = full["thread"]
     keep_history = config.value("redraft_history") == "1"   # T9 (c): the earlier instructions of this item go to the writer; kept in the item until it closes
     earlier = [h for h in (it.get("redraft_history") or []) if isinstance(h, str)] if keep_history else []
-    drafted = writer_mod.apply(rec, material, writer, instruction, previous=previous, precedent=precedent, history=earlier)
+    drafted = writer_mod.apply(rec, material, writer, instruction, previous=previous, precedent=precedent, history=earlier,
+                               today=writer_mod.today_of(now),
+                               self_replies=writer_mod.self_replies(out, now, material.get("thread")))
     used = [a for a in drafted if a.get("drafted_by")]
     manual = bool(getattr(writer, "PROMPT_ONLY", False)) and bool(rec.get("copilot_request"))
     if manual:   # writer=m365: nothing is drafted here; a new request (with the instruction and the draft as it stands) goes to the PM

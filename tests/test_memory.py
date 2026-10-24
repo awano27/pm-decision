@@ -658,5 +658,210 @@ class TestTheIndexIsReadOnceAndTheTailIsSaid(unittest.TestCase):
         self.assertFalse(any("自動決定は" in t[0] for t in b.posts) or "自動決定は" in text)
 
 
+class TestSimilarItemsOfOtherChats(unittest.TestCase):
+    """K07 (recall=1): the decided items of other chats whose words overlap the case, in 詳細 N and in the writer's precedent."""
+
+    ENV = {**MEMO_ON, "KIMERU_RECALL": "1"}
+    WRITER = {"KIMERU_WRITER_PRECEDENT": "1", "KIMERU_RECALL": "1"}
+    NOW_TEXT = "QA 環境が止まっていてリリース日を動かしたい"
+    OLD_TEXT = "QA 環境の復旧待ちでリリースを 1 週ずらす"
+
+    def item(self, eid, text, chat_id="19:c2", author="田中", **extra):
+        return chat(eid, event={**GOLDEN_CHAT["event"], "author": author, "chat_id": chat_id, "text": text}, **extra)
+
+    def state(self, d, rows, now_text=None, **kw):
+        """rows: [(number, record, status, days)]; item #13 is the pending case in chat 19:c1."""
+        case = self.item("19:c1#m-13", now_text or self.NOW_TEXT, chat_id="19:c1", author="佐藤")
+        numbered = [(m, rec, st) for m, rec, st, _ in rows] + [(13, case, "pending")]
+        log = [{"at": at(days), "key": key_of(rec), "id": m, "status": st} for m, rec, st, days in rows]
+        write_state(d, numbered, log=log, **kw)
+        return case
+
+    def detail(self, d, env):
+        with mock.patch.dict(os.environ, env):
+            b = FakeBridge(replies=["詳細 13"])
+            notify.collect(d, b, send=True)
+            return b.posts[-1][0]
+
+    def test_the_detail_lists_an_approved_item_of_another_chat_and_hides_the_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.state(d, [(12, self.item("19:c2#m-12", self.OLD_TEXT), "approved", 2)])
+            text = self.detail(d, self.ENV)
+            lines = text.splitlines()
+            self.assertEqual(lines[-1], "返信: OK 13 / NG 13 / 保留 13")
+            self.assertEqual(lines[-3], "似た件:")
+            self.assertEqual(lines[-2], f"・{md(at(2))} #12 OK: （別の相手）（似た点: QA, 環境）")
+            self.assertNotIn("田中", text)
+
+    def test_the_same_chat_shows_in_the_history_only_and_never_as_a_similar_item(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.state(d, [(12, self.item("19:c1#m-12", self.OLD_TEXT, chat_id="19:c1", author="佐藤"), "approved", 2)])
+            text = self.detail(d, self.ENV)
+            self.assertIn("これまでの経緯:", text)
+            self.assertNotIn("似た件", text)
+
+    def test_the_same_person_in_another_chat_is_already_a_precedent_and_is_left_out(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.state(d, [(12, self.item("19:c2#m-12", self.OLD_TEXT, author="佐藤"), "approved", 2)])
+            self.assertNotIn("似た件", self.detail(d, self.ENV))
+
+    def test_a_pending_or_held_item_is_not_a_document_and_the_case_is_not_its_own(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.state(d, [(12, self.item("19:c2#m-12", self.OLD_TEXT), "pending", 2),
+                           (11, self.item("19:c3#m-11", self.OLD_TEXT, chat_id="19:c3"), "held", 2)])
+            self.assertNotIn("似た件", self.detail(d, self.ENV))
+            with mock.patch.dict(os.environ, self.ENV):
+                self.assertEqual(memory.similar(d, self.item("19:c1#m-13", self.NOW_TEXT, chat_id="19:c1"), 12, now=NOW), [])
+
+    def test_a_rejected_item_counts_and_one_older_than_sixty_days_does_not(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, self.ENV):
+            case = self.state(d, [(12, self.item("19:c2#m-12", self.OLD_TEXT), "rejected", 2),
+                                  (11, self.item("19:c3#m-11", self.OLD_TEXT, chat_id="19:c3"), "approved", 61)])
+            found = memory.similar(d, case, 13, now=NOW)
+            self.assertEqual([(doc["n"], doc["label"]) for doc, _ in found], [("12", "NG")])
+
+    def test_a_text_below_the_minimum_is_left_out_and_recall_max_cuts_the_lines(self):
+        with tempfile.TemporaryDirectory() as d:
+            rows = [(12, self.item("19:c2#m-12", self.OLD_TEXT), "approved", 3),
+                    (11, self.item("19:c3#m-11", self.OLD_TEXT, chat_id="19:c3"), "approved", 2),
+                    (10, self.item("19:c4#m-10", "来週の歓迎会の場所を決めたい", chat_id="19:c4"), "approved", 1)]
+            self.state(d, rows)
+            both = self.detail(d, self.ENV)
+            self.assertEqual(sum(1 for line in both.splitlines() if "別の相手" in line), 2)
+            self.assertNotIn("#10", both)
+            one = self.detail(d, {**self.ENV, "KIMERU_RECALL_MAX": "1"})
+            self.assertEqual(sum(1 for line in one.splitlines() if "別の相手" in line), 1)
+            self.assertIn("#11", one)   # the newer of two equal scores
+            self.assertNotIn("似た件", self.detail(d, {**self.ENV, "KIMERU_RECALL_MIN": "0.99"}))
+            broken = self.detail(d, {**self.ENV, "KIMERU_RECALL_MIN": "abc", "KIMERU_RECALL_MAX": "x"})   # back to 0.25 and 2
+            self.assertEqual(sum(1 for line in broken.splitlines() if "別の相手" in line), 2)
+
+    def test_a_negative_or_out_of_range_setting_is_the_default(self):
+        with tempfile.TemporaryDirectory() as d:
+            rows = [(12, self.item("19:c2#m-12", self.OLD_TEXT), "approved", 3),
+                    (11, self.item("19:c3#m-11", self.OLD_TEXT, chat_id="19:c3"), "approved", 2),
+                    (10, self.item("19:c4#m-10", self.OLD_TEXT, chat_id="19:c4"), "approved", 1)]
+            self.state(d, rows)
+            base = self.detail(d, self.ENV)
+            self.assertEqual(sum(1 for line in base.splitlines() if "別の相手" in line), 2)
+            for bad in ({"KIMERU_RECALL_MIN": "-1"}, {"KIMERU_RECALL_MIN": "1.5"}, {"KIMERU_RECALL_MAX": "-1"}):
+                self.assertEqual(self.detail(d, {**self.ENV, **bad}), base, bad)
+
+    def test_an_item_older_than_sixty_days_is_not_cut_into_terms(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, self.ENV):
+            case = self.state(d, [(12, self.item("19:c2#m-12", self.OLD_TEXT), "approved", 2),
+                                  (11, self.item("19:c3#m-11", self.OLD_TEXT, chat_id="19:c3"), "approved", 61)])
+            with mock.patch.object(memory.recall, "terms", wraps=memory.recall.terms) as terms:
+                memory.similar(d, case, 13, now=NOW)
+            cut = [c.args[0] for c in terms.call_args_list]
+            self.assertEqual(len(cut), 2)   # the query and the one item within the 60 days
+            self.assertTrue(all("復旧待ち" in x or "止まって" in x for x in cut))
+
+    def test_recall_names_shows_the_name_in_forty_characters(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.state(d, [(12, self.item("19:c2#m-12", self.OLD_TEXT, author="田中"), "approved", 2)])
+            on = self.detail(d, {**self.ENV, "KIMERU_RECALL_NAMES": "1"})
+            self.assertIn(f"・{md(at(2))} #12 OK: 田中さん（似た点: QA, 環境）", on)
+        with tempfile.TemporaryDirectory() as d:
+            case = self.state(d, [(12, self.item("19:c2#m-12", self.OLD_TEXT, author="あ" * 60), "approved", 2)])
+            with mock.patch.dict(os.environ, {**self.ENV, "KIMERU_RECALL_NAMES": "1"}):
+                (doc, shown), = memory.similar(d, case, 13, now=NOW)
+                line = memory._similar_line(doc, shown)
+            self.assertLessEqual(len(line), memory.SIMILAR_LINE_MAX)
+            self.assertIn("あ" * 30, line)
+
+    def test_recall_off_or_memory_off_leaves_the_detail_byte_for_byte_the_same(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.state(d, [(12, self.item("19:c2#m-12", self.OLD_TEXT), "approved", 2)])
+            base = self.detail(d, MEMO_ON)
+            self.assertEqual(self.detail(d, {**MEMO_ON, "KIMERU_RECALL": "0"}), base)
+            self.assertNotIn("似た件", base)
+            self.assertNotIn("似た件", self.detail(d, {"KIMERU_MEMORY": "0", "KIMERU_RECALL": "1"}))
+            self.assertFalse([p.name for p in Path(d).iterdir() if "recall" in p.name or "idx" in p.name])
+
+    def test_the_writer_gets_the_similar_lines_after_its_precedent_only_with_both_settings(self):
+        with tempfile.TemporaryDirectory() as d:
+            case = self.state(d, [(12, self.item("19:c2#m-12", self.OLD_TEXT), "approved", 2)])
+            with mock.patch.dict(os.environ, self.WRITER):
+                lines = memory.writer_lines(d, case, 13, now=NOW, writer_name="copilot")
+            self.assertEqual(lines[0], memory.SIMILAR_HEAD)
+            self.assertEqual(lines[1], f"・{md(at(2))} #12 OK: （別の相手）（似た点: QA, 環境）")
+            with mock.patch.dict(os.environ, {**self.WRITER, "KIMERU_RECALL": "0"}):
+                self.assertEqual(memory.writer_lines(d, case, 13, now=NOW, writer_name="copilot"), [])
+            with mock.patch.dict(os.environ, {"KIMERU_WRITER_PRECEDENT": "0", "KIMERU_RECALL": "1"}), \
+                    mock.patch.object(memory, "similar", side_effect=AssertionError("searched")):
+                self.assertEqual(memory.writer_lines(d, case, 13, now=NOW, writer_name="copilot"), [])
+
+    def test_the_writer_gets_the_approved_reply_of_a_similar_item_with_the_text_setting(self):
+        with tempfile.TemporaryDirectory() as d:
+            drafted = self.item("19:c2#m-12", self.OLD_TEXT, actions=[{"type": "teams.reply", "text": "来週に回します", "drafted_by": "copilot"}])
+            case = self.state(d, [(12, drafted, "approved", 2)])
+            with mock.patch.dict(os.environ, {**self.WRITER, "KIMERU_WRITER_PRECEDENT_TEXT": "1"}):
+                lines = memory.writer_lines(d, case, 13, now=NOW, writer_name="claude")
+            self.assertEqual(lines[-1], "　返信: 来週に回します")
+
+    def test_a_precedent_of_the_same_chat_comes_first_and_the_similar_ones_follow(self):
+        with tempfile.TemporaryDirectory() as d:
+            case = self.state(d, [(12, self.item("19:c2#m-12", self.OLD_TEXT), "approved", 2),
+                                  (9, self.item("19:c1#m-9", "別の話", chat_id="19:c1", author="佐藤"), "approved", 5)])
+            with mock.patch.dict(os.environ, self.WRITER):
+                lines = memory.writer_lines(d, case, 13, now=NOW, writer_name="grok")
+            self.assertIn("#9 OK", lines[0])
+            self.assertEqual(lines[1], memory.SIMILAR_HEAD)
+
+    def test_only_the_writers_that_send_the_request_out_get_a_similar_item(self):
+        from kimeru import learn
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, self.WRITER):
+            case = self.state(d, [(12, self.item("19:c2#m-12", self.OLD_TEXT), "approved", 2)])
+            for name in learn.STYLE_WRITERS:
+                self.assertEqual(memory.writer_lines(d, case, 13, now=NOW, writer_name=name)[0], memory.SIMILAR_HEAD, name)
+            for name in ("m365", "m365-auto", "codex", "", None):
+                self.assertEqual(memory.writer_lines(d, case, 13, now=NOW, writer_name=name), [], name)
+
+    def test_the_first_draft_asks_with_the_name_of_its_writer(self):
+        from types import SimpleNamespace
+        from kimeru import cli
+        meter = SimpleNamespace(calls=0, questions=0, seconds=0.0)
+        res = {"node": "n", "path": [], "event_kind": "teams.chat", "event_id": "19:c1#m-13", "outcome": "decide",
+               "actions": [{"type": "teams.reply", "to": "Sato", "text": "受領しました。"}]}
+        for name in ("m365-auto", "copilot"):
+            writer = SimpleNamespace(NAME=name)
+            with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, self.WRITER),                     mock.patch.object(cli.writer_mod, "apply", return_value=[]) as apply:
+                self.state(d, [(12, self.item("19:c2#m-12", self.OLD_TEXT), "approved", 2)])
+                cli._draft(dict(res), {"text": self.NOW_TEXT, "author": "佐藤", "chat_id": "19:c1"}, meter, writer, Path(d), now=NOW)
+            self.assertEqual(any("似た件" in x for x in apply.call_args.kwargs["precedent"] or []), name == "copilot", name)
+
+    def test_a_redraft_asks_with_the_whole_text_kept_so_it_finds_what_the_first_draft_found(self):
+        from types import SimpleNamespace
+        from kimeru import fulltext
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, self.WRITER):
+            case = self.state(d, [(12, self.item("19:c2#m-12", self.OLD_TEXT), "approved", 2)])
+            case["event"] = {**case["event"], "text": "確認をお願いします"}   # the excerpt on the record has none of the words
+            case["material_event"] = dict(case["event"])
+            fulltext.save(Path(d), key_of(case), {"text": self.NOW_TEXT})
+            first = memory.writer_lines(d, case, 13, now=NOW, text=self.NOW_TEXT, writer_name="copilot")
+            self.assertEqual(first[0], memory.SIMILAR_HEAD)
+            it = {"key": key_of(case), "record": case, "posted": True, "status": "pending"}
+            with mock.patch.object(notify.writer_mod, "apply", return_value=[]) as apply:
+                notify._redraft(it, "短く", SimpleNamespace(NAME="copilot"), Path(d), 13, now=NOW)
+            self.assertEqual(apply.call_args.kwargs["precedent"], first)
+
+    def test_the_search_writes_no_file(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, self.ENV):
+            case = self.state(d, [(12, self.item("19:c2#m-12", self.OLD_TEXT), "approved", 2)])
+            before = snapshot(d)
+            self.assertEqual(len(memory.similar(d, case, 13, now=NOW)), 1)
+            self.assertEqual(snapshot(d), before)
+
+    def test_the_four_settings_are_off_by_default_and_listed_like_the_others(self):
+        self.assertEqual(config.SETTINGS["recall"], ("KIMERU_RECALL", "0"))
+        self.assertEqual(config.SETTINGS["recall_min"], ("KIMERU_RECALL_MIN", "0.25"))
+        self.assertEqual(config.SETTINGS["recall_max"], ("KIMERU_RECALL_MAX", "2"))
+        self.assertEqual(config.SETTINGS["recall_names"], ("KIMERU_RECALL_NAMES", "0"))
+        for key in ("recall", "recall_min", "recall_max", "recall_names"):
+            self.assertIn(key, config.LOGGABLE)
+            self.assertIn(key, config.SHARE_VALUES)
+
+
 if __name__ == "__main__":
     unittest.main()

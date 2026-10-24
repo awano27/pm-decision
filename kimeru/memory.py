@@ -18,7 +18,7 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import autorun, config, explain, fsutil
+from . import autorun, config, explain, fsutil, recall
 
 DAYS = 60                       # how far back a decision counts
 TAIL_BYTES = 8 * 1024 * 1024    # a log longer than this counts its last bytes only
@@ -27,6 +27,10 @@ PRECEDENT_MAX = 20              # the precedent on the arrow line, its brackets 
 HISTORY_MAX = 3                 # history lines in 詳細 N
 FINAL = ("OK", "NG")            # the decisions a precedent may name (a hold or a rewrite is only history)
 WRITER_TEXT_MAX = 200           # K02: the approved reply's text a precedent line may carry
+SIMILAR_LINE_MAX = 60           # K07: one 似た件 line
+SIMILAR_NAME_MAX = 40           # K07: the other person's shown name (recall_names=1)
+OTHER_PERSON = "（別の相手）"     # K07: what stands for the name with recall_names=0
+SIMILAR_HEAD = "似た件（この相手・チャットの件ではない。話題が近いだけ）:"   # K07: reads on its own under the writer's precedent heading
 WRITER_LINES = 2                # R36: the earlier decisions the writer's request gets (writer_precedent=1), at most this many lines
 
 
@@ -296,17 +300,23 @@ def writer_enabled():
     return config.value("writer_precedent") == "1"
 
 
-def writer_lines(out, rec, n=None, now=None):
+def writer_lines(out, rec, n=None, now=None, text=None, writer_name=None):
     """R36 (writer_precedent=1): the first WRITER_LINES lines of 「これまでの経緯」 for the writer's request, from the same lookup and in
     the same order as 詳細 N (history). `rec` is the case's record (event_kind, event_id, event); `n` is the item's own number, whose
     entries are left out. With writer_precedent_text=1 the lines carry the approved reply text (writer_lines_with_text), so the callers
-    need no switch of their own. [] when the setting is 0 (nothing is read) or there is no state folder. Read only."""
+    need no switch of their own. With recall=1 the 似た件 lines of other chats follow (similar_writer_lines; `text` is the whole
+    text of the event when the caller has it), and only for a `writer_name` of learn.STYLE_WRITERS: the writers SECURITY.md says
+    send the request out; m365, m365-auto and codex never get an item of another chat. [] when the setting is 0 (nothing is read) or there is no state folder. Read only."""
     if out is None or not writer_enabled():
         return []
     if writer_text_enabled():
-        return writer_lines_with_text(out, rec, n, now=now)
-    items = _items(out)
-    return history(index(out, items, now=now), rec, n)[:WRITER_LINES]
+        lines = writer_lines_with_text(out, rec, n, now=now)
+    else:
+        lines = history(index(out, _items(out), now=now), rec, n)[:WRITER_LINES]
+    from . import learn   # local: learn is loaded after this module
+    if writer_name not in learn.STYLE_WRITERS:
+        return lines
+    return lines + similar_writer_lines(out, rec, n, now=now, text=text)
 
 
 def writer_text_enabled():
@@ -349,6 +359,114 @@ def writer_lines_with_text(out, rec, n=None, now=None):
         text = _approved_reply(items, e["n"])
         if text:
             lines.append("　返信: " + _clip(text, WRITER_TEXT_MAX))
+    return lines
+
+
+def recall_enabled():
+    """recall=1 (K07): 詳細 N (with memory=1) and the writer's precedent (with writer_precedent=1) add the similar items of other chats."""
+    return config.value("recall") == "1"
+
+
+def _recall_min():
+    try:
+        v = float(config.value("recall_min"))
+    except ValueError:
+        v = float(config.SETTINGS["recall_min"][1])
+    return v if v == v and 0 <= v <= 1 else float(config.SETTINGS["recall_min"][1])
+
+
+def _recall_max():
+    n = config.int_value("recall_max")
+    return n if n >= 0 else int(config.SETTINGS["recall_max"][1])   # a negative number is not a count: the default
+
+
+def _recall_docs(items, loaded):
+    """The decided items as search documents [{"n", "at", "label", "rec", "keys", "body", "terms"}], built once per state of approvals.json
+    and the logs (the same objects _items and _logs hand out, so no file is read and nothing is written). A pending or held item is
+    not a document. The time is the PM's reply in approvals.log.jsonl, else the record's own."""
+    hit = _cache.get("recall")
+    if hit and hit[0][0] is items and hit[0][1] is loaded:
+        return hit[1]
+    replied = {}
+    for r in loaded["log"]:
+        t = _when(r.get("at"))
+        if t is not None and r.get("status") in ("approved", "rejected") and (str(r.get("id")) not in replied or t > replied[str(r.get("id"))]):
+            replied[str(r.get("id"))] = t
+    docs = []
+    for m, it in items.items():
+        if not isinstance(it, dict) or it.get("status") not in ("approved", "rejected") or autorun._key_is_sample(it.get("key")):
+            continue
+        rec = it.get("record") if isinstance(it.get("record"), dict) else {}
+        t = replied.get(str(m)) or _when(rec.get("at"))
+        if t is None:
+            continue
+        ev = rec.get("event") if isinstance(rec.get("event"), dict) else {}
+        body = " ".join(str(x) for x in (ev.get("text"), (rec.get("memo") or {}).get("summary") or rec.get("summary"),
+                                         _approved_reply(items, m)) if x)
+        docs.append({"n": str(m), "at": t, "label": autorun.REPLY_NAMES[it["status"]], "rec": rec,
+                     "keys": {key for _, key in keys_of(rec)}, "body": body, "terms": None})
+    _cache["recall"] = ((items, loaded), docs)
+    return docs
+
+
+def similar(out, rec, n=None, now=None, text=None):
+    """K07: [(doc, shown)] the decided items of other chats and persons whose words overlap the case's text, best first. The query is
+    `text` (the event's whole text), else the case's recorded text. A doc is left out when it shares a key with the case (the earlier
+    decisions already show it: keys_of), is the case itself, or is older than DAYS. At most recall_max, the Dice score at least
+    recall_min, a tie to the newer. `shown`: up to two terms they share. Reads the cached items and logs; writes nothing."""
+    if out is None:
+        return []
+    ev = rec.get("event") if isinstance(rec.get("event"), dict) else {}
+    query = recall.terms(text or (rec.get("material_event") or {}).get("text") or ev.get("text"))
+    limit = _recall_max()
+    if not query or limit <= 0:
+        return []
+    items, loaded = _items(out), _logs(out)
+    own = {key for _, key in keys_of(rec)}
+    since = _now(now) - timedelta(days=DAYS)
+    docs = []
+    for d in _recall_docs(items, loaded):
+        if d["at"] >= since and d["n"] != str(n) and not (d["keys"] & own):
+            if d["terms"] is None:   # only the items within DAYS are cut into terms
+                d["terms"] = recall.terms(d["body"])
+            docs.append((d["at"], d, d["terms"]))
+    return [(d, recall.shared(query, d["terms"])) for _, d in recall.rank(query, docs, _recall_min(), limit)]
+
+
+def _similar_line(doc, shown):
+    """「・10/3 #12 OK: 佐藤さん（似た点: QA環境, リリース）」: the other person's name is （別の相手） unless recall_names=1."""
+    rec = doc["rec"]
+    if config.value("recall_names") == "1":
+        author = (rec.get("event") or {}).get("author")
+        name = _clip(f"{author}さん" if author else _who(rec), SIMILAR_NAME_MAX)
+    else:
+        name = OTHER_PERSON
+    why = f"（似た点: {', '.join(shown)}）" if shown else ""
+    return _clip(f"・{_md(doc['at'])} #{doc['n']} {doc['label']}: {name}{why}", SIMILAR_LINE_MAX)
+
+
+def similar_lines(out, rec, n=None, now=None, text=None):
+    """The 似た件 lines of 詳細 N, at most recall_max. [] unless recall=1 (nothing is read)."""
+    if not recall_enabled():
+        return []
+    return [_similar_line(d, shown) for d, shown in similar(out, rec, n, now=now, text=text)]
+
+
+def similar_writer_lines(out, rec, n=None, now=None, text=None):
+    """The 似た件 lines the writer's precedent ends with (writer_lines adds them, so only with writer_precedent=1): a marker line, then
+    each item's line, followed by 「　返信: …」 with writer_precedent_text=1 when that item's reply was approved. [] unless recall=1."""
+    if out is None or not recall_enabled():
+        return []
+    found = similar(out, rec, n, now=now, text=text)
+    if not found:
+        return []
+    items = _items(out)
+    lines = [SIMILAR_HEAD]
+    for d, shown in found:
+        lines.append(_similar_line(d, shown))
+        reply = _approved_reply(items, d["n"]) if config.value("writer_precedent_text") == "1" else None
+        if reply:
+            lines.append("　返信: " + _clip(reply, WRITER_TEXT_MAX))
     return lines
 
 

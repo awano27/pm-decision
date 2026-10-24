@@ -413,7 +413,7 @@ def _draft(res, ev, meter, writer, out=None, now=None):
     # R36: the first draft of a case gets its earlier decisions (writer_precedent=1); nothing is read for an event with nothing to draft
     if out is not None and writer is not None and writer_mod.targets(res) and memory.writer_enabled():
         probe = {"event_kind": res.get("event_kind"), "event_id": res.get("event_id"), "event": _recorded_event(ev)}
-        precedent = memory.writer_lines(out, probe, now=now)
+        precedent = memory.writer_lines(out, probe, now=now, text=ev.get("text"), writer_name=getattr(writer, "NAME", ""))
     replies = None
     if out is not None and writer is not None and writer_mod.targets(res):   # K03: nothing is read without a writer or for an event with nothing to draft
         replies = writer_mod.self_replies(out, now, ev.get("thread"))

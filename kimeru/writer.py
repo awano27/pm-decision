@@ -1078,7 +1078,7 @@ def apply(res, event, writer, instruction=None, previous=None, precedent=None, h
     unv = {}
     if instruction is None:
         # R23: with redraft_prev=1, a text with a date or number the material lacks gets the same second call (see _polish)
-        if config.value("redraft_prev") == "1":
+        if config.value("redraft_prev") == "1" or config.value("ground_fallback") == "1":   # the fallback alone sends nothing more than the first call did
             for k, _ in todo:
                 text = d.get(k)
                 found = unverified(text, material) if isinstance(text, str) and text.strip() else []

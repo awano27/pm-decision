@@ -1095,6 +1095,51 @@ class TestRedraftPrev(unittest.TestCase):
             self.assertIn(PREV_TEXT, spy.prompts[-1])
 
 
+class TestGroundFallback(unittest.TestCase):
+    """K05: ground_fallback=1 turns on the second call and the template fallback for a draft with a fact the event lacks, without
+    redraft_prev's other half (the previous draft in a 修正 N request). With both at 0 nothing differs from before."""
+
+    def env(self, fallback, prev):
+        return mock.patch.dict(os.environ, {"KIMERU_GROUND_FALLBACK": fallback, "KIMERU_REDRAFT_PREV": prev})
+
+    def run_pair(self, fallback, prev, instruction=None, name=None):
+        spy = PromptSpy([{"a1": "10/5 までに対応します。"}, {"a1": "10/5 までに対応します。"}, {"a1": "10/5 までに対応します。"}])
+        if name:
+            spy.NAME = name
+        res = reply_res()
+        with self.env(fallback, prev):
+            writer.apply(res, REDRAFT_EVENT, spy, instruction, previous={"a1": PREV_TEXT} if instruction else None)
+        return spy, res["actions"][0]
+
+    def test_the_four_combinations(self):
+        for fallback, prev, calls, held in (("0", "0", 1, None), ("1", "0", 2, "fallback"), ("0", "1", 2, "fallback"), ("1", "1", 2, "fallback")):
+            spy, a = self.run_pair(fallback, prev)
+            self.assertEqual((len(spy.prompts), a.get("held_for")), (calls, held), (fallback, prev))
+
+    def test_the_fallback_alone_names_what_remained_and_sends_no_previous_draft(self):
+        spy, a = self.run_pair("1", "0")
+        self.assertEqual(a["text"], "受領しました。")
+        self.assertTrue(a["writer_warning"].startswith("書き直しても元のイベントに無い事実が残った"))
+        self.assertIn("10/5", a["writer_warning"])
+        self.assertIn("材料に無い日付・数値を使わずに", spy.prompts[1])
+        self.assertNotIn("前の下書き", spy.prompts[1])
+
+    def test_a_revision_with_an_instruction_is_not_asked_again_and_gets_no_previous_draft(self):
+        spy, a = self.run_pair("1", "0", instruction="もっと短く")
+        self.assertEqual(len(spy.prompts), 1)
+        self.assertNotIn(PREV_TEXT, spy.prompts[0])
+        self.assertEqual(a["unverified"], ["10/5"])
+
+    def test_the_paste_in_route_does_nothing(self):
+        spy, a = self.run_pair("1", "0", name="m365-auto")
+        self.assertEqual(len(spy.prompts), 1)
+        self.assertNotEqual(a.get("held_for"), "fallback")
+
+    def test_with_both_off_the_request_is_the_old_one(self):
+        spy, _ = self.run_pair("0", "0")
+        self.assertEqual(spy.prompts, [writer.SYSTEM + "\n\n" + writer._material(reply_res(), REDRAFT_EVENT)])
+
+
 class TestStyleBlock(unittest.TestCase):
     """R34 (learn=1): the wording the PM OK'd as a writing preference goes into the request only, before the output format, for the
     CLI writers that are listed (copilot, claude, grok, cmd) and for a reply only when the preference is scoped to replies. The check

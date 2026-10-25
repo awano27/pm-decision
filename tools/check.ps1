@@ -455,8 +455,13 @@ if ($uia -and ($selfOk -or $Auto) -and (Want 'T23')) {
 if ($uia -and $selfOk -and (Want 'T24')) {
   Say "T24 チャットを開いて全文を読む（開くと、そのチャットは既読になります）"
   $c = Self 'chats'
-  $pick = if ($c.ok) { @($c.chats | Where-Object { $_.kind -ne 'self' -and ([string]$_.preview).Trim().Length -ge 12 -and -not $_.unread } | Select-Object -First 1) } else { @() }
-  if (-not $pick.Count) { Rec 'T24' 'SKIP 既読で、プレビューが 12 字以上のチャットが一覧にありません（未読の印を変えないため、既読のものだけを使います）' }
+  $pick = @(if ($c.ok) { @($c.chats | Where-Object { $_.kind -ne 'self' -and ([string]$_.preview).Trim().Length -ge 12 -and -not $_.unread } | Select-Object -First 1) } else { @() })
+  if (-not $pick.Count) {
+    $nAll = if ($c.ok) { @($c.chats).Count } else { -1 }
+    $nRead = if ($c.ok) { @($c.chats | Where-Object { -not $_.unread }).Count } else { -1 }
+    $nLong = if ($c.ok) { @($c.chats | Where-Object { ([string]$_.preview).Trim().Length -ge 12 }).Count } else { -1 }
+    Rec 'T24' ("SKIP 既読で、プレビューが 12 字以上のチャットが一覧にありません（未読の印を変えないため、既読のものだけを使います）。一覧={0} 件（-1 は取得失敗）、既読={1} 件、12 字以上={2} 件" -f $nAll, $nRead, $nLong)
+  }
   elseif (-not (YesNo "   既読のチャット 1 件を開いて、直近のメッセージを読みます（読み取りだけ。終わったら元のチャットへ戻します）。よろしいですか")) { Rec 'T24' 'SKIP' }
   else {
     Write-Host "   6 秒間、マウス・キーボードに触らず、Teams も前面に出さないでください（本番の待ちは 30 秒。試験では 5 秒にします）"

@@ -7,8 +7,8 @@ import json
 import re
 import sys
 
-prompt = sys.stdin.read()
+prompt = sys.stdin.buffer.read().decode("utf-8", "replace")   # bytes: the console code page (cp1252 on CI) must not decide
 keys = re.findall(r"(?m)^- (a\d+):", prompt) or ["a1"]
 out = {k: "承知しました。内容を確認して、改めてご連絡します。" for k in keys}
 out["memo"] = {"summary": "確認の依頼", "missing": [], "options": [], "next": "内容を確認する"}
-print(json.dumps(out, ensure_ascii=False))
+sys.stdout.buffer.write((json.dumps(out, ensure_ascii=False) + "\n").encode("utf-8"))

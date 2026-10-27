@@ -709,6 +709,11 @@ def _main(argv=None):
         print("kimeru: コマンドがありません。初めてなら python -m kimeru try（設定なしで、架空の相談 1 件を最後まで見られます）。"
               "コマンドの一覧は python -m kimeru -h", file=sys.stderr)
         return 2
+    if _command_word(argv_list) is None and "--version" in argv_list:   # before any setting is read; no command is needed
+        from . import __version__, stats
+        commit = stats.build_id()   # the same functions `config show --share` uses for its first line
+        print(f"kimeru {__version__}" + ("" if commit == "unknown" else f" ({commit})"))
+        return 0
     if _command_word(argv_list) == "try":   # before any setting is read: the try run reads none of them (tryout.py)
         from . import tryout
         return tryout.main(argv_list)

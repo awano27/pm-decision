@@ -9,6 +9,7 @@
 ```bash
 python -m kimeru validate
 python -m kimeru dataset anonymize|mark-reviewed|split|check|status ...  # 匿名化候補の人による確認と、来歴を記録した評価データ（evaluation.md）
+python -m kimeru --version                         # `kimeru 1.3.0 (abc1234)` の 1 行を出して終わる（commit が分からない配布物では版だけ）。設定は読まない
 python -m kimeru try [--out <フォルダ>]              # 体験モード: 架空の相談 1 件を届く→整理→修正→承認→記録まで。設定・鍵を読まず、プロセスの起動と通信を止め、out/try にだけ書く
 python -m kimeru demo [--pace 1.5] [--fresh]       # 既定の出力先は out/demo。既存のファイルがあるフォルダでは止まる（--fresh で既知の記録だけ before-demo-<日時>/ へ移す）
 python -m kimeru run <payload.json>...

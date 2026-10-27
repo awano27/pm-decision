@@ -45,14 +45,36 @@ def dice(a, b):
     return 2 * len(set(a) & set(b)) / (len(a) + len(b))
 
 
+_HIRAGANA = re.compile(r"[ぁ-ゖ]")
+
+
+def _runs(grams):
+    """Shared 2-grams (as written, in the query's order) chained into the longer strings they overlap into: リリ, リー, ース -> リリース."""
+    runs = []
+    for g in grams:
+        if runs and runs[-1][-1] == g[0] and g not in runs[-1]:
+            runs[-1] += g[1:]
+        else:
+            runs.append(g)
+    return runs
+
+
+def _trim(run):
+    """A chained string without the hiragana at its ends: 環境が -> 環境, が止ま -> 止."""
+    return re.sub(r"^[ぁ-ゖ]+|[ぁ-ゖ]+$", "", run)
+
+
 def shared(query, doc, limit=2):
-    """The terms both share, as written in the query, whole words first and then 2-grams in the query's order; at most `limit`. A
-    2-gram inside a word already named is skipped."""
+    """What 似た点 shows: the terms both share, as written in the query, whole words first and then the shared 2-grams chained into
+    longer strings, the hiragana at their ends cut; at most `limit`. A string still with hiragana or shorter than 2 is left out (が止,
+    たい: grammar, not topic), and so is one inside a word
+    already named. Only the display: the score never depends on it."""
     common = [t for t in query if t in doc]
-    common.sort(key=lambda t: not t.startswith(WORD))   # stable: the query's order is kept inside each group
+    words = [query[t] for t in common if t.startswith(WORD)]
+    runs = [_trim(r) for r in _runs([query[t] for t in common if not t.startswith(WORD)])]
+    runs = [r for r in runs if len(r) >= 2 and not _HIRAGANA.search(r)]
     picked = []
-    for t in common:
-        shown = query[t]
+    for shown in words + runs:
         if any(shown.lower() in p.lower() for p in picked):
             continue
         picked.append(shown)

@@ -175,7 +175,7 @@ python eval/draft_quality.py --backend stub --writer cmd --fixtures fixtures_con
 python eval/revision_rate.py --out <状態フォルダ>     # PM の修正率を writer ごとに（件数と率だけ。本文・指示文は出さない）
 ```
 
-1 下書きごとの記録（`--out` の JSONL）は、`grounded_rate`（下書きの日付・数値・人名のうち材料にある割合。同じ語は 1 つと数え、語が 0 なら null）、`tokens_total`、`tokens_unverified`、`flags`、`thread_given` / `precedent_given` / `style_given` / `today_given`（依頼文にそのブロックがあったか）です。`fixtures_context.jsonl` の 5 件目以降は `precedent`（前例の行）と `expect_facts`（返信に出てよい事実）を持ち、`expect_facts` にない語は `invented_vs_expect` に入ります（材料との照合より厳しい正解）。`revision_rate.py` の分子は `approvals.log.jsonl` の `修正` の行（`autorun.REPLY_NAMES`）、分母は `approvals.json` の `drafted_by` 付きの件数です。
+1 下書きごとの記録（`--out` の JSONL）は、`grounded_rate`（下書きの日付・数値・人名のうち材料にある割合。同じ語は 1 つと数え、語が 0 なら null）、`tokens_total`、`tokens_unverified`、`flags`、`thread_given` / `precedent_given` / `style_given` / `today_given`（依頼文にそのブロックがあったか）です。`today_given` は、`--settings writer_context=1` のとき fixture の `context.today` を今日の日付として渡したかどうかです。`fixtures_context.jsonl` の 5 件目以降は `precedent`（前例の行）と `expect_facts`（返信に出てよい事実）を持ち、`expect_facts` にない語は `invented_vs_expect` に入ります（材料との照合より厳しい正解）。`revision_rate.py` の分子は `approvals.log.jsonl` の `修正` の行（`autorun.REPLY_NAMES`）、分母は `approvals.json` の `drafted_by` 付きの件数です。
 
 固定の台本 writer（`eval/scripted_writer.py`。依頼の中身を見ず、毎回同じ 1 文を返す）で回した結果です（2026-10-24、起点 f84bb0c、stub backend、`teams.chat` の 12 件のうち下書きが出た 11 件）。**これは依頼文の組み立ての確認で、文脈が文面を良くするかの結果ではありません。** 台本の文は日付・数値・人名を含まないので `grounded_rate` は出ず（-）、設定による差は `precedent_given` にだけ出ます。
 

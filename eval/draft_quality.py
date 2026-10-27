@@ -143,7 +143,7 @@ def run_group(a, label, pairs, be, graphs, pbs, picked):
             material = writer._material(res, ev)
             w, prompts = capturing(writer.get_writer(a.writer))
             t0 = time.time()
-            drafted = writer.apply(res, ev, w, precedent=x.get("precedent"))
+            drafted = writer.apply(res, ev, w, precedent=x.get("precedent"), today=ctx.get("today"))   # used only with writer_context=1
             secs.append(time.time() - t0)
             given = given_of(prompts[0] if prompts else "")
             if not prompts and not getattr(w, "PROMPT_ONLY", False):

@@ -52,9 +52,7 @@ def _date_issues(rows, key, now, include_missing=True):
     return invalid, future
 
 
-def _rule_only(rec):
-    path = rec.get("path") or []
-    return all("matched" in (s.get("answer") or {}) for s in path)
+from .counting import is_rule_only as _rule_only   # one definition for the demo, digest and report
 
 
 def _median(xs):

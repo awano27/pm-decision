@@ -111,7 +111,7 @@ python -m kimeru --backend stub --out out/demo demo --pace 0
 ```text
 === まとめ
     判断 9 件: 自動で決定 8 / 確信が低く安全側で決定 0 / 人の確認 1
-    うち規則（安全網）で即決定 3 件、モデルの判断 17 回・合計 0.0 秒
+    うち規則（安全網）で即決定 2 件、モデルの判断 17 回・合計 0.0 秒
     記録: out\demo\decisions.jsonl
     レポート: out\demo\report.html
 ```

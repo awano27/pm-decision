@@ -292,13 +292,9 @@ def run(scenario, graphs, backend, playbooks, process, out, pace=1.5, step=False
                 secs = "" if is_jev(backend) else f"、{be.seconds - t0:.1f} 秒"   # Jev's speed is not shown (TypeSafe's terms)
                 _w(f"    （モデルの判断 {be.calls - c0} 回{secs}）", pace / 3)
 
-    kinds = {nid: n["kind"] for lst in graphs.values() for g in lst for nid, n in g["nodes"].items()}
-    by_rule = lambda r: any(kinds.get(s["node"]) == "match" and s["edge"] == "yes" for s in r["path"])
-    low = lambda r: any(s["edge"] == "unsure" for s in r["path"]) and not by_rule(r)
-    auto = sum(1 for r in results if r["outcome"] == "decide" and not low(r))
-    safe = sum(1 for r in results if r["outcome"] == "decide" and low(r))
-    human = sum(1 for r in results if r["outcome"] == "advise")
-    rule = sum(1 for r in results if by_rule(r))
+    from .counting import tally
+    t = tally(results)
+    auto, safe, human, rule = t["auto"], t["safe"], t["human"], t["rule"]
     _w("")
     _wait()
     _w("=== まとめ")

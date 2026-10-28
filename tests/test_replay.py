@@ -171,3 +171,13 @@ class TestReplay(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPlanProbabilitiesFollowTheDueBar(unittest.TestCase):
+    def test_a_raised_due_bar_keeps_the_probabilities_the_planner_read(self):
+        from kimeru import graph
+        ans = {"due_a": {"score": 1.0, "confidence": 0.65, "probabilities": {"0": 0.3, "1": 0.65, "2": 0.05}}}
+        self.assertNotIn("probabilities", graph._plan_answers(ans, graph._plan_probs_bar({}, None))["due_a"])   # default bar 0.4
+        bar = graph._plan_probs_bar({"due_min_conf": 0.7}, None)
+        self.assertGreater(bar, 0.7)
+        self.assertEqual(graph._plan_answers(ans, bar)["due_a"]["probabilities"], {"0": 0.3, "1": 0.65, "2": 0.05})

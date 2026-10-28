@@ -643,7 +643,7 @@ def run(g, event, backend, state=None, playbooks=None, batch=None, split_asks=No
             trace.append({"node": nid, "answer": {"playbook": ans["playbook"].get("choice"),
                                                    "confidence": ans["playbook"].get("confidence"),
                                                    "steps": [s["id"] for s in (plan or {}).get("steps", [])],
-                                                   "answers": _plan_answers(ans)},
+                                                   "answers": _plan_answers(ans, _plan_probs_bar(n, backend))},
                           "edge": edge})
             nid = n["routes"][edge]
             continue
@@ -720,10 +720,21 @@ def reachable_judges(nodes, start, event):
     return [k for k, v in nodes.items() if k in seen and v["kind"] == "judge"]
 
 
-PLAN_PROBS_BELOW = 0.6   # above the planner's own bar for a due date (due_min_conf 0.4), so a stricter setting still replays
+PLAN_PROBS_BELOW = 0.6   # above the planner's own bar for a due date (due_min_conf 0.4) in the default settings
 
 
-def _plan_answers(ans):
+def _plan_probs_bar(node, backend):
+    """Keep the probabilities of every plan answer under PLAN_PROBS_BELOW, or under the due-date bar this run used when a
+    setting or calibrate raised it above that, so `kimeru replay` on unchanged graphs chooses the same due date."""
+    from .profiles import conf
+    try:
+        bar = conf(node, "due_min_conf", 0.4, getattr(backend, "profile", None))
+    except Exception:
+        return PLAN_PROBS_BELOW
+    return max(PLAN_PROBS_BELOW, bar + 1e-9)
+
+
+def _plan_answers(ans, bar=PLAN_PROBS_BELOW):
     """need_* / due_* / first from the plan's second call, kept as numbers and option ids (no text), with the
     `probabilities` of an answer the judge was not sure of (confidence under PLAN_PROBS_BELOW): `kimeru replay` needs them to choose a due date the way the planner did."""
     keep = ("noul", "score", "choice", "confidence")
@@ -734,7 +745,7 @@ def _plan_answers(ans):
         row = {f: v[f] for f in keep if f in v}
         probs = v.get("probabilities")
         probs = {str(i): p for i, p in probs.items() if isinstance(p, (int, float))} if isinstance(probs, dict) else {}
-        if probs and v.get("confidence", 1) < PLAN_PROBS_BELOW:   # the planner reads them only for a due date it is unsure of
+        if probs and v.get("confidence", 1) < bar:   # the planner reads them only for a due date it is unsure of
             row["probabilities"] = probs
         out[k] = row
     return out

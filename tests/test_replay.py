@@ -44,11 +44,11 @@ class TestReplay(Base):
         code, text = self.run_cli()
         self.assertEqual(code, 0)
         self.assertIn("最終行動が変わった件: 0 件", text)
-        self.assertIn("記録なし（playbook）", text)   # a plan keeps only some of its answers: that case stops, the other one is replayed
-        self.assertIn("再生した事例: 1 / 2 件", text)
+        self.assertNotIn("記録なし（", text)   # the plan's own answers are kept, so the case that goes through the plan replays too
+        self.assertIn("再生した事例: 2 / 2 件", text)
         data = json.loads((self.state / "replay" / "replay.json").read_text(encoding="utf-8"))
         self.assertEqual(data["summary"]["cases"], 2)
-        self.assertEqual(data["summary"]["no_record"], 1)
+        self.assertEqual(data["summary"]["no_record"], 0)
         self.assertEqual(data["summary"]["changed"], 0)
 
     def test_a_changed_action_is_listed_by_id_and_node_and_counted_by_verdict(self):
@@ -60,7 +60,7 @@ class TestReplay(Base):
         self.assertEqual(code, 0)
         self.assertIn("最終行動が変わった件: 1 件", text)
         self.assertIn("an_old_outcome", text)
-        self.assertIn("正しいと付いた件のうち変わった: 1 / 1 件", text)
+        self.assertIn("正しいと付いた件のうち変わった: 1 / 2 件", text)
         self.assertIn(review.fixture_row(rows[1], {})["id"], text)
 
     def test_a_question_without_a_record_says_so_and_only_that_case_stops(self):
@@ -70,8 +70,54 @@ class TestReplay(Base):
         (self.out / "decisions.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
         _, text = self.run_cli()
         self.assertIn("記録なし", text)
-        self.assertIn("再生した事例: 0 / 2 件", text)
+        self.assertIn("再生した事例: 1 / 2 件", text)
         self.assertIn("記録なし（intent）", text)
+
+    def plan_row(self, rows):
+        return next(r for r in rows if any(s.get("node", "").startswith("plan_") and s["answer"].get("playbook") for s in r["path"]))
+
+    def write_rows(self, rows):
+        (self.out / "decisions.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + chr(10) for r in rows), encoding="utf-8")
+
+    def test_a_case_through_a_plan_keeps_numbers_and_ids_only_and_replays(self):
+        self.seed()
+        row = self.plan_row(review.read_jsonl(self.out / "decisions.jsonl"))
+        step = next(s for s in row["path"] if s["node"].startswith("plan_"))
+        self.assertEqual(step["answer"]["playbook"], "schedule_change")
+        answers = step["answer"]["answers"]
+        self.assertIn("first", answers)
+        self.assertTrue(any(k.startswith("due_") and "score" in v for k, v in answers.items()))
+        self.assertNotIn("ZZREPLAYTEXT", json.dumps(step, ensure_ascii=False))
+        _, text = self.run_cli()
+        self.assertNotIn("記録なし（", text)
+
+    def test_changing_the_plan_changes_the_case(self):
+        import copy
+        self.seed()
+        graphs = copy.deepcopy(GRAPHS)
+        for lst in graphs.values():
+            for g in lst:
+                for n in g["nodes"].values():
+                    if n["kind"] == "plan":
+                        n["routes"]["ok"] = "ask_pm"   # a plan that now ends in a plain question to the PM
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            s = replay.run(self.out, graphs, PBS)
+        self.assertEqual(s["replayed"], 2)
+        self.assertEqual(s["changed"], 1)
+
+    def test_a_record_from_before_the_plan_answers_were_kept_says_no_record_and_does_not_fail(self):
+        self.seed()
+        rows = review.read_jsonl(self.out / "decisions.jsonl")
+        for r in rows:
+            for s in r["path"]:
+                if "steps" in (s.get("answer") or {}):
+                    s["answer"].pop("answers", None)
+        self.write_rows(rows)
+        _, text = self.run_cli()
+        self.assertIn("記録なし", text)
+        self.assertIn("再生した事例: 1 / 2 件", text)
+        self.assertNotIn("失敗（", text)
 
     def test_the_model_is_not_called_and_the_records_are_byte_for_byte_unchanged(self):
         self.seed()

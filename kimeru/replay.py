@@ -3,8 +3,8 @@
 The cases are the ones `kimeru review` / `違う N` collected: reviews.jsonl names the decision, decisions.jsonl holds the event and
 the answers the judge gave, fixtures_user.jsonl holds the label of a question marked wrong (the same files `kimeru calibrate`
 reads, through the same functions in review.py). Each case is walked through the graph as it is now; the recorded answer is
-served for every question. A question with no recorded answer (a plan question keeps only some of its answers) prints 記録なし and
-stops that case; the other cases go on.
+served for every question, the questions of a plan node (the playbook and its steps) included. A question with no recorded answer
+(a record from before the plan answers were kept) prints 記録なし and stops that case; the other cases go on.
 
 It compares the final action then and now and counts: cases marked right whose action changed, cases marked wrong whose action
 changed, and cases whose wrong question now matches its label. What is printed and saved are numbers, case ids ("user-...") and
@@ -36,6 +36,11 @@ class RecordedBackend:
     def __init__(self, rec, profile):
         self.profile = profile
         self.answers = {s.get("node"): s.get("answer") or {} for s in rec.get("path", [])}
+        for s in rec.get("path", []):   # a plan step holds the playbook answer and the answers of its steps (see graph._plan_answers)
+            a = s.get("answer") or {}
+            if "playbook" in a and "steps" in a:
+                self.answers.pop(s.get("node"), None)
+                self.answers.update(_plan_records(a))
 
     def ask(self, state, questions):
         out = {}
@@ -47,6 +52,18 @@ class RecordedBackend:
                 raise BackendAnswerError(ans["invalid"])
             out[qid] = {"type": q["type"], **{k: v for k, v in ans.items() if k != "guard"}}
         return out
+
+
+def _plan_records(a):
+    """{question id: answer} a recorded plan step stands for. The playbook question is always there; the questions of the steps
+    only when the record has them (an old record has no `answers`: those stay missing, so the case prints 記録なし)."""
+    out = {"playbook": {"choice": a["playbook"], "confidence": a.get("confidence")}}
+    if "answers" not in a:
+        return out
+    for qid, row in (a["answers"] or {}).items():
+        if isinstance(row, dict):
+            out[qid] = row
+    return out
 
 
 def result_dir():

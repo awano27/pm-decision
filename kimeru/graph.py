@@ -720,10 +720,24 @@ def reachable_judges(nodes, start, event):
     return [k for k, v in nodes.items() if k in seen and v["kind"] == "judge"]
 
 
+PLAN_PROBS_BELOW = 0.6   # above the planner's own bar for a due date (due_min_conf 0.4), so a stricter setting still replays
+
+
 def _plan_answers(ans):
-    """need_* / due_* / first from the plan's second call, kept as small numbers (no text)."""
+    """need_* / due_* / first from the plan's second call, kept as numbers and option ids (no text), with the
+    `probabilities` of an answer the judge was not sure of (confidence under PLAN_PROBS_BELOW): `kimeru replay` needs them to choose a due date the way the planner did."""
     keep = ("noul", "score", "choice", "confidence")
-    return {k: {f: v[f] for f in keep if f in v} for k, v in ans.items() if k != "playbook" and isinstance(v, dict)}
+    out = {}
+    for k, v in ans.items():
+        if k == "playbook" or not isinstance(v, dict):
+            continue
+        row = {f: v[f] for f in keep if f in v}
+        probs = v.get("probabilities")
+        probs = {str(i): p for i, p in probs.items() if isinstance(p, (int, float))} if isinstance(probs, dict) else {}
+        if probs and v.get("confidence", 1) < PLAN_PROBS_BELOW:   # the planner reads them only for a due date it is unsure of
+            row["probabilities"] = probs
+        out[k] = row
+    return out
 
 
 def load_dir(d, playbooks=None):

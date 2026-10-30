@@ -24,6 +24,7 @@ $ErrorActionPreference = 'Continue'
 $env:PYTHONIOENCODING = 'utf-8'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
+. (Join-Path $PSScriptRoot 'kev-key.ps1')   # Test-KevUp / Get-KevHeaders: Kev asks for the key start-kev.cmd made
 $Results = [ordered]@{}   # not $R: PowerShell names are case-insensitive ($r is used below)
 $tmp = Join-Path $env:TEMP ("kimeru-check-" + (Get-Random -Minimum 10000 -Maximum 99999))
 New-Item -ItemType Directory -Force $tmp | Out-Null
@@ -362,7 +363,7 @@ function Py([string[]]$a) {
   # m365-auto, ...) would otherwise be sent the sample texts, and a phone route or execution would be reached
   $saved = @{}
   if ($Auto -or $script:IsolatePy) {
-    foreach ($n in @(Get-ChildItem env: | Where-Object { $_.Name -like 'KIMERU_*' -and $_.Name -notin @('KIMERU_TEST_MARK', 'KIMERU_KEV_URL', 'KIMERU_KEV_URL_REMOTE_OK') } | ForEach-Object Name)) {
+    foreach ($n in @(Get-ChildItem env: | Where-Object { $_.Name -like 'KIMERU_*' -and $_.Name -notin @('KIMERU_TEST_MARK', 'KIMERU_KEV_URL', 'KIMERU_KEV_URL_REMOTE_OK', 'KIMERU_KEV_KEY_FILE') } | ForEach-Object Name)) {
       $saved[$n] = (Get-Item "env:$n").Value; Remove-Item "env:$n"
     }
     $saved['KIMERU_STATE_DIR'] = $env:KIMERU_STATE_DIR
@@ -821,7 +822,7 @@ if (Want 'T13') {
 if ($py -and (Want 'T14')) {
   Say "T14 ローカル判断モデル（kev）で判断"
   $up = $false
-  try { $null = Invoke-WebRequest 'http://127.0.0.1:8009/v1/models' -UseBasicParsing -TimeoutSec 5; $up = $true } catch {}
+  $up = Test-KevUp 5
   if (-not $up) { Rec 'T14' 'SKIP（kev 未起動: START.cmd か kev\start-kev.cmd を先に実行）' }
   else {
     $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -829,7 +830,7 @@ if ($py -and (Want 'T14')) {
     $k = Py @('-m', 'kimeru', '--backend', 'kev', '--out', (Join-Path $tmp 'kev'), 'run', 'examples\teams_chat.json')
     $script:IsolatePy = $false
     $sw.Stop()
-    $dtype = try { ((Invoke-WebRequest 'http://127.0.0.1:8009/v1/models' -UseBasicParsing -TimeoutSec 5).Content | ConvertFrom-Json).models[0].dtype } catch { '?' }
+    $dtype = try { ((Invoke-WebRequest 'http://127.0.0.1:8009/v1/models' -Headers (Get-KevHeaders) -UseBasicParsing -TimeoutSec 5).Content | ConvertFrom-Json).models[0].dtype } catch { '?' }
     $cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name -replace '\s+', ' '
     Rec 'T14' $(if ($k -match 'plan:|path:') { ("OK {0}s dtype={1} CPU={2} " -f [math]::Round($sw.Elapsed.TotalSeconds), $dtype, $cpu) + (Short (($k -split "`n") | Where-Object { $_ -match 'path:' } | Select-Object -First 1)) } else { 'NG ' + (Fails $k) })
   }

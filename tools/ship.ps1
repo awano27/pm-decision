@@ -57,10 +57,20 @@ try {
     Write-Host "dry run: would tag $tag at $head, push it (release.yml publishes 'kimeru $tag'), build the update zip$(if ($CopyTo) { " and copy it to $CopyTo" })"
     return
   }
-  Run "tag $tag" { git tag -a $tag -m "kimeru $Version" }
+  # the update zip first: its SHA-256 goes into the tag, and release.yml copies it into the Release notes, so the PC that
+  # receives the zip can check it against a second channel (tools\sha256sums.ps1 -Zip <zip> -Sha256 <hash>)
+  $zip = Join-Path $env:TEMP 'kimeru-update.zip'
+  & (Join-Path $PSScriptRoot 'release.ps1') -Zip $zip
+  $sha = ((Get-Content -LiteralPath "$zip.sha256" -TotalCount 1) -split '\s+')[0]
+  if ($sha -notmatch '^[0-9a-f]{64}$') { throw "no SHA-256 for $zip" }
+  Run "tag $tag" { git tag -a $tag -m "kimeru $Version" -m "kimeru-update.zip SHA-256: $sha" }
   Run "push $tag" { git push origin $tag }
   Write-Host "release.yml now publishes 'kimeru $tag': gh run list --workflow release.yml -L 1"
-  if ($CopyTo) { & (Join-Path $PSScriptRoot 'release.ps1') -CopyTo $CopyTo } else { & (Join-Path $PSScriptRoot 'release.ps1') }
+  if ($CopyTo) {
+    if (-not (Test-Path $CopyTo)) { throw "copy target not found: $CopyTo" }
+    Copy-Item -Force $zip, "$zip.sha256" $CopyTo
+    Write-Host "copied to $CopyTo"
+  }
 }
 finally {
   Pop-Location

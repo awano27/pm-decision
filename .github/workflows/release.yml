@@ -31,4 +31,8 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           python tools/ship.py notes $env:TAG --out notes.md
+          # the tag (tools/ship.ps1) names the SHA-256 of the update zip built from it: the Release repeats it
+          git fetch --depth=1 --force origin "+refs/tags/${env:TAG}:refs/tags/${env:TAG}"
+          $sha = git tag -l --format='%(contents:body)' $env:TAG | Select-String -Pattern 'SHA-256: ([0-9a-f]{64})' | ForEach-Object { $_.Matches[0].Groups[1].Value } | Select-Object -First 1
+          if ($sha) { Add-Content -Path notes.md -Encoding utf8 -Value "`n更新 zip（kimeru-update.zip）の SHA-256: ``$sha``" }
           gh release create $env:TAG --verify-tag --latest --title "kimeru $env:TAG" --notes-file notes.md

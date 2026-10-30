@@ -52,9 +52,8 @@ function Find-Python {
   $null
 }
 
-function Kev-Up {
-  try { $null = Invoke-WebRequest 'http://127.0.0.1:8009/v1/models' -UseBasicParsing -TimeoutSec 5; $true } catch { $false }
-}
+. (Join-Path $PSScriptRoot 'kev-key.ps1')
+function Kev-Up { Test-KevUp 5 }
 
 function Read-Trial {
   # the trial window recorded by `trial` (a missing or unreadable file gives $null)

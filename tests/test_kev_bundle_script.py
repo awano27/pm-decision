@@ -111,12 +111,12 @@ class TestTheScriptText(unittest.TestCase):
 
     def test_the_dry_run_exit_comes_before_any_download_or_tool_call(self):
         dry = self.src.index("if ($DryRun)")
-        for call in ("Invoke-WebRequest", "git clone", "uv python", "pip install", "snapshot_download", "Copy-Item"):
+        for call in ("Invoke-WebRequest", "git clone", "uv python", "pip install", "kev-models.py') fetch", "Copy-Item"):
             self.assertLess(dry, self.src.index(call), call)
 
     def test_the_big_download_is_asked_for_before_anything_is_fetched(self):
         ask = self.src.index("約 10GB を取得して")
-        for step in ("uv python install", "pip install", "snapshot_download", "git clone"):
+        for step in ("uv python install", "pip install", "kev-models.py') fetch", "git clone"):
             self.assertGreater(self.src.index(step), ask, step)
 
     def test_the_script_takes_the_pip_marker_off_the_copy_before_the_first_pip_install(self):

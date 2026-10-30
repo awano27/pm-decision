@@ -167,6 +167,7 @@ python -m kimeru config path
 - 選べる値が決まっている項目（`backend`・`writer`・`toast`、0/1 の項目、`brief_hour`）は、`config set` のときと、読むときに検査します。読むときは、まず書き方の違いを直します（大文字・小文字、前後の空白、`on` / `off`、`true` / `false`、`yes` / `no`。`Copilot` は `copilot`、`on` は `1`）。それでも知らない値のとき、**`backend` だけ**は、送り先が変わるので、何が違うかを示して終了コード 2 で止まります（直すための `config` コマンドは動きます）。それ以外の項目は、既定値で続け、理由を `config` の警告（標準エラー）と `daily.log.jsonl`（`warnings`）に残します。自動運転は止まりません
 - 引数は、省略形（`--back`）を受け付けません（設定に届かないため）。正式な名前で書きます
 - Kev と CLM の接続先（`kev_url`・`clm_url`）は、この PC（`127.0.0.1`、`localhost`、`::1`）だけです。ほかのアドレスは、判断の本文が PC の外へ出るので、`kev_url_remote_ok=1`（CLM は `clm_url_remote_ok=1`）を明示しない限り、理由を示して止まります
+- Kev の鍵: `KEV_API_KEY` が無いとき、この PC の Kev には、`start-kev.cmd` が作った鍵のファイル（既定 `%LOCALAPPDATA%\kev\api-key`。設定 `kev_key_file` / 環境変数 `KIMERU_KEV_KEY_FILE` で変更）を読んで送ります。この PC 以外の Kev には送りません
 - `config set push_webhook_body @ファイル名` は、ファイルの中身（JSON）を本文の形として書きます。JSON として正しくないと、書きません。設定ファイルを手で編集して、`{...}` を足さないでください（JSON が 2 つになって、すべてのコマンドが止まります）
 - `config set` / `unset` は、ファイルにある、この版が知らない項目を残します。秘密のような名前の項目は、`set` はできませんが、`unset` で消せます
 - `daily.log.jsonl` は 256KB を超えると、新しい半分だけに切り詰めます。`schedule status` は末尾だけを読みます

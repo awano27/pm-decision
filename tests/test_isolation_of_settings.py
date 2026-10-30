@@ -24,7 +24,8 @@ class TestTheTestsDropTheMachineSettings(unittest.TestCase):
         r = subprocess.run([sys.executable, "-c", prog], cwd=ROOT, env=env, capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stderr)
         left = eval(r.stdout.strip())
-        self.assertEqual(set(left), {"KIMERU_STATE_DIR", "KIMERU_TEST_STATE_PID", "KIMERU_TEST_MARK"})
+        # KIMERU_KEV_KEY_FILE: a path in the throw-away folder, so no test reads the key start-kev.cmd made on this PC
+        self.assertEqual(set(left), {"KIMERU_STATE_DIR", "KIMERU_KEV_KEY_FILE", "KIMERU_TEST_STATE_PID", "KIMERU_TEST_MARK"})
 
     def test_a_child_of_a_test_keeps_what_the_test_gave_it(self):
         env = {**os.environ, "KIMERU_ADO_ORG": "fake-org"}   # this process already ran isolate: a child keeps the test's choice

@@ -22,7 +22,8 @@ function Line($ok, $what, $detail) {
   Write-Host ("  {0} {1,-22} {2}" -f $mark, $what, $detail) -ForegroundColor $(if ($ok) { 'Green' } else { 'Yellow' })
   if (-not $ok) { $missing.Add("${what}: $detail") }
 }
-function KevUp { try { $null = Invoke-WebRequest 'http://127.0.0.1:8009/v1/models' -UseBasicParsing -TimeoutSec 3; $true } catch { $false } }
+. (Join-Path $PSScriptRoot 'kev-key.ps1')
+function KevUp { Test-KevUp 3 }
 
 Write-Host "kimeru 持ち込み前の準備チェック" -ForegroundColor Cyan
 

@@ -102,6 +102,11 @@ kimeru は PM の Teams・ADO のメッセージを読み、判断の下書き�
   確認が 1 つでも崩れたら、何も貼らず、送らずに止まります。
 - 診断ファイル（`copilot-diag.txt`）とエラーメッセージには、チャットの本文を含めません（文字数・種類・位置だけ）。
 - 認証情報（`.env`、API キー、トークン）はリポジトリに入れません。Azure のサブスクリプション名・ID・テナント ID も同様です。
+- **この PC の Kev**（詳しくは [docs/kev-bundle.md](docs/kev-bundle.md#安全のための固定と照合)）:
+  - **呼べるのは鍵を持つものだけ**: `start-kev.cmd` が Windows のユーザーごとに鍵（`%LOCALAPPDATA%\kev\api-key`）を 1 回作り、Kev は鍵の無い要求を 401 で断ります。kimeru は `KEV_API_KEY` が無いとき、このファイルの鍵を、この PC の Kev（ループバックのアドレス）にだけ送ります。Kev は 127.0.0.1 だけで待ち受けます。
+  - **起動の前の照合**: torch は `head.pt` を unpickler で読むので、`start-kev.cmd` は起動のたびに `head.pt` の SHA-256 を `pins.json` と照合し、モデルのフォルダに一覧に無い pickle やコードのファイルがあれば起動しません。モデル 2 つは版（コミット）を固定して取得し、全ファイルを照合します。torch は、`weights_only=True` の脆弱性（CVE-2026-24747）を直した版（`pins.json` の `torch`）を入れます。
+  - **限界**: 鍵は Kev を呼ぶ側を確かめるもので、Kev の側を確かめるものではありません。Kev より先にポート 8009 を取った別のプロセスには、kimeru は判断の本文と鍵を送ってしまいます。そのプロセスを動かせる利用者は、この PC の同じ Windows アカウントのファイルを読めるのが普通なので、1 人で使う PC では新しい弱点にはなりません。複数の人が同じ PC にサインインする構成では、Kev を使わないでください。
+- **持ち込むファイルの照合**: `tools\make-bundle.ps1` は kimeru・kimeru\.python・kev・az に、`tools\release.ps1` は更新 zip の kimeru に、全ファイルの SHA-256 の一覧（`SHA256SUMS`）を入れます。管理された PC で `tools\sha256sums.ps1 -Check <フォルダ>` を実行すると、違うファイル・無いファイルと、一覧に無いコードのファイル（`.py`・`.dll`・`.ps1` など）を示します。一覧は配布物と一緒に運ぶので、一覧ごと差し替えられると気づけません。そのため、表示される一覧の指紋を開発 PC の表示と比べてください。更新 zip そのものの SHA-256 は GitHub Release の本文にも載せるので、`tools\sha256sums.ps1 -Zip <zip> -Sha256 <Release の値>` で、Google Drive とは別の経路の値と照合できます（PC に入っている版のスクリプトで実行します）。
 
 ## 使う前に
 

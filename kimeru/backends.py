@@ -222,6 +222,35 @@ class KevBackend(JevBackend):
     def __init__(self, model="kev", retries=2):
         super().__init__(model=model, key_env="KEV_API_KEY", retries=retries,
                          api=_local_url("kev_url", "kev_url_remote_ok"), key_required=False)
+        if not self._key and urllib.parse.urlparse(self.api).hostname in LOOPBACK:
+            self._key = kev_key_from_file()   # the key start-kev.cmd made; never sent to a Kev that is not on this PC
+
+
+def kev_key_file():
+    """Where start-kev.cmd keeps the key of the Kev on this PC: the setting kev_key_file, else LOCALAPPDATA/kev/api-key."""
+    path = config.value("kev_key_file")
+    if path:
+        return path
+    base = os.environ.get("LOCALAPPDATA")
+    return os.path.join(base, "kev", "api-key") if base else ""
+
+
+def kev_key_from_file():
+    """The key in kev_key_file(), or "" when there is none (a Kev started without start-kev.cmd needs no key)."""
+    path = kev_key_file()
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            return f.read().strip()
+    except (OSError, ValueError):
+        return ""
+
+
+def kev_headers(url):
+    """The Authorization header for a request to the Kev at url: KEV_API_KEY, else the key file for a Kev on this PC."""
+    key = os.environ.get("KEV_API_KEY") or ""
+    if not key and (urllib.parse.urlparse(url).hostname or "") in LOOPBACK:
+        key = kev_key_from_file()
+    return {"Authorization": "Bearer " + key} if key else {}
 
 
 class ClmBackend(JevBackend):

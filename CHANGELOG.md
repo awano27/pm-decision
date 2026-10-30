@@ -1,5 +1,11 @@
 # 変更履歴
 
+## 未リリース
+
+- **この PC の Kev を、鍵を持つものだけが呼べるようにした。既定の動きが変わる。**何が起きていたか: Kev（`kev.serve`）は既定で鍵が無く、CORS ですべてのサイトを許すので、この PC のほかのプロセスや Web ページから呼べた（1 件で CPU を最大 300 秒使い、判断を詰まらせられた）。直したこと: `start-kev.cmd` が Windows のユーザーごとに鍵（`%LOCALAPPDATA%\kev\api-key`）を 1 回作って Kev に渡し、Kev は鍵の無い要求を 401 で断る。kimeru は `KEV_API_KEY` が無いとき、このファイルの鍵を、この PC の Kev にだけ送る（設定 `kev_key_file` で場所を変えられる。この PC 以外の Kev には送らない）。`diagnose` と `tools\` の Kev の確認（`check.ps1` の T14、`check-update.ps1` の U7、`setup-managed.ps1`、`prepare-bundle.ps1`、`build-kev-bundle.ps1`）も鍵を送る。変わること: 新しい `start-kev.cmd` で起動した Kev は、古い kimeru からは呼べない（kimeru も同じ版にする）。テスト: `tests/test_kev_hardening.py`。
+- **Kev の持ち込み用フォルダの中身を固定し、起動のたびに `head.pt` を照合するようにした。**何が起きていたか: torch 2.8 の `torch.load(weights_only=True)` には、細工したファイルで任意のコードを実行できる脆弱性（CVE-2026-24747、2.10.0 で修正）があり、Kev は起動のたびに `head.pt` をこの方法で読む。`head.pt` は Hugging Face の個人のリポジトリから、版もハッシュも固定せずに取得していた。直したこと: `tools\kev-bundle\pins.json` に、上流の Kev のコミット、torch の版（2.13.0）、モデル 2 つの版と全ファイルの SHA-256 を固定した（値は Hugging Face の記録と照合済み）。`kev-models.py` が固定した版で取得して照合し、`start-kev.cmd` は起動の前に `head.pt` を照合する（違うか、一覧に無い pickle・コードのファイルがあれば起動しない）。土台のモデルは Hugging Face の置き場の形（`hf\`）で `head.pt` が指す版に置くので、`head.pt` を書き換える `localize.py` は無くした。aiohttp・filelock・certifi・setuptools も既知の脆弱性を直した版以上にした。torch 2.13 は、評価用の 20 件（38 問）で torch 2.8 と同じ答えを返した（数値の差は最大 0.0066）。以前の形のフォルダは、`build-kev-bundle.cmd` の再実行で新しい形に移る（土台のモデルは取得し直さない）。`make-bundle.ps1` は、照合の通らない Kev のフォルダを持ち込みに入れない。
+- **持ち込むファイルに SHA-256 の一覧を付け、管理された PC で照合できるようにした。**`tools\make-bundle.ps1` は kimeru・kimeru\.python・kev・az に、`tools\release.ps1` は更新 zip に `SHA256SUMS` を入れる。`tools\sha256sums.ps1 -Check <フォルダ>` が、違うファイル・無いファイル・一覧に無いコードのファイルを示し、一覧の指紋を表示する。更新 zip の SHA-256 は `tools\ship.ps1` がタグに書き、`release.yml` が GitHub Release の本文に載せる（`tools\sha256sums.ps1 -Zip <zip> -Sha256 <値>` で照合）。
+
 ## 1.4.0（2026-10-29）
 
 v1.3.0 のあとの追加と修正をまとめた版です。主な追加は、writer の下書きの文脈と接地を強める opt-in 設定（`writer_context`・`writer_precedent_text`・`recall`・`ground_fallback`、すべて既定で無効）と、その効果と事実照合率を測る評価です。

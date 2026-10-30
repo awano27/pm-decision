@@ -26,13 +26,13 @@ $KevRepo = [IO.Path]::GetFullPath($KevRepo)
 
 # the eight steps: number, what it does, where it fetches from, size (estimates)
 $steps = @(
-  @(1, '上流の Kev を取得する（既にあれば git pull）', 'github.com', '数 MB'),
+  @(1, '上流の Kev を取得し、pins.json で固定したコミットにする', 'github.com', '数 MB'),
   @(2, 'Python 3.13 を uv で入れ、その単体版を python\ へコピーする', 'github.com（uv が取得する Python）', '約 0.05GB（取得）。展開後の python 全体で約 1.9GB'),
-  @(3, 'Python の pip の印を外して、torch（CPU 版）を入れる', 'download.pytorch.org', '約 0.2GB'),
-  @(4, 'kev（<KevRepo>[serve]）を入れる', 'pypi.org（依存パッケージ）', '数百 MB'),
-  @(5, 'モデル 2 つを取得する（再実行は再開）', 'huggingface.co', '約 9.5GB（kev-4b 約 0.2GB・土台のモデル約 9.3GB）'),
-  @(6, '起動用のファイル（tools\kev-bundle\*）をコピーする', 'この PC の中', '数十 KB'),
-  @(7, '完成の検査と、精度・参照先の設定（pick-dtype.py・localize.py）', 'この PC の中', 'なし'),
+  @(3, 'Python の pip の印を外して、torch（CPU 版。pins.json の版）を入れる', 'download.pytorch.org', '約 0.2GB'),
+  @(4, 'kev（<KevRepo>[serve]）を入れ、torch の版と脆弱性の直った版の下限をそろえる', 'pypi.org（依存パッケージ）', '数百 MB'),
+  @(5, '起動用のファイル（tools\kev-bundle\*）をコピーする', 'この PC の中', '数十 KB'),
+  @(6, 'モデル 2 つを、固定した版で取得する（再実行は再開）', 'huggingface.co', '約 9.5GB（kev-4b 約 0.2GB・土台のモデル約 9.3GB）'),
+  @(7, '完成の検査（全ファイルの SHA-256 を pins.json と照合）と、精度の判定', 'この PC の中', 'なし'),
   @(8, '起動の確認（任意。-NoStartCheck で省略）', '127.0.0.1 だけ（この PC の中）', 'なし')
 )
 $targets = @(
@@ -67,7 +67,9 @@ function Ask($question) {
   if ($Yes) { Write-Host "$question [y/N] -> -Yes: はい"; return $true }
   return [bool]((Read-Host "$question [y/N]") -match '^\s*[yY]')
 }
-function KevUp { try { $null = Invoke-WebRequest 'http://127.0.0.1:8009/v1/models' -UseBasicParsing -TimeoutSec 3; $true } catch { $false } }
+. (Join-Path $PSScriptRoot 'kev-key.ps1')
+function KevUp { Test-KevUp 3 }
+$pins = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'kev-bundle\pins.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 
 # 0) the prerequisites and the disk, checked on this PC before anything is sent
 $missing = @()
@@ -98,7 +100,8 @@ $py = Join-Path $Out 'python\python.exe'
 
 # 3) the eight steps; a step that is already done is skipped (or resumed)
 Show-Step 1 '上流の Kev を取得する'
-if (Test-Path (Join-Path $KevRepo '.git')) { git -C $KevRepo pull --ff-only } else { git clone https://github.com/jaredpalmer/kev $KevRepo }
+if (Test-Path (Join-Path $KevRepo '.git')) { git -C $KevRepo fetch origin } else { git clone $pins.kev_repo $KevRepo }
+if ($LASTEXITCODE -eq 0) { git -C $KevRepo checkout --detach $pins.kev_commit }
 if ($LASTEXITCODE -ne 0) { Fail "手順 1: git が失敗しました（$KevRepo。ネットと、フォルダの中の変更を確かめて再実行）" }
 
 Show-Step 2 'Python 3.13 を用意する'
@@ -120,34 +123,47 @@ Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
 if (Test-Path $marker) {
   Fail '手順 3: Lib\EXTERNALLY-MANAGED を消せませんでした。そのファイルを手で消して、同じコマンドを再実行してください'
 }
-& $py -c 'import torch' 2>$null
-if ($LASTEXITCODE -ne 0) {
-  & $py -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-  if ($LASTEXITCODE -ne 0) { Fail '手順 3: torch（CPU 版）を入れられませんでした（download.pytorch.org を確かめて再実行）' }
+function Install-Torch {
+  # the upstream kev asks for torch<2.9; the pinned version fixes the weights_only unpickler (CVE-2026-24747, fixed in 2.10)
+  # and gave the same answers on the kimeru eval (kev itself is installed with --no-deps, so its range does not apply)
+  $have = [string](& $py -c 'import torch; print(torch.__version__.partition(chr(43))[0])' 2>$null)
+  if ($have.Trim() -eq $pins.torch) { return }
+  # --force-reinstall: a torch that an interrupted pip left half removed is put back whole
+  & $py -m pip install --force-reinstall --no-deps "torch==$($pins.torch)" --index-url https://download.pytorch.org/whl/cpu
+  if ($LASTEXITCODE -ne 0) { Fail "torch $($pins.torch)（CPU 版）を入れられませんでした（download.pytorch.org を確かめて再実行）" }
+  & $py -m pip install "torch==$($pins.torch)" --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+  if ($LASTEXITCODE -ne 0) { Fail "torch $($pins.torch) の依存を入れられませんでした（再実行）" }
 }
+Install-Torch
 
 Show-Step 4 'kev を入れる'
-& $py -m pip install "${KevRepo}[serve]"
-if ($LASTEXITCODE -ne 0) { Fail '手順 4: pip で kev を入れられませんでした（依存の取得を確かめて再実行）' }
+# kev's own dependencies except torch (kev asks for torch<2.9, which would take the pinned torch back), then kev itself
+$deps = @(& $py -c "import tomllib, sys; p = tomllib.load(open(sys.argv[1], 'rb'))['project']; d = p['dependencies'] + p.get('optional-dependencies', {}).get('serve', []); print(*[x for x in d if not x.replace(' ', '').lower().startswith('torch')], sep=chr(10))" (Join-Path $KevRepo 'pyproject.toml'))
+if ($LASTEXITCODE -ne 0 -or $deps.Count -eq 0) { Fail "手順 4: kev の依存を読めませんでした（$KevRepo\pyproject.toml）" }
+& $py -m pip install @deps @($pins.security_floors)
+if ($LASTEXITCODE -ne 0) { Fail '手順 4: kev の依存か、脆弱性の直った版（pins.json の security_floors）を入れられませんでした（再実行）' }
+& $py -m pip install --no-deps --force-reinstall "$KevRepo"
+if ($LASTEXITCODE -ne 0) { Fail '手順 4: pip で kev を入れられませんでした（再実行）' }
+if ($LASTEXITCODE -ne 0) { Fail '手順 4: 脆弱性の直った版（pins.json の security_floors）を入れられませんでした' }
 
-Show-Step 5 'モデル 2 つを取得する（再実行は続きから）'
-$fetch = "from huggingface_hub import snapshot_download as s; import sys; m = sys.argv[1]; s('jaredpalmer/kev-4b', local_dir=m + '/kev-4b'); s('Qwen/Qwen3.5-4B-Base', local_dir=m + '/Qwen3.5-4B-Base')"
-& $py -c $fetch (Join-Path $Out 'models')
-if ($LASTEXITCODE -ne 0) { Fail '手順 5: モデルの取得に失敗しました（同じ手順を再実行すると続きから）' }
-
-Show-Step 6 '起動用のファイルを置く'
+Show-Step 5 '起動用のファイルを置く'
 $bundle = Join-Path $PSScriptRoot 'kev-bundle'
 try { Copy-Item -Path (Join-Path $bundle '*') -Destination $Out -Force -ErrorAction Stop }
-catch { Fail "手順 6: 起動用のファイルをコピーできませんでした（$bundle）" }
+catch { Fail "手順 5: 起動用のファイルをコピーできませんでした（$bundle）" }
+Remove-Item -LiteralPath (Join-Path $Out 'localize.py') -Force -ErrorAction SilentlyContinue   # older folders rewrote head.pt with it
+
+Show-Step 6 'モデル 2 つを、固定した版で取得する（再実行は続きから）'
+& $py (Join-Path $Out 'kev-models.py') fetch
+if ($LASTEXITCODE -ne 0) { Fail '手順 6: モデルの取得か照合に失敗しました（上の NG の行。同じ手順を再実行すると続きから）' }
 
 Show-Step 7 '完成の検査と、起動用の設定'
-$need = @('python\python.exe', 'models\kev-4b\head.pt', 'models\Qwen3.5-4B-Base\config.json', 'start-kev.cmd')
+$need = @('python\python.exe', 'models\kev-4b\head.pt', 'start-kev.cmd', 'kev-models.py', 'pins.json')
 $lack = @($need | Where-Object { -not (Test-Path (Join-Path $Out $_)) })
 if ($lack.Count -gt 0) { Fail ('手順 7: 足りないもの: ' + ($lack -join '、') + '（該当する手順から再実行）') }
 $dtype = [string](& $py (Join-Path $Out 'pick-dtype.py') | Select-Object -Last 1)
 Say ("  この CPU の精度: {0}（start-kev.cmd も同じ判定）" -f $dtype.Trim())
-& $py (Join-Path $Out 'localize.py') 'kev-4b'
-if ($LASTEXITCODE -ne 0) { Fail '手順 7: localize.py が失敗しました（models\kev-4b の中身を確かめる）' }
+& $py (Join-Path $Out 'kev-models.py') verify
+if ($LASTEXITCODE -ne 0) { Fail '手順 7: モデルのファイルが pins.json と一致しません（上の NG の行。手順 6 から再実行）' }
 
 Show-Step 8 '起動の確認（この PC の中だけ。ネットは使いません）'
 if ($NoStartCheck) {

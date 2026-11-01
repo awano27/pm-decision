@@ -334,11 +334,12 @@ def _locked(out, wait_sec=30.0):
         time.sleep(0.05)
 
 
-def _read(out, tries=60, strict=False):
-    """The kept texts. A reader outside full_text.lock (load) can meet the moment in which a writer replaces the file; Windows
-    answers PermissionError then, or "file not found" while the old copy is gone and the new one is not linked yet. Both are
-    waited out while the writer holds full_text.lock (a file still missing once the lock is gone is "nothing kept": {}, as is a
-    damaged file). strict=True (a delete: drop, purge): a file that exists but cannot be read is an error (DeleteFailed, noted in
+def _read(out, tries=60, strict=False, outside_lock=False):
+    """The kept texts. A reader outside full_text.lock (load: outside_lock=True) can meet the moment in which a writer replaces
+    the file; Windows answers PermissionError then, or "file not found" while the old copy is gone and the new one is not linked
+    yet. Both are waited out while the writer holds full_text.lock (a file still missing once the lock is gone is "nothing kept":
+    {}, as is a damaged file). A reader under the lock (a save, a delete) holds the lock itself: a missing file is "nothing kept"
+    at once. strict=True (a delete: drop, purge): a file that exists but cannot be read is an error (DeleteFailed, noted in
     warnings.jsonl), never "nothing kept"."""
     lock = Path(out) / "full_text.lock"
     looked_again = False
@@ -347,6 +348,8 @@ def _read(out, tries=60, strict=False):
             data = json.loads(_path(out).read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else {}
         except FileNotFoundError:
+            if not outside_lock:
+                return {}
             if k < tries - 1 and lock.exists():   # a writer is replacing the file: the name is missing for a moment
                 time.sleep(0.005)
                 continue
@@ -486,7 +489,7 @@ def set_request(out, key, request):
 
 
 def load(out, key, now=None):
-    e = _read(out).get(key)
+    e = _read(out, outside_lock=True).get(key)
     return None if e is None or _expired(e, now) else e
 
 

@@ -2,6 +2,18 @@
 
 ## 未リリース
 
+- **この PC の Kev を、鍵を持つものだけが呼べるようにした。既定の動きが変わる。**何が起きていたか: Kev（`kev.serve`）は既定で鍵が無く、CORS ですべてのサイトを許すので、この PC のほかのプロセスや Web ページから呼べた（1 件で CPU を最大 300 秒使い、判断を詰まらせられた）。直したこと: `start-kev.cmd` が Windows のユーザーごとに鍵（`%LOCALAPPDATA%\kev\api-key`）を 1 回作って Kev に渡し、Kev は鍵の無い要求を 401 で断る。kimeru は `KEV_API_KEY` が無いとき、このファイルの鍵を、この PC の Kev にだけ送る（設定 `kev_key_file` で場所を変えられる。この PC 以外の Kev には送らない）。`diagnose` と `tools\` の Kev の確認（`check.ps1` の T14、`check-update.ps1` の U7、`setup-managed.ps1`、`prepare-bundle.ps1`、`build-kev-bundle.ps1`）も鍵を送る。変わること: 新しい `start-kev.cmd` で起動した Kev は、古い kimeru からは呼べない（kimeru も同じ版にする）。テスト: `tests/test_kev_hardening.py`。
+- **Kev の持ち込み用フォルダの中身を固定し、起動のたびに `head.pt` を照合するようにした。**何が起きていたか: torch 2.8 の `torch.load(weights_only=True)` には、細工したファイルで任意のコードを実行できる脆弱性（CVE-2026-24747、2.10.0 で修正）があり、Kev は起動のたびに `head.pt` をこの方法で読む。`head.pt` は Hugging Face の個人のリポジトリから、版もハッシュも固定せずに取得していた。直したこと: `tools\kev-bundle\pins.json` に、上流の Kev のコミット、torch の版（2.13.0）、モデル 2 つの版と全ファイルの SHA-256 を固定した（値は Hugging Face の記録と照合済み）。`kev-models.py` が固定した版で取得して照合し、`start-kev.cmd` は起動の前に `head.pt` を照合する（違うか、一覧に無い pickle・コードのファイルがあれば起動しない）。土台のモデルは Hugging Face の置き場の形（`hf\`）で `head.pt` が指す版に置くので、`head.pt` を書き換える `localize.py` は無くした。aiohttp・filelock・certifi・setuptools も既知の脆弱性を直した版以上にした。torch 2.13 は、評価用の 20 件（38 問）で torch 2.8 と同じ答えを返した（数値の差は最大 0.0066）。以前の形のフォルダは、`build-kev-bundle.cmd` の再実行で新しい形に移る（土台のモデルは取得し直さない）。`make-bundle.ps1` は、照合の通らない Kev のフォルダを持ち込みに入れない。
+- **持ち込むファイルに SHA-256 の一覧を付け、管理された PC で照合できるようにした。**`tools\make-bundle.ps1` は kimeru・kimeru\.python・kev・az に、`tools\release.ps1` は更新 zip に `SHA256SUMS` を入れる。`tools\sha256sums.ps1 -Check <フォルダ>` が、違うファイル・無いファイル・一覧に無いコードのファイルを示し、一覧の指紋を表示する。更新 zip の SHA-256 は `tools\ship.ps1` がタグに書き、`release.yml` が GitHub Release の本文に載せる（`tools\sha256sums.ps1 -Zip <zip> -Sha256 <値>` で照合）。
+
+## 1.4.0（2026-10-29）
+
+v1.3.0 のあとの追加と修正をまとめた版です。主な追加は、writer の下書きの文脈と接地を強める opt-in 設定（`writer_context`・`writer_precedent_text`・`recall`・`ground_fallback`、すべて既定で無効）と、その効果と事実照合率を測る評価です。
+既定で動く変更は 2 つです。接地検査（⚠）が「様」「殿」や役職付きの人名と完了の言及にも当たるようになり、前例の記録の読み方を軽くしました。
+承認の読み取りと優先度の変更の記録・表示の修正と、版の公開を `tools/ship.ps1` と `.github/workflows/release.yml` で行うリリースの手順も含みます。
+
+- **リリースの手順をスクリプトにした（製品の動きは変えない）。**`tools/ship.ps1 -Version X.Y.Z -Step prepare` が版番号（`pyproject.toml`・`kimeru/__init__.py`・README の status バッジ）と CHANGELOG の見出しを更新し、`tools/ship.ps1 -Version X.Y.Z` が検査・テストのあとタグを push して更新 zip を作る。タグの push で `.github/workflows/release.yml` が GitHub Release を作る。テスト: `tests/test_ship.py`。
+- **評価で今日の日付（K03）を測れるようにし、似た件の「似た点」から文法の断片を除いた。** `eval/draft_quality.py` は `writer_context=1` のとき fixture の `context.today` を writer に渡す（これまでは渡さず、`today_given` が常に偽だった）。`似た点` は共通の 2 文字をつないで語に戻し（`リリ`・`リー`・`ース` → `リリース`）、両端のひらがなを除き、ひらがなを含むもの（`が止`・`たい`）は出さない。似た件の点数と、拾う・拾わないは変わらない。テスト: `tests/test_eval_tools.py`、`tests/test_recall.py`。
 - **⚠ が残る下書きを定型文へ戻す動きを、独立した設定にした（`ground_fallback=1`、既定 0）。**これまでは `redraft_prev=1` のときだけで、同時に `修正 N` の依頼へ前の下書きを渡していた。`ground_fallback=1` は 2 回目の依頼と定型文への戻しだけを有効にし、前の下書きは渡さない（外へ送る材料は増えない。呼び出しは最大 2 回）。既定の動きは変わらない。
 - **接地検査（⚠）の対象を広げた。既定の動きが変わる。**材料に無い人名の検査を、「さん」付きから「様」「殿」と役職（部長・課長・係長・主任・マネージャー・リーダー）付きに広げ、完了の言及（対応済み・手配済み・確認済み・連絡済み・共有済み・調整済み・実施済み・反映済み・修正済み）が材料に無いと `claim` の印を付ける。変わるのは、⚠ の付く下書きが増えうることと、`claim` の印で CLI writer の 2 回目の依頼が入る下書きが増えうること（1 件の writer の呼び出しは最大 2 回のまま）。投稿の行数・文の形は同じ。「お客様」「皆様」「担当者様」は人名に数えず、材料に「山田さん」があれば「山田様」も出さない。新しい対象の語を含まない下書きでは、検査の結果・依頼文・投稿は変わらない。`eval/README.md` に前後の数値を書いた。
 - **別のチャット・別の相手で出た似た話題を、前例に足せるようにした（設定 `recall=1`、既定 0）。**言葉の重なり（文字 2-gram の Dice 係数）で、直近 60 日の OK / NG の件から最大 2 件を選び、`memory=1` なら `詳細 N` に `似た件:`、`writer_precedent=1` なら writer の前例の末尾に出す。相手の名前は既定で `（別の相手）`（`recall_names=1` で表示名）。下限は `recall_min`、件数は `recall_max`。索引のファイルは作らない。

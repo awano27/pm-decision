@@ -1,0 +1,38 @@
+name: release
+
+# Pushing a tag vX.Y.Z (tools/ship.ps1 does it) checks the version, runs the tests and publishes the GitHub Release
+# "kimeru vX.Y.Z" with the CHANGELOG section as its notes.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Version and CHANGELOG agree with the tag
+        run: python tools/ship.py check ${{ github.ref_name }}
+      - name: Build backend for the offline packaging test
+        run: python -m pip install setuptools wheel
+      - name: Unit tests
+        run: python -m unittest -q
+      - name: Decision-graph validation
+        run: python -m kimeru validate
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          python tools/ship.py notes $env:TAG --out notes.md
+          # the tag (tools/ship.ps1) names the SHA-256 of the update zip built from it: the Release repeats it
+          git fetch --depth=1 --force origin "+refs/tags/${env:TAG}:refs/tags/${env:TAG}"
+          $sha = git tag -l --format='%(contents:body)' $env:TAG | Select-String -Pattern 'SHA-256: ([0-9a-f]{64})' | ForEach-Object { $_.Matches[0].Groups[1].Value } | Select-Object -First 1
+          if ($sha) { Add-Content -Path notes.md -Encoding utf8 -Value "`n更新 zip（kimeru-update.zip）の SHA-256: ``$sha``" }
+          gh release create $env:TAG --verify-tag --latest --title "kimeru $env:TAG" --notes-file notes.md

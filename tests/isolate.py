@@ -21,6 +21,7 @@ if os.environ.get("KIMERU_TEST_STATE_PID") != str(os.getpid()):   # once per pro
             del os.environ[_k]
     _state = tempfile.mkdtemp(prefix="kimeru-test-state-")
     os.environ["KIMERU_STATE_DIR"] = _state
+    os.environ["KIMERU_KEV_KEY_FILE"] = os.path.join(_state, "no-kev-key")   # not the key start-kev.cmd made on this PC
     os.environ["KIMERU_TEST_STATE_PID"] = str(os.getpid())
     atexit.register(shutil.rmtree, _state, ignore_errors=True)
     # a console that cannot show Japanese (cp1252 on some Windows runners) would turn a message printed by the code under test into

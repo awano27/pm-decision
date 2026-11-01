@@ -31,6 +31,7 @@ SETTINGS = {
     "clm_url": ("KIMERU_CLM_URL", "http://127.0.0.1:8700/v1"),
     "kev_url_remote_ok": ("KIMERU_KEV_URL_REMOTE_OK", "0"),    # 1 = Kev may be at an address that is not this PC (the event text then leaves the PC)
     "clm_url_remote_ok": ("KIMERU_CLM_URL_REMOTE_OK", "0"),
+    "kev_key_file": ("KIMERU_KEV_KEY_FILE", ""),               # the key start-kev.cmd made (empty = %LOCALAPPDATA%\kev\api-key); read for a Kev on this PC only
     "writer": ("KIMERU_WRITER", ""),
     "writer_model": ("KIMERU_WRITER_MODEL", ""),
     "codex_model": ("KIMERU_CODEX_MODEL", "gpt-6-luna"),

@@ -397,7 +397,7 @@ def kev_state():
     if host not in backends.LOOPBACK:
         return "この PC 以外（確認しません）"
     try:
-        backends._DIRECT.open(urllib.request.Request(url.rstrip("/") + "/models"), timeout=3).close()
+        backends._DIRECT.open(urllib.request.Request(url.rstrip("/") + "/models", headers=backends.kev_headers(url)), timeout=3).close()
         return "up"
     except Exception:
         return "down"

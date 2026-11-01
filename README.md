@@ -16,7 +16,7 @@
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-0E1726?style=flat-square&labelColor=0E1726&color=8CB8F0">
   <img alt="Python runtime dependencies: none" src="https://img.shields.io/badge/runtime%20dependencies-none-0E1726?style=flat-square&labelColor=0E1726&color=75CFA3">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-0E1726?style=flat-square&labelColor=0E1726&color=D5DEEA">
-  <img alt="status: validation phase" src="https://img.shields.io/badge/status-v1.2%20%C2%B7%20validation%20phase-0E1726?style=flat-square&labelColor=0E1726&color=E89B4B">
+  <img alt="status: validation phase" src="https://img.shields.io/badge/status-v1.4%20%C2%B7%20validation%20phase-0E1726?style=flat-square&labelColor=0E1726&color=E89B4B">
 </p>
 
 <p align="center">

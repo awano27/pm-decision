@@ -26,7 +26,10 @@ class TestUpdateCheckScript(unittest.TestCase):
         self.assertTrue(self.raw.startswith(b"\xef\xbb\xbf"), "PowerShell 5.1 needs the BOM to read UTF-8")
 
     def test_the_only_web_request_is_to_this_pc(self):
-        urls = re.findall(r"Invoke-WebRequest\s+'([^']+)'", self.text)
+        # the Kev check comes from tools/kev-key.ps1 (dot-sourced), which sends the key start-kev.cmd made
+        self.assertIn(". (Join-Path $PSScriptRoot 'kev-key.ps1')", self.text)
+        helper = (ROOT / "tools" / "kev-key.ps1").read_text(encoding="utf-8-sig")
+        urls = re.findall(r"Invoke-WebRequest\s+'([^']+)'", self.text + helper)
         self.assertTrue(urls)
         for u in urls:
             self.assertRegex(u, r"^http://127\.0\.0\.1:")

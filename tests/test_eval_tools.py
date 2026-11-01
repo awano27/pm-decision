@@ -100,6 +100,12 @@ class TestDraftRecord(unittest.TestCase):
             self.assertFalse(r["style_given"])
             self.assertFalse(r["today_given"])
 
+    def test_the_fixtures_date_reaches_the_request_only_with_writer_context(self):
+        rows = [r for r in self.rows("writer_context=0", "writer_context=1") if r["type"] == "teams.reply"]
+        self.assertEqual({r["settings"] for r in rows}, {"writer_context=0", "writer_context=1"})
+        for r in rows:
+            self.assertEqual(r["today_given"], r["settings"] == "writer_context=1", r["id"])
+
     def test_grounded_rate_is_the_share_of_the_drafts_tokens_that_the_material_has(self):
         material = "10/15 までに 3件 を 佐藤さん が確認します"
         self.assertEqual(dq.grounding("10/15 に佐藤さんが確認します", material), {"tokens_total": 2, "tokens_unverified": 0, "grounded_rate": 1.0})

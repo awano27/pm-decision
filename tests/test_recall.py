@@ -76,6 +76,19 @@ class TestDiceAndRank(unittest.TestCase):
         self.assertEqual(recall.shared(q, d), ["QA", "環境"])
         self.assertEqual(recall.shared(q, d, limit=1), ["QA"])
 
+    def test_the_shared_terms_are_whole_strings_never_grammar_fragments(self):
+        q = recall.terms("QA環境が止まっていてリリース日を来週に動かしたいです。判断お願いします")
+        self.assertEqual(recall.shared(q, recall.terms("QA 環境の復旧待ちで、リリースを1週ずらす件の判断をお願いします"), 3),
+                         ["QA", "環境", "リリース"])   # リリ, リー, ース chained back into the word
+        self.assertEqual(recall.shared(q, recall.terms("リリース延期の相談です。QAが止まっています"), 3), ["QA", "リリース"])   # が止 / 止ま: no
+        self.assertEqual(recall.shared(q, recall.terms("検証環境がダウンしているので出荷日を延ばしてよいでしょうか"), 3), ["環境"])   # 環境が -> 環境
+        self.assertEqual(recall.shared(q, recall.terms("QA チームの来月の人員を2名増やしたいです"), 3), ["QA"])   # たい / いで: no
+
+    def test_the_display_does_not_change_the_score(self):
+        q = recall.terms("QA環境が止まっていてリリース日を来週に動かしたいです")
+        d = recall.terms("リリース延期の相談です。QAが止まっています")
+        self.assertAlmostEqual(recall.dice(q, d), 2 * len(set(q) & set(d)) / (len(q) + len(d)))
+
 
 if __name__ == "__main__":
     unittest.main()

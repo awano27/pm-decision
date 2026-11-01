@@ -9,6 +9,10 @@
 
     <Out>\START.cmd  the one thing to double-click on the managed PC
 
+  Each of kimeru, kimeru\.python, kev and az gets a SHA256SUMS list. On the managed PC,
+  tools\sha256sums.ps1 -Check <the copied folder> checks every file against them; compare the fingerprints it
+  prints with the ones printed here.
+
   On the managed PC: copy <Out> (the whole folder) anywhere, then double-click <Out>\START.cmd.
 
   -Zip also writes <Out>.zip: ONE file is far faster to copy over Remote Desktop than ~45,000 small
@@ -34,6 +38,12 @@ foreach ($p in @(@($KevSrc, 'start-kev.cmd'), @($AzSrc, 'bin\az.cmd'))) {
     throw "$($p[1]) not found in $($p[0]). The default folders are the author's; pass -KevSrc <your Kev folder> and -AzSrc <your az folder> (how to build the Kev folder: docs\kev-bundle.md)"
   }
 }
+# the Kev folder must be one whose model files are pinned (kev-models.py, pins.json) and still match them
+if (-not (Test-Path (Join-Path $KevSrc 'kev-models.py'))) {
+  throw "kev-models.py not found in $KevSrc: a Kev folder made before the model pins. Run build-kev-bundle.cmd again (it keeps the downloaded models)"
+}
+& (Join-Path $KevSrc 'python\python.exe') (Join-Path $KevSrc 'kev-models.py') verify
+if ($LASTEXITCODE -ne 0) { throw "the model files in $KevSrc do not match pins.json (see the NG lines)" }
 New-Item -ItemType Directory -Force $Out | Out-Null
 
 # kimeru: committed files only, so nothing private or half-edited is carried
@@ -74,6 +84,12 @@ foreach ($pair in @(@($KevSrc, 'kev'), @($AzSrc, 'az'))) {
 Set-Content -Path (Join-Path $Out 'START.cmd') -Encoding ASCII -Value @(
   '@echo off', 'rem kimeru: double-click this after copying the whole folder', 'call "%~dp0kimeru\START.cmd"')
 
+# hash lists, innermost first (a folder with its own list is left out of the list above it)
+foreach ($part in @('kimeru\.python', 'kimeru', 'kev', 'az')) {
+  & (Join-Path $PSScriptRoot 'sha256sums.ps1') -Write (Join-Path $Out $part)
+  if ($LASTEXITCODE -ne 0) { throw "SHA256SUMS failed: $part" }
+}
+
 $size = [math]::Round(((Get-ChildItem $Out -Recurse -File | Measure-Object Length -Sum).Sum) / 1GB, 1)
 $head = git -C $root rev-parse --short HEAD
 Write-Host "done: $Out (${size}GB, kimeru $head)"
@@ -87,5 +103,6 @@ if ($Zip) {
   & $bsdtar -a -c -f $zipPath -C (Split-Path -Parent $Out) (Split-Path -Leaf $Out)
   if ($LASTEXITCODE -ne 0) { throw 'zip failed' }
   $zs = [math]::Round((Get-Item $zipPath).Length / 1GB, 1)
+  & (Join-Path $PSScriptRoot 'sha256sums.ps1') -Zip $zipPath
   Write-Host "zip:  $zipPath (${zs}GB). managed PC: C:\Windows\System32\tar.exe -xf <zip> -C C:\  then C:\$(Split-Path -Leaf $Out)\START.cmd"
 }

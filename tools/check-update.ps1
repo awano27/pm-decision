@@ -16,6 +16,7 @@ $ErrorActionPreference = 'Continue'
 $env:PYTHONIOENCODING = 'utf-8'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
+. (Join-Path $PSScriptRoot 'kev-key.ps1')   # Test-KevUp / Get-KevHeaders: Kev asks for the key start-kev.cmd made
 $Results = [ordered]@{}
 function Say($s) { Write-Host ""; Write-Host "== $s" -ForegroundColor Cyan }
 function Rec($k, $v) { $Results[$k] = $v; $c = if ([string]$v -match '^OK') { 'Green' } elseif ([string]$v -match '^SKIP') { 'DarkYellow' } else { 'Red' }; Write-Host ("   {0}: {1}" -f $k, $v) -ForegroundColor $c }
@@ -138,7 +139,7 @@ if ($py) {
   # ---- U7 (optional): the demo with the Kev on this PC ----
   Say "U7 （任意）この PC の Kev でデモ"
   $up = $false
-  try { $null = Invoke-WebRequest 'http://127.0.0.1:8009/v1/models' -UseBasicParsing -TimeoutSec 5; $up = $true } catch {}
+  $up = Test-KevUp 5
   if (-not $up) { Rec 'U7' 'SKIP Kev 未起動（START.cmd か kev\start-kev.cmd で起動してから再実行すると確かめられます）' }
   elseif (-not (YesNo "   Kev でデモを 1 回動かします（PC の中だけ。数分かかることがあります）。よろしいですか")) { Rec 'U7' 'SKIP' }
   else {

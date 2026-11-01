@@ -16,7 +16,7 @@
 #>
 param([string]$Write = '', [string]$Check = '', [string]$Zip = '', [string]$Sha256 = '')
 $ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [Text.Encoding]::UTF8
+try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }   # no console (a CI runner, a scheduled task): keep the default
 $Name = 'SHA256SUMS'
 $Code = @('.py', '.pyc', '.pyd', '.pyw', '.pth', '.dll', '.exe', '.cmd', '.bat', '.ps1', '.psm1', '.vbs', '.js', '.jar', '.so')
 

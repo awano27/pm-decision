@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -404,13 +405,24 @@ class TestFullTextIsReadWhileItIsReplaced(unittest.TestCase):
                 "    i += 1\n"
                 "    with open(out / 'ticks', 'ab') as f: f.write(b'x')\n")
             p = subprocess.Popen([sys.executable, "-c", child, str(ROOT), str(out)])
+            why = {}   # when a load answers None: what the file held right after, so a failure says which moment was met
             try:
                 time.sleep(0.3)
                 ticks = out / "ticks"
                 before = ticks.stat().st_size if ticks.exists() else 0
                 missing, loads, end = 0, 0, time.time() + 40
                 while True:   # at least 1500 reads, and until the writer has saved at least 30 times while they ran
-                    missing += fulltext.load(out, "g:keep:n") is None
+                    if fulltext.load(out, "g:keep:n") is None:
+                        missing += 1
+                        try:
+                            keys = json.loads(fulltext._path(out).read_text(encoding="utf-8"))
+                        except FileNotFoundError:
+                            seen = "file missing"
+                        except (OSError, ValueError) as e:
+                            seen = f"file unreadable ({type(e).__name__})"
+                        else:
+                            seen = "key kept" if "g:keep:n" in keys else "key gone"
+                        why[seen] = why.get(seen, 0) + 1
                     loads += 1
                     saves = (ticks.stat().st_size if ticks.exists() else 0) - before
                     if (loads >= 1500 and saves >= 30) or time.time() > end:
@@ -419,8 +431,35 @@ class TestFullTextIsReadWhileItIsReplaced(unittest.TestCase):
                 stop.write_text("1")
                 p.wait(timeout=60)
             self.assertGreaterEqual(saves, 30, "the reads must overlap many saves, or the test proves nothing")
-            self.assertEqual(missing, 0)
+            self.assertEqual(missing, 0, f"{missing} of {loads} loads answered None across {saves} saves; right after: {why}")
             self.assertEqual(p.returncode, 0)
+
+    def test_a_missing_file_is_waited_for_while_a_writer_holds_the_lock(self):
+        # Windows: between the writer's delete of the old copy and the link of the new one the name does not exist for a moment
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            fulltext.save(out, "g:keep:n", {"text": "残す全文"})
+            held = fulltext._path(out).read_bytes()
+            fulltext._path(out).unlink()
+            (out / "full_text.lock").write_text("held by a writer")
+            threading.Timer(0.03, lambda: fulltext._path(out).write_bytes(held)).start()
+            self.assertEqual(fulltext.load(out, "g:keep:n")["text"], "残す全文")
+
+    def test_a_missing_file_without_a_writer_is_nothing_kept_at_once(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            t0 = time.monotonic()
+            self.assertIsNone(fulltext.load(out, "g:keep:n"))
+            self.assertLess(time.monotonic() - t0, 0.5)
+            self.assertFalse((out / "full_text.json").exists())
+
+    def test_a_missing_file_under_a_lock_that_stays_is_nothing_kept_after_a_bounded_wait(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            (out / "full_text.lock").write_text("held by a writer that never writes")
+            t0 = time.monotonic()
+            self.assertIsNone(fulltext.load(out, "g:keep:n"))
+            self.assertLess(time.monotonic() - t0, 5)
 
 
 class TestTheT22ReadBackKeepsTheTextOutOfTheCommandLine(unittest.TestCase):

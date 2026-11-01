@@ -506,17 +506,13 @@ def build(out, graphs, title="kimeru 判断レポート", mode=None):
             kinds.update({nid: n["kind"] for nid, n in g["nodes"].items()})
 
     def cls(r):
-        if r.get("needs_human") or r.get("outcome") == "advise":
-            return "human"
-        if any(kinds.get(s["node"]) == "match" and s["edge"] == "yes" for s in r["path"]):
-            return "ok"   # a rule decided it; a later low-confidence step only changes detail
-        return "safe" if any(s["edge"] == "unsure" for s in r["path"]) else "ok"
+        from .counting import kind
+        return {"auto": "ok"}.get(kind(r), kind(r))
 
-    counts = {"ok": 0, "safe": 0, "human": 0}
-    rule = 0
-    for r in decisions:
-        counts[cls(r)] += 1
-        rule += any(kinds.get(s["node"]) == "match" and s["edge"] == "yes" for s in r["path"])
+    from .counting import tally
+    tl = tally(decisions)
+    counts = {"ok": tl["auto"], "safe": tl["safe"], "human": tl["human"]}
+    rule = tl["rule"]
     n = len(decisions)
     tiles = [(n, "判断した件数"), (counts["ok"], "自動で決定"), (rule, "うち規則（安全網）で即決定"),
              (counts["safe"], "確信が低く安全側で決定"), (counts["human"], "人の確認へ")]

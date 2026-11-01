@@ -1,5 +1,12 @@
 # 変更履歴
 
+## 未リリース
+
+- `kimeru replay` の記録で、進め方の型の答えの確率を残す線を、その回に使った期限のしきい値（`due_min_conf` と calibrate の係数）に合わせた。しきい値を 0.6 より上げた設定でも、グラフを変えていない再生が元の判断と同じ期限を選ぶ。既定の設定では記録は変わらない。数え方の定義をそろえたことで、`advise` で確認待ちに入れない件（`queue: false`）は、demo のまとめ・report.html・digest のどれでも「自動で決定」の側に数える
+- **`kimeru replay` が「進め方の型」（plan ノード）を通る事例も再生できるようにした（既定で動く）。**これまで plan の答えは一部（`need_*` などが無い、または確率が落ちる）しか `decisions.jsonl` に残らず、replay が「記録なし（playbook）」で止まっていた。いまは選んだ型の id・確信度と、手順ごとの `need_*`・`due_*`（確信度が 0.6 未満のときは確率つき）・`first` の答えを数値と選択肢の id だけで残し、replay が記録から答える。本文は残さない。古い記録（答えが無いもの）は今までどおり「記録なし」と出し、落ちない。`eval/golden.jsonl` は変わらない。テストは `tests/test_replay.py`。
+- **demo のまとめ・`digest --week`・report.html の件数の数え方をそろえた（既定で動く。表示の訂正）。**これまで demo と report は「人の確認」を `advise` の件、「規則で即決定」を規則に当たった件（モデルも呼んだ件を含む）で数え、`digest --week` は `needs_human` の件と、判断モデルを 1 回も呼ばなかった件で数えていた。いまは 3 つとも、人の確認 = PM に回った件（`needs_human`。実行や下書きの承認待ちを含む）、規則で決めた件 = モデルを 1 回も呼ばなかった件で、`kimeru/counting.py` の 1 つの関数から数える。記録・判断は変わらない。テストは `tests/test_count_definitions.py`。
+- **`kimeru --version` を足した（既定で動く）。**`kimeru 1.4.0 (abc1234)` の 1 行を出して終了コード 0。版と commit は `config show --share` の 1 行目と同じ関数から取り、commit が分からなければ版だけ。設定は読まない。テストは `tests/test_version_flag.py`。
+
 ## 1.4.0（2026-10-29）
 
 v1.3.0 のあとの追加と修正をまとめた版です。主な追加は、writer の下書きの文脈と接地を強める opt-in 設定（`writer_context`・`writer_precedent_text`・`recall`・`ground_fallback`、すべて既定で無効）と、その効果と事実照合率を測る評価です。

@@ -33,7 +33,12 @@ function Files([string]$base) {
       -not ($own | Where-Object { $f.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) })
   }
 }
-function Hash([string]$path) { (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() }
+function Hash([string]$path) {
+  # .NET, not Get-FileHash: Windows PowerShell started from PowerShell 7 (a CI runner, some terminals) can lack that cmdlet
+  $s = [IO.File]::OpenRead($path)
+  try { ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($s)) -replace '-', '').ToLowerInvariant() }
+  finally { $s.Dispose() }
+}
 function Fingerprint([string]$list) { (Hash $list).Substring(0, 16) }
 
 if ($Write) {

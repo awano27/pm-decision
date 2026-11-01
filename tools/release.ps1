@@ -31,7 +31,8 @@ if (Test-Path $Zip) { Remove-Item -Force $Zip }
 & "$env:SystemRoot\System32\tar.exe" -a -c -f $Zip -C $Stage 'kimeru-pc'
 Write-Host ("{0}  ({1:N1} MB)" -f $ver, ((Get-Item $Zip).Length / 1MB))
 # the zip's SHA-256 next to it; tools\ship.ps1 also puts it in the tag, and so in the GitHub Release notes
-$sha = (Get-FileHash -LiteralPath $Zip -Algorithm SHA256).Hash.ToLowerInvariant()
+$s = [IO.File]::OpenRead($Zip)   # .NET, not Get-FileHash (missing in Windows PowerShell started from PowerShell 7)
+try { $sha = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($s)) -replace '-', '').ToLowerInvariant() } finally { $s.Dispose() }
 Set-Content -Path "$Zip.sha256" -Value "$sha  $(Split-Path -Leaf $Zip)" -Encoding ASCII
 Write-Host "SHA-256 $sha"
 if ($CopyTo) {

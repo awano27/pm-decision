@@ -222,7 +222,8 @@ class TestSha256Sums(unittest.TestCase):
             (self.dir / rel).parent.mkdir(parents=True, exist_ok=True)
             (self.dir / rel).write_bytes(rel.encode())
         for part in ("kimeru/.python", "kimeru", "kev"):
-            self.assertEqual(self.ps("-Write", str(self.dir / part))[0], 0, part)
+            code, out = self.ps("-Write", str(self.dir / part))
+            self.assertEqual(code, 0, f"{part}: {out}")
 
     def test_an_untouched_copy_passes(self):
         code, out = self.ps("-Check", str(self.dir))

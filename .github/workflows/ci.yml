@@ -5,10 +5,21 @@ on:
     branches: [main]
   pull_request:
 
+# the jobs only read the checkout; the repository default is read too, this keeps it so wherever the workflow runs
+permissions:
+  contents: read
+
+# a new push to a pull request cancels the run of its previous push; runs on main queue behind each other
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   windows:
     # kimeru drives Windows Teams through PowerShell / UI Automation: this is the reference platform
     runs-on: windows-latest
+    # the suite takes 10-18 minutes here; a hung PowerShell test would otherwise hold the runner for 6 hours
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -29,6 +40,7 @@ jobs:
     # the decision engine, writers and text checks are platform independent. The tests that start
     # tools/teams-self.ps1 (Windows UI Automation types) skip themselves off Windows; a failure here fails the run
     runs-on: ubuntu-latest
+    timeout-minutes: 15   # about a minute normally
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

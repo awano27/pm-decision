@@ -6,26 +6,33 @@ kimeru が「決める前の材料をそろえ、人の承認を待つ」ため�
 
 ```mermaid
 flowchart TD
-    E["届いた依頼（Teams・アラート・ADO・議事録）"] --> M{"規則（match ノード）<br/>正規表現。モデルを呼ばない"}
-    M -- "重大事象など" --> DEC["決定（記録・通知の対象）"]
+    E["届いた依頼（Teams・アラート・ADO・議事録）"] --> M{"規則（match ノード）<br/>このノードではモデルを呼ばない"}
+    M -- "重大事象など" --> T["グラフが選んだ結果（decide / advise）"]
     M -- "該当なし" --> J{"判断モデル（judge・plan ノード）<br/>型付きの答えと確信度だけ"}
-    J -- "しきい値を超えた" --> DEC
-    J -- "迷い・壊れた答え（unsure 辺。多くの質問）" --> ASK["人の確認へ"]
-    J -. "迷い・壊れた答え（質問によっては人に聞かず、次の判断か、決めておいた行動へ。下の表）" .-> DEC
-    DEC -- "文面のある行動" --> W["文章生成（writer・任意）<br/>返信案・メモを埋めるだけ"]
-    DEC -. "承認の要る行動が無い件（writer 未設定など）" .-> LOG[("計画を記録するだけ")]
-    W --> ASK
-    ASK --> OK["OK / 修正 / NG / 保留（自分とのチャット）"]
+    J -- "しきい値と経路に従う（unsure を含む）" --> T
+    T --> S{"Jev の AI 判断適性（1〜5）<br/>Jev・記録だけでない件を評価"}
+    S -- "情報不足・低い評価・評価不能" --> ASK["人の確認を追加（緊急性は保持）"]
+    S -- "AI 判断可能／評価対象外" --> DEC["元の確認・承認条件を維持"]
+    ASK --> W["文面のある行動は writer で案作成（任意）<br/>未設定・対象なしは通過"]
+    DEC --> W
+    W --> C{"確認・承認が必要か"}
+    C -- "必要" --> OK["OK / 修正 / NG / 保留（自分とのチャット）"]
+    C -- "不要" --> LOG[("計画を記録するだけ")]
 ```
 
 | 層 | 何をするか | 何をしないか | コード | テスト |
 |---|---|---|---|---|
 | 規則 | 障害・全ユーザー影響・お礼だけ、などを先に拾う | 文章を書かない | [graph.py](../kimeru/graph.py) の `match_eval`・`severe_hit` | [test_match_rules.py](../tests/test_match_rules.py)、[test_severe_guards.py](../tests/test_severe_guards.py) |
 | 判断モデル | 「判断の依頼か」「急ぎか」などの質問に、型付きの答え（はい/いいえ・選択・段階）と確信度を返す | 文章を書かない。独自の手がかり（`hints`）は送らない | [backends.py](../kimeru/backends.py) の `jev_questions`、[graph.py](../kimeru/graph.py) の `route` | [test_kimeru.py](../tests/test_kimeru.py) の `test_hints_not_sent_to_jev` |
+| Jev の AI 判断適性 | 一般知識と入力された事実で判断できるかを 1〜5 と理由で評価し、情報不足なら人へ回す | 生成済みの結論を根拠にしない。高い評価でも既存の承認を省略しない | [ai_suitability.py](../kimeru/ai_suitability.py) の `assess`・`apply`、[graph.py](../kimeru/graph.py) の `run` | [test_ai_suitability.py](../tests/test_ai_suitability.py) |
 | 文章生成（writer） | 決まった行動の文面（返信・コメント・作業項目の説明）とメモを埋める | 経路を変えない。承認前に外へ出さない | [writer.py](../kimeru/writer.py) の `apply`、[cli.py](../kimeru/cli.py) の `_draft` | [test_writer.py](../tests/test_writer.py) の `test_drafted_reply_waits_for_approval_and_can_be_redrafted` |
 | 人 | 確認待ちの件に `OK N`・`修正 N <指示>`・`NG N` などで答える | — | [notify.py](../kimeru/notify.py) の `collect`・`_redraft` | [test_notify.py](../tests/test_notify.py) |
 
 **分けた理由**: 判断モデルに文章を書かせないことで、経路を「確信度としきい値」だけで決められ、迷ったら人へ回す線を引けます。生成文の誤り（材料に無い日付の約束など）は、承認の手前で人が止めます。重大事象を規則で先に拾うのは、見逃せない件をモデルの答えに左右させないためです。
+
+`match` ノードの照合自体はモデルを呼びません。ただし Jev を使うときは、規則だけで決まった件も、グラフの結果を返す前に AI 判断適性を追加で問い合わせます。共有・記録だけで確認も通知も不要な件は除外し、Kev / CLM / stub にはこの追加評価を行いません。
+
+**人の確認と通知の緊急性は独立しています。** AI 判断適性で人に回しても、もともとの緊急通知の指定は残ります。人が判断する必要があることを、通知を後回しにする理由にはしません。実際の配信は既存の通知設定・送信条件に従います。試験: [test_ai_suitability_attention.py](../tests/test_ai_suitability_attention.py)。
 
 判断モデルが文章を書かないことは、モジュールの構成（[graph.py](../kimeru/graph.py)・[backends.py](../kimeru/backends.py) は writer を参照しない）で成り立っており、それ自体を固定するテストはありません。
 
@@ -35,6 +42,7 @@ flowchart TD
 - **壊れた答え**: 型違い・選択肢外・範囲外の確率は `BackendAnswerError` として扱い、`unsure` 辺へ進みます。試験: [test_severe_guards.py](../tests/test_severe_guards.py) の `test_malformed_answer_takes_the_unsure_route`。
 - **重大事象と答えの食い違い**: Sev0/1 のアラートや優先度 1 の作業項目で、モデルが軽く評価したときは人へ回します（`guards`）。重大事象は、どの経路でも通知の対象に引き上げます（`severe`）。試験: [test_match_rules.py](../tests/test_match_rules.py) の `test_sev1_rated_low_goes_to_a_person`、[test_severe_guards.py](../tests/test_severe_guards.py)。
 - **情報不足**: ADO の作業項目は「着手できるか」で「いいえ」なら、再現手順や受け入れ条件を聞くコメント案を承認待ちにします（[graphs/ado_workitem.json](../graphs/ado_workitem.json) の `request_info`）。議事録の行で種類を決めきれないものは確認待ちにします（[graphs/meeting_item.json](../graphs/meeting_item.json) の `check_line`）。試験: [test_judgment_gaps.py](../tests/test_judgment_gaps.py)、[test_judge_rules.py](../tests/test_judge_rules.py)。
+- **Jev の AI 判断適性**: 評価と理由を同じ問い合わせで判定します。1〜3、現場情報の不足・本人の権限や選好による判断・判断対象や依頼内容が不明のいずれかなら人へ回します。4（必要な現場の事実が入力済み）・5（一般知識や標準的な推論で判断可能）でも、評価と理由の確信度が両方とも 0.70 以上でなければ人へ回します。本文の省略・切り詰めが分かっている場合も同様です。評価だけ失敗した場合は「評価不能」として確認待ちにし、予定した行動は承認前に実行しません。試験: [test_ai_suitability.py](../tests/test_ai_suitability.py)。
 - **迷っても人に聞かずに進む経路**: `unsure` 辺の行き先は質問ごとに決めてあり、すべてが人の確認ではありません。同梱のグラフでは次のとおりです（`graphs/*.json` の `routes.unsure`）。確認も通知も出さずに決めた件は、朝のまとめに「迷って自動で決めた件（確かめてください）」として出ます（`via_unsure`）。
 
 | グラフ | 迷った質問 | 迷ったときの行き先 |
@@ -52,9 +60,11 @@ flowchart TD
 | Teams | 急ぎ度（`urgency`） | 「今日中に判断」として計画し、通知の対象にする |
 | Teams | 判断の進め方の型（`plan_decision`） | 急ぎ度の判断へ進む |
 
-  どの行き先でも、文面のある行動（返信・コメント）は writer を設定していれば承認を待ち、外部への実行は設定で有効にした種類だけです。
+  表はグラフ内の `unsure` 辺の行き先です。Jev では、その結果に AI 判断適性の評価を加え、人の確認へ切り替わることがあります。どの行き先でも、文面のある行動（返信・コメント）は writer を設定していれば承認を待ち、外部への実行は設定で有効にした種類だけです。
 
 **確信度の扱い**: 判断モデルの確信度は、人へ回すかを決めるしきい値に使う値です。正解の確率としては扱いません。判断モデルごとに確信度の出方が違うため、係数（[profiles.py](../kimeru/profiles.py) の `conf_scale`・`noul_scale`）で揃え、利用者が正誤を付けた記録があれば `kimeru calibrate` で、データを半分に分けて確かめたうえで、慎重な向きの変更だけを提案します（[calibrate.py](../kimeru/calibrate.py)、試験: [test_review_stats.py](../tests/test_review_stats.py) の `TestCalibrate`）。確信度が実際の正解率とどれだけ合うかは、まだ測っていません。
+
+AI 判断適性の 0.70 は固定のしきい値で、この係数調整では下がりません。4・5 は自動実行の許可ではなく、既存の人による確認、文面の承認、外部実行の条件をそのまま残します。この評価による実業務の判断精度や、実際の Teams・ADO への送信はここでは検証していません。
 
 ## 3. 承認と外部への実行を分ける
 
@@ -86,7 +96,8 @@ sequenceDiagram
 | 実行の途中で止まった・応答が返らない | 呼び出しの前に `running` を記録。`running`・`unknown` は自動で再実行しない。本人が確かめて `済 N` か `再実行 N`（同じ文面が既にあれば書かない） | [execute.py](../kimeru/execute.py) の `idem_key`・`run_approved`・`redo` | [test_execute.py](../tests/test_execute.py) の `test_a_crash_in_the_middle_is_not_repeated_and_the_pm_is_told`、[test_execute_safety.py](../tests/test_execute_safety.py) の `TestUnknownResult` |
 | 自分とのチャットへ届いたか分からない | 送る前に試行を保存し、読み戻しで本文と ID を確かめたときだけ「配信済み」。分からない件は自動で送り直さず、`delivery` か `run-fix-deliveries.cmd` で本人が決める | [notify.py](../kimeru/notify.py) の `_delivered`・`_delivery_unknown`、[reconcile.py](../kimeru/reconcile.py) | [test_delivery_attempts.py](../tests/test_delivery_attempts.py)、[test_reconcile.py](../tests/test_reconcile.py) |
 | 2 つの処理が同時に承認を書き換える | 1 つずつロック（生きているプロセスのロックは奪わない）。書き込みは一時ファイルから置き換え、直前の版を `.bak` に残す | [fsutil.py](../kimeru/fsutil.py) の `exclusive`・`write_atomic` | [test_fix12.py](../tests/test_fix12.py)、[test_persistence_concurrency.py](../tests/test_persistence_concurrency.py) |
-| 判断モデルが止まる | 受信箱のファイルを残して次のサイクルで続ける（判断済みの分は飛ばす）。`run` は 1 行の案内で終わる | [daily.py](../kimeru/daily.py)、[backends.py](../kimeru/backends.py) の `BackendUnavailable` | [test_retry.py](../tests/test_retry.py) の `test_half_done_file_is_kept_and_finished_later`、[test_one_line_errors.py](../tests/test_one_line_errors.py) |
+| 通常の判断ノードの呼び出しが止まる | 受信箱のファイルを残して次のサイクルで続ける（判断済みの分は飛ばす）。`run` は 1 行の案内で終わる | [daily.py](../kimeru/daily.py)、[backends.py](../kimeru/backends.py) の `BackendUnavailable` | [test_retry.py](../tests/test_retry.py) の `test_half_done_file_is_kept_and_finished_later`、[test_one_line_errors.py](../tests/test_one_line_errors.py) |
+| グラフの結果が出た後、Jev の AI 判断適性だけ取得できない | 「評価不能」として人の確認待ちにする。取得失敗を AI 判断可能とは扱わず、行動は承認待ちに残す | [ai_suitability.py](../kimeru/ai_suitability.py) の `assess`・`apply` | [test_ai_suitability.py](../tests/test_ai_suitability.py) の `test_backend_errors_fail_closed_without_retaining_the_error_text` |
 
 ## 5. 入力の保存先と外部への送信先
 

@@ -126,6 +126,8 @@ def apply(result, state, backend, *, input_truncated=False):
         assessment.update(route="human", reason_code="truncated_input", reason=REASONS["truncated_input"])
     result["ai_suitability"] = assessment
     if assessment["route"] == "human":
+        if result.get("notify"):
+            result["notify_requested"] = True  # keep urgency without emitting an automatic-decision notice
         reasons = list(result.get("review_reasons") or [])
         if assessment["reason"] not in reasons:
             reasons.append(assessment["reason"])

@@ -798,6 +798,9 @@ def demote(out, g, res, ev, now=None, batch=None):
             if stopped:
                 return {**res, "outcome": "advise", "needs_human": True,
                         "advice": f"{res.get('advice') or ''}（規則を戻しました）"}
+    # A learned noise rule cannot dismiss a decision that still needs human evidence or authority.
+    if (res.get("ai_suitability") or {}).get("route") == "human":
+        return res
     if not _eligible(res) or not _unmarked(ev):
         return res
     if any(a.get("type") in RULE_NEVER_ACTIONS or execute.is_gated(a) for a in res.get("actions") or []):

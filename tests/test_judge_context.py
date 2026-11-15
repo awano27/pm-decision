@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from kimeru import cli, config, events, graph, plan
+from kimeru import ai_suitability, cli, config, events, graph, plan
 from kimeru import writer as writer_mod
 from kimeru.backends import ClmBackend, JevBackend, KevBackend, ReplayBackend, StubBackend, is_local_judge
 from kimeru.cli import Meter
@@ -149,10 +149,19 @@ class TestWhoGetsTheEarlierMessages(unittest.TestCase):
             self.assertEqual(state["today"], TODAY)
             self.assertTrue(any("earlier" in q["instructions"] for q in kev.calls[0][1].values()))
             for judge in (jev, stub):
+                self.assertTrue(judge.calls)
+                assessment_calls = 0
                 for state, questions in judge.calls:
                     self.assertEqual(state, EVENT_STATE)
-                    for qid, q in questions.items():
-                        self.assertEqual(q, TEAMS["nodes"][qid]["question"])
+                    if set(questions) & set(ai_suitability.QUESTIONS):
+                        self.assertIs(judge, jev)
+                        self.assertEqual(questions, ai_suitability.QUESTIONS)
+                        assessment_calls += 1
+                    else:
+                        for qid, q in questions.items():
+                            self.assertIn(qid, TEAMS["nodes"])
+                            self.assertEqual(q, TEAMS["nodes"][qid]["question"])
+                self.assertEqual(assessment_calls, 1 if judge is jev else 0)
 
     def test_a_kev_at_a_remote_address_gets_the_event_alone_even_when_allowed_to_be_remote(self):
         with tempfile.TemporaryDirectory() as d, settings(judge_context="1", kev_url="http://10.20.30.40:8009/v1",

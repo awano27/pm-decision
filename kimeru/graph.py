@@ -582,12 +582,18 @@ def run(g, event, backend, state=None, playbooks=None, batch=None, split_asks=No
     confidences (`asks`). None reads the setting."""
     import os
     from .events import state_of
-    from . import plan as planner
+    from . import ai_suitability, fulltext, plan as planner
     if batch is None:
         batch = config.value("batch_questions") == "1"
     if split_asks is None:
         split_asks = config.value("split_asks") == "1"
     state = state if state is not None else state_of(event)
+    input_truncated = isinstance(state, dict) and any(
+        isinstance(value, str) and isinstance(state.get(field), str)
+        and len(state[field]) < len(value) and value.startswith(state[field])
+        for field, value in event.items())
+    if event.get("kind") == "teams.chat" and event.get("full") is not True:
+        input_truncated = input_truncated or fulltext.truncated(event.get("text"))
     nodes, nid, trace, answers, plan = g["nodes"], g["start"], [], {}, None
     pre = {}
     asks_info, asks_changed = None, None   # R35: the numbers of a split message; the combined route when it differs from the body's
@@ -621,8 +627,9 @@ def run(g, event, backend, state=None, playbooks=None, batch=None, split_asks=No
             unsure = [t["node"] for t in trace if t.get("edge") == "unsure"]
             if unsure:   # reached through an answer the model was unsure of: the brief lists it when nobody was asked (brief.unsure_section)
                 out["via_unsure"] = unsure
-            return {"graph": g["name"], "event_id": event.get("id"), "event_kind": event.get("kind"),
-                    "path": trace, **out}
+            result = {"graph": g["name"], "event_id": event.get("id"), "event_kind": event.get("kind"),
+                      "path": trace, **out}
+            return ai_suitability.apply(result, state, backend, input_truncated=input_truncated)
         if n["kind"] == "match":
             edge, hit = match_eval(n, event)
             trace.append({"node": nid, "answer": {"matched": hit}, "edge": edge})

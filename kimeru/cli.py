@@ -486,7 +486,7 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
     by the same graph version, so a retried or re-dropped file does not decide twice.
     `reader` (fulltext.Reader) opens a chat to read it in full, only when needed (see fulltext.py).
     `now` (R18, promises.status_guard) is the time the open promises are counted at; None is the current time."""
-    from . import fulltext
+    from . import ai_suitability, fulltext
     from . import link as linking
     link_at = now   # R19: the windows of the links are counted from this time (`now` is reused below for the actions)
     context_at = now   # R22: the earlier messages are taken from the 72 hours before this time (None: the current time)
@@ -537,6 +537,9 @@ def process(payload, graphs, backend, out, playbooks=None, writer=None, dedup=Fa
                 res = _judge(g, ev_run, meter, playbooks, context, out=out, now=now, batch=batch)
             else:
                 res = pend.get(key) if pend else None                 # a preview judged in an earlier cycle: continue from the reading
+                if (res is not None and ai_suitability.requires_assessment(res, meter)
+                        and not res.get("ai_suitability")):
+                    res = None  # older previews must pass the current Jev evidence gate before continuing
                 if res is None:
                     res = _judge(g, ev, meter, playbooks, context, out=out, now=now, batch=batch)
                 if can_read and _ends_at_pm(res, writer):              # a decision that ends at the PM: look at the whole chat
@@ -633,6 +636,9 @@ def _fmt(r):
     path = " → ".join(f"{s['node']}[{s['edge']}]" for s in r["path"])
     head = f"[{r['outcome'].upper()}{'/人の確認' if r['needs_human'] else ''}] {r['graph']} #{r['event_id']}"
     lines = [head, f"  path: {path} → {r['node']}"]
+    if r.get("ai_suitability"):
+        from .ai_suitability import summary
+        lines.append("  " + summary(r["ai_suitability"]))
     if r["advice"]:
         lines.append(f"  advice: {r['advice']}")
     if r.get("plan"):

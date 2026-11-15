@@ -470,7 +470,8 @@ def _rules(rec, full):
 def _draft_mark(rec):
     """R12: with the setting post_kind_mark=1, a record that waits only for a writer's draft (held_reason "draft", cli._draft).
     False otherwise, so at 0 (the default) the texts are unchanged."""
-    return config.value("post_kind_mark") == "1" and rec.get("held_reason") == "draft"
+    return (config.value("post_kind_mark") == "1" and rec.get("held_reason") == "draft"
+            and (rec.get("ai_suitability") or {}).get("route") != "human")
 
 
 def _others(rec):
@@ -482,7 +483,7 @@ def _others(rec):
 
 
 def format_post(n, rec, full=None, marks=None, precedent=None, promise=None, related=None):
-    """The approval post "[kimeru #N]": at most 5 short lines. Everything else (the source text, the memo, every draft, the
+    """The short approval post "[kimeru #N]". Everything else (the source text, the memo, every draft, the
     revision, the kinds of action) is in the answer to `詳細 N` (format_detail). `full` is not shown here. `marks` (R09, hold.post_marks):
     {"day": 2} for an item that came back on the 2nd day of its hold, {"undated": ["3"]} for the undated holds named on this post.
     `precedent` (R16, memory.precedent): the text that ends the arrow line; None (memory=0) leaves the post as it was.
@@ -505,6 +506,9 @@ def format_post(n, rec, full=None, marks=None, precedent=None, promise=None, rel
     from . import promises   # R31 (promises=1): a reply that answers an ask-back #M is marked after the number on the first line; "" otherwise
     answer = promises.answer_mark(rec)
     lines = [f"[kimeru #{n}] {answer + ' ' if answer else ''}{'下書き: ' if draft_only else ''}{update}{_who(rec)}{_others(rec)}{held_mark}{resurfaced}{named}"]
+    if rec.get("ai_suitability"):
+        from .ai_suitability import summary
+        lines.append(summary(rec["ai_suitability"]))
     if str(rec.get("event_kind") or "").startswith("ado.") and any(a.get("type") == "ado.comment" for a in actions) and not memo:
         proposal = "情報不足: 追記依頼のコメント案あり"
     else:
@@ -617,6 +621,9 @@ def format_detail(n, rec, full=None, precedent=None, promise=None, similar=None)
              f"{ev} #{rec.get('event_id')}"] + ado_lines(rec)
     why = _why(rec)   # R11: under the header, when post_reason=1
     lines[1:1] = _rules(rec, full) + ([why] if why else [])   # R25: the words a rule read come first, then R11's question
+    if rec.get("ai_suitability"):
+        from .ai_suitability import summary
+        lines.insert(1, summary(rec["ai_suitability"]))
     rf = rec.get("read_full") or {}
     if rf.get("state") == "preview_only":
         lines.append("⚠ プレビューだけで判断しました（" + str(rf.get("why", ""))[:100] + "）。元のメッセージを Teams で確認してください")

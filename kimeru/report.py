@@ -90,6 +90,13 @@ def _e(s):
     return html.escape(str(s if s is not None else ""))
 
 
+def _suitability(rec):
+    if not rec.get("ai_suitability"):
+        return ""
+    from .ai_suitability import summary
+    return f"<p class='plan'>{_e(summary(rec['ai_suitability']))}</p>"
+
+
 def _observed_time(value):
     parsed = trial._timestamp(value)
     return value if parsed is not None and 0 <= parsed <= time.time() else "Unknown"
@@ -421,6 +428,7 @@ def _flow(log, number, item, kinds, executions, mode):
     parts.append(f"<li><h3>根拠<span>{'台本の要点と簡易ルールの経路（AI ではない）' if mode == 'try' else 'kimeru が読み取ったこと'}</span></h3>"
                  + (f"<p>{_e(memo['summary'])}</p>" if memo.get("summary") else "")
                  + f"<div class='path'>{chips}</div>"
+                 + _suitability(record)
                  + (f"<p><b>足りない情報</b></p><ul>{missing}</ul>" if missing else "")
                  + ("<p class='note'>経路の値は簡易ルールの固定値です（確率ではありません）。</p>"
                     if mode == "try" or (record.get("judge") or {}).get("name") == "StubBackend" else
@@ -585,6 +593,7 @@ def build(out, graphs, title="kimeru 判断レポート", mode=None):
         parts.append(f"<section class='ev {c}'><div class='head'><span class='src'>{_e(SRC.get(r.get('event_kind'), r.get('event_kind')))}</span>"
                      f"<span class='sum'>{_e(r.get('summary') or r.get('event_id'))}</span></div>")
         parts.append("<div class='path'>" + "".join(_chip_ja(s, kinds) for s in r["path"]) + "</div>")
+        parts.append(_suitability(r))
         generation = timing.get("generation")
         source = "synthetic demo" if timing.get("source") == "demo" else "local/legacy (not business-effect evidence)"
         matched = found[1] if found else {}

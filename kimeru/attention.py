@@ -7,7 +7,7 @@ With interrupt=sittings, a posted item that is not urgent is announced at the fi
 
   severe      graph.severe_hit: a Sev0/Sev1 alert, a work item at priority 1 (also one that went to triage_pm)
   critical    a critical rule (critical_incident, critical_bug, critical_outage) that said yes or mixed
-  notify      the decision asks for notice (res["notify"])
+  notify      the decision asks for notice (res["notify"], or notify_requested retained by Jev's human handoff)
   alert       the event is a monitor.alert
   words       a word of urgent_words (default 至急|本日中|今日中|大至急|緊急|ASAP) is in the whole text of the event
 
@@ -92,7 +92,7 @@ def judge(g, res, ev):
         why.append("severe")
     if any(s.get("node") in CRITICAL and s.get("edge") in ("yes", "mixed") for s in res.get("path") or []):
         why.append("critical")
-    if res.get("notify"):
+    if res.get("notify") or res.get("notify_requested") is True:
         why.append("notify")
     if ev.get("kind") == "monitor.alert":
         why.append("alert")

@@ -572,9 +572,10 @@ def run(g, event, backend, state=None, playbooks=None, batch=None, split_asks=No
     """Walk the graph for one event. Returns a trace dict ending in an outcome.
 
     batch=True asks every judge question of the graph in ONE call the first time a question is needed (after the rules
-    have had their say: a route decided by rules alone asks nothing). The plan questions are not part of it: they depend on
-    the chosen playbook. The final action is the one a question-by-question walk reaches, provided the backend answers each
-    question independently of the others.
+    have had their say: a route decided by rules alone asks no graph questions). The plan questions are not part of it: they
+    depend on the chosen playbook. Jev additionally assesses AI suitability at every substantive terminal, including one
+    reached by rules alone; pure log-only results skip it. The final action is the one a question-by-question walk reaches,
+    provided the backend answers each question independently of the others.
 
     split_asks=True (R35, setting split_asks=1): a chat message with two or more requests (asks.find) has its intent question
     asked once for the message and once for each request, in one call; the routes are combined (combine_requests). A

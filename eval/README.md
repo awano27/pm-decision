@@ -3,6 +3,12 @@
 `fixtures.jsonl` holds synthetic, labeled events for every shipped graph (99 events).
 Each fixture labels some judge / plan nodes; all labeled questions for one event go to Jev in one request.
 
+The five-level **AI suitability** assessment has a [dedicated dataset and offline scorer](ai_suitability.md).
+It compares supplied answers against explicit reference labels and reports unsafe AI routing, unnecessary human
+handoffs, and level agreement with their denominators and response coverage. Its initial Japanese cases are synthetic,
+AI-authored, and **not human-reviewed**. No real Jev accuracy has been measured with this dataset. The graph-node tools
+below do not score this assessment.
+
 ```bash
 python eval/run_eval.py live --out answers.jsonl      # needs TYPESAFE_API_KEY
 python eval/run_eval.py dump > requests.jsonl         # or run requests elsewhere (e.g. an MCP client)
